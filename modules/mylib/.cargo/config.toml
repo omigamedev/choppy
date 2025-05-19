@@ -1,0 +1,5 @@
+rustflags = [
+    "-C", "target-feature=-crt-static",
+    "-C", "control-flow-guard",
+    "-C", "link-args=/MTd",
+]

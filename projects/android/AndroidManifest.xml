@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="ChoppyEngine"
+        android:theme="@style/Theme.AppCompat.NoActionBar">
+
+        <meta-data android:name="com.samsung.android.vr.application.mode" android:value="vr_only" />
+        <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|quest3" />
+
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="com.oculus.intent.category.VR" />
+                <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
