@@ -8,6 +8,7 @@ module;
 #include <bit>
 #include <bitset>
 #include <print>
+#include <cstdint>
 
 export module std;
 
@@ -19,3 +20,4 @@ export module std;
 #include "std/bit.inc"
 #include "std/bitset.inc"
 #include "std/print.inc"
+#include "std/cstdint.inc"

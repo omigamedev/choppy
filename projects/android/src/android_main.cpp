@@ -1,9 +1,4 @@
 #include <lib.h>
-#include <cstdint>
-#include <thread>
-#include <chrono>
-#include <string>
-#include <string_view>
 
 #include <jni.h>
 #include <android/asset_manager.h>
@@ -20,9 +15,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
 
 import std;
-import vulkan_hpp;
-
-namespace vk::detail { DispatchLoaderDynamic defaultDispatchLoaderDynamic; }
+import vk;
 
 //extern "C" void android_main(struct android_app* state);
 extern "C" int foo(int a, int b);
@@ -124,13 +117,9 @@ void android_main(struct android_app *pApp)
     //auto n = lib::foo(3, 2);
     //lib::prints("hello");
     //int s = foo(1, 2);
-    //vk::detail::defaultDispatchLoaderDynamic.init();
-    //std::uint32_t v = vk::enumerateInstanceVersion();
-    //std::println("Found Vulkan runtime {}.{}.{}", vk::versionMajor(v), vk::versionMinor(v), vk::versionPatch(v));
-    //const auto app_info = vk::ApplicationInfo{ "VulkanApp", 0, nullptr, 0, vk::ApiVersion14 };
-    //const auto instance_info = vk::InstanceCreateInfo{ vk::InstanceCreateFlags{}, &app_info, };
-    //auto instance = vk::createInstanceUnique(instance_info);
-    //vk::detail::defaultDispatchLoaderDynamic.init(*instance);
+
+    choppy::VulkanContext context;
+    context.create();
 
     __android_log_print(ANDROID_LOG_INFO, "android_main", "android_main()");
 

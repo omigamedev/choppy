@@ -16,27 +16,16 @@ add_subdirectory(${MODULES_DIR}/std modules/std)
 add_subdirectory(${MODULES_DIR}/mylib modules/mylib)
 add_subdirectory(${MODULES_DIR}/encoder modules/encoder)
 add_subdirectory(${MODULES_DIR}/rtmp modules/rtmp)
+add_subdirectory(${MODULES_DIR}/vk modules/vk)
 
-FetchContent_Declare(
-    VulkanHeaders
-    GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-    GIT_TAG v1.4.309)
-set(VULKAN_HEADERS_ENABLE_MODULE ON)
-FetchContent_MakeAvailable(VulkanHeaders)
-
-find_package(Vulkan REQUIRED)
 find_package(game-activity REQUIRED CONFIG)
 
 add_library(main SHARED src/android_main.cpp)
 add_dependencies(main build_rust)
 target_link_libraries(main PRIVATE
     mylib_static_cpp
-    encoder
-    rtmp
-    app std
+    encoder rtmp app std vk
     android log
-    Vulkan::Vulkan
-    Vulkan::VulkanHppModule
     game-activity::game-activity_static)
 target_compile_definitions(main PRIVATE "YT_KEY=\"$ENV{YT_KEY}\"")
 target_link_options(main PRIVATE
