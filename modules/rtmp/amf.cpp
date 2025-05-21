@@ -28,7 +28,8 @@ std::string amf::Message::read_string() noexcept
 {
     uint16_t len = from_big_endian<uint16_t>(std::span(m_data.begin() + offset, sizeof(uint16_t)));
     const char* ptr = reinterpret_cast<const char*>(m_data.data()) + offset + sizeof(uint16_t);
-    return { ptr, ptr + len };
+    offset += sizeof(uint16_t) + len;
+    return { ptr, len };
 }
 
 void amf::Message::write_string(const std::string_view str) noexcept

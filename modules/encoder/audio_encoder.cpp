@@ -34,27 +34,62 @@ bool AudioEncoder::create() noexcept
         return false;
     }
 
+    AMediaFormat* input_format = AMediaCodec_getInputFormat(codec);
+    AMediaFormat_getInt32(input_format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, &max_input);
+    AMediaFormat_getInt32(input_format, AMEDIAFORMAT_KEY_PCM_ENCODING, &pcm_encoding);
+    AMediaFormat_delete(input_format);
+
     AMediaCodec_start(codec);
     return true;
 }
 
-bool AudioEncoder::send_frame(std::span<const uint8_t> rgba, uint64_t ts_ms) noexcept
+bool AudioEncoder::send_frame(std::span<const uint16_t> pcm) noexcept
 {
+    ptsUs = samples * 1'000'000 / samplerate;
+    ssize_t bufIndex = AMediaCodec_dequeueInputBuffer(codec, -1);
+    if (bufIndex >= 0)
+    {
+        size_t bufSize;
+        uint8_t* inputBuf = AMediaCodec_getInputBuffer(codec, bufIndex, &bufSize);
+        std::ranges::copy(pcm, reinterpret_cast<uint16_t*>(inputBuf));
+        AMediaCodec_queueInputBuffer(codec, bufIndex, 0, bufSize, ptsUs, 0);
+        samples += pcm.size() / 2;
+        return true;
+    }
     return false;
 }
 
-bool AudioEncoder::receive_packet(std::vector<uint8_t> &out, uint64_t &out_pts) noexcept
+bool AudioEncoder::receive_packet() noexcept
 {
+    AMediaCodecBufferInfo info;
+    while (true)
+    {
+        ssize_t outputBufIndex = AMediaCodec_dequeueOutputBuffer(codec, &info, 0);
+
+        if (outputBufIndex == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) { return false; }
+        else if (outputBufIndex == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) { return false; }
+        else if (outputBufIndex == AMEDIACODEC_INFO_TRY_AGAIN_LATER) { return false; }
+        else if (outputBufIndex < 0) { return false; }
+
+        size_t outSize;
+        const uint8_t* outBuf = AMediaCodec_getOutputBuffer(codec, outputBufIndex, &outSize);
+
+        if (info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG)
+        {
+            LOGI("Got codec config");
+            if (config_handler)
+                config_handler({ outBuf + info.offset, (uint32_t)info.size });
+        }
+        else if (info.size > 0)
+        {
+            LOGI("Encoded audio frame %d bytes, pts %ld", info.size, info.presentationTimeUs / 1000);
+            if (packet_handler)
+                packet_handler({ outBuf + info.offset, (uint32_t)info.size }, info.presentationTimeUs / 1000);
+            AMediaCodec_releaseOutputBuffer(codec, outputBufIndex, false);
+            return true;
+        }
+
+        AMediaCodec_releaseOutputBuffer(codec, outputBufIndex, false);
+    }
     return false;
-}
-
-void AudioEncoder::flush() noexcept
-{
-
-}
-
-void AudioEncoder::on_config(
-    std::function<void(std::vector<uint8_t>, std::vector<uint8_t>)> handler) noexcept
-{
-
 }

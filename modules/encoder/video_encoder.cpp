@@ -61,57 +61,47 @@ bool VideoEncoder::send_frame(std::span<const uint8_t> rgba, uint64_t ts_ms) noe
     return false;
 }
 
-void VideoEncoder::flush() noexcept
-{
-    ssize_t bufIndex = AMediaCodec_dequeueInputBuffer(codec, -1);
-    AMediaCodec_queueInputBuffer(codec, bufIndex, 0, 0,
-        ptsUs, AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
-}
-
-bool VideoEncoder::receive_packet(std::vector<uint8_t>& out, uint64_t& out_pts) noexcept
+bool VideoEncoder::receive_packet() noexcept
 {
     AMediaCodecBufferInfo info;
-    ssize_t outputBufIndex = AMediaCodec_dequeueOutputBuffer(codec, &info, -1);
-    while (outputBufIndex >= 0)
+    while (true)
     {
+        ssize_t outputBufIndex = AMediaCodec_dequeueOutputBuffer(codec, &info, 0);
+
+        if (outputBufIndex == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) { return false; }
+        else if (outputBufIndex == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) { return false; }
+        else if (outputBufIndex == AMEDIACODEC_INFO_TRY_AGAIN_LATER) { return false; }
+        else if (outputBufIndex < 0) { return false; }
+
         size_t outSize;
         const uint8_t* outBuf = AMediaCodec_getOutputBuffer(codec, outputBufIndex, &outSize);
 
+        const auto nals = extract_nals_annexb({ outBuf + info.offset, outBuf + info.size });
         if (info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG)
         {
             // SPS/PPS header
             LOGI("Got codec config");
-            auto nals = extract_nals_annexb({ outBuf, outBuf + info.size });
+            std::span<const uint8_t> sps, pps;
             for (const auto& nal : nals)
             {
                 if (nal.empty()) continue;
                 uint8_t nal_unit_type = nal[0] & 0x1F;
-                if (nal_unit_type == 0x07)
-                    sps = std::vector<uint8_t>(nal.begin(), nal.end());
-                if (nal_unit_type == 0x08)
-                    pps = std::vector<uint8_t>(nal.begin(), nal.end());;
+                if (nal_unit_type == 0x07) sps = nal;
+                if (nal_unit_type == 0x08) pps = nal;
             }
-
-            // Save for later (prepend to keyframes)
-            AMediaCodec_releaseOutputBuffer(codec, outputBufIndex, false);
-            outputBufIndex = AMediaCodec_dequeueOutputBuffer(codec, &info, 0);
-
             if (config_handler)
                 config_handler(sps, pps);
-            continue;
         }
-
-        if (info.size > 0)
+        else if (info.size > 0)
         {
-            LOGI("Encoded frame %d bytes, pts %ld", info.size, info.presentationTimeUs);
-            out_pts = info.presentationTimeUs;
-            out = { outBuf, outBuf + info.size };
+            LOGI("Encoded video frame %d bytes, pts %ld", info.size, info.presentationTimeUs / 1000);
+            if (packet_handler)
+                packet_handler(nals, info.presentationTimeUs / 1000, info.flags & AMEDIACODEC_BUFFER_FLAG_KEY_FRAME);
             AMediaCodec_releaseOutputBuffer(codec, outputBufIndex, false);
             return true;
         }
 
         AMediaCodec_releaseOutputBuffer(codec, outputBufIndex, false);
-        outputBufIndex = AMediaCodec_dequeueOutputBuffer(codec, &info, 0);
     }
     return false;
 }
@@ -142,10 +132,4 @@ std::vector<std::span<const uint8_t>> VideoEncoder::extract_nals_annexb(std::spa
     }
     nal_units.emplace_back(d.begin() + start, d.end());
     return nal_units;
-}
-
-void VideoEncoder::on_config(
-        std::function<void(std::vector<uint8_t> sps, std::vector<uint8_t> pps)> handler) noexcept
-{
-    config_handler = handler;
 }

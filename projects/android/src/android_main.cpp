@@ -13,6 +13,7 @@
 #include <media/NdkMediaFormat.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 #include <video_encoder.h>
+#include <audio_encoder.h>
 #include <rtmp.h>
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
@@ -50,18 +51,25 @@ void encoder_loop()
     LOGI("Encoder loop started");
     const int width = 1920;
     const int height = 1080;
+    auto rgba = std::vector<uint8_t>(width * height * 4, 0);
     auto video_encoder = std::make_unique<VideoEncoder>(width, height, 10 << 20, 30);
     if (!video_encoder->create())
     {
         LOGE("Failed to create encoder");
         return;
     }
-    auto start = std::chrono::high_resolution_clock::now();
-    auto rgba = std::vector<uint8_t>(width * height * 4, 0);
+    auto audio_encoder = std::make_unique<AudioEncoder>(48000, 2, 1 << 20);
+    if (!audio_encoder->create())
+    {
+        LOGE("Failed to create audio encoder");
+        return;
+    }
 
     // Youtube
     const std::string host = "a.rtmp.youtube.com";
     const std::string app = "live2";
+    const std::string key = YT_KEY;
+
     rtmp::Socket socket;
     socket.connect_host(host, 1935);
     socket.handshake();
@@ -72,23 +80,42 @@ void encoder_loop()
     LOGI("Connected");
     socket.send_chunk_size();
     LOGI("SetChunkSize");
-    video_encoder->on_config([&socket](std::vector<uint8_t> sps, std::vector<uint8_t> pps){
-        LOGI("Got config");
+    video_encoder->on_config([&](std::span<const uint8_t> sps, std::span<const uint8_t> pps){
+        LOGI("Got video config");
         socket.send_video_header(sps, pps);
     });
+    video_encoder->on_packet([&](std::vector<std::span<const uint8_t>> nals, uint64_t pts_ms, bool keyframe){
+        LOGI("Got video packet");
+        socket.send_video_h264(nals, pts_ms, keyframe);
+    });
+    audio_encoder->on_config([&](std::span<const uint8_t> config){
+        LOGI("Got audio config");
+        socket.send_audio_header(config);
+    });
+    audio_encoder->on_packet([&](std::span<const uint8_t> data, uint64_t pts_ms){
+        LOGI("Got audio packet");
+        socket.send_audio_aac(data, pts_ms);
+    });
 
+    auto start = std::chrono::high_resolution_clock::now();
+    auto pcm = std::vector<uint16_t>(audio_encoder->max_frame_size(), 0);
+    float audio_frame_time = (float)audio_encoder->max_frame_size() / 2 / (float)audio_encoder->get_samplerate();
+    int video_frames = 0;
     while (true)
     {
         auto diff = std::chrono::high_resolution_clock::now() - start;
         int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
-        video_encoder->send_frame(rgba, ms);
-        uint64_t pts = 0;
-        std::vector<uint8_t> pkt;
-        if (video_encoder->receive_packet(pkt, pts))
+        LOGI("time %llu", ms);
+        int video_time_ms = video_frames * 1000 / 30;
+        if (ms > video_time_ms)
         {
-            LOGI("Got packet");
+            if (video_encoder->send_frame(rgba, ms))
+                video_frames++;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000 / 30));
+        audio_encoder->send_frame(pcm);
+        while (video_encoder->receive_packet());
+        while (audio_encoder->receive_packet());
+        std::this_thread::sleep_for(std::chrono::milliseconds((int)(audio_frame_time * 1000)));
     }
 }
 

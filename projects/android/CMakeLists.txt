@@ -38,5 +38,6 @@ target_link_libraries(main PRIVATE
     Vulkan::Vulkan
     Vulkan::VulkanHppModule
     game-activity::game-activity_static)
+target_compile_definitions(main PRIVATE "YT_KEY=\"$ENV{YT_KEY}\"")
 target_link_options(main PRIVATE
     -u Java_com_google_androidgamesdk_GameActivity_initializeNativeCode)

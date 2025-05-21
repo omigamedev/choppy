@@ -17,6 +17,8 @@
 #include <map>
 #include <fstream>
 
+#include <android/log.h>
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -25,6 +27,8 @@
 #include <unistd.h>
 
 #include "amf.h"
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyRTMP", __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyRTMP", __VA_ARGS__)
 
 namespace rtmp
 {
@@ -199,10 +203,10 @@ namespace rtmp
                 }
                 std::visit([](auto&& val) {
                     using T = std::decay_t<decltype(val)>;
-                    if constexpr (std::is_same_v<T, std::string>) std::cout << "String: " << val << "\n";
-                    else if constexpr (std::is_same_v<T, double>) std::cout << "Number: " << val << "\n";
-                    else if constexpr (std::is_same_v<T, bool>) std::cout << "Bool: " << val << "\n";
-                    else std::cout << "Null\n";
+                    if constexpr (std::is_same_v<T, std::string>) LOGI("String: %s", val.c_str());
+                    else if constexpr (std::is_same_v<T, double>) LOGI("Number: %f", val);
+                    else if constexpr (std::is_same_v<T, bool>) LOGI("Bool: %s", val ? "true" : "false");
+                    else LOGI("Null");
                 }, *value);
             }
             if (notify_result)
@@ -210,69 +214,66 @@ namespace rtmp
         }
         void dump(auto& data) const noexcept
         {
-            std::print("[DUMP] ");
+            std::string s;
             for (uint8_t b : std::bit_cast<std::array<uint8_t, sizeof(data)>>(data))
             {
-                std::print("{:X}", b);
+                s += std::format("{:X}", b);
                 if (std::isprint(b))
-                    std::print("'{}' ", (char)b);
+                    s += std::format("'{}' ", (char)b);
                 else
-                    std::print(" ");
+                    s += std::format(" ");
             }
-            std::println();
+            LOGI("[DUMP] %s", s.c_str());
         }
         void dump_data(std::span<uint8_t> data) const noexcept
         {
-            std::print("[DUMP {} bytes] ", data.size());
+            std::string s;
             for (uint8_t b : data)
             {
-                std::print("{:X}", b);
+                s += std::format("{:X}", b);
                 if (std::isprint(b))
-                    std::print("'{}' ", (char)b);
+                    s += std::format("'{}' ", (char)b);
                 else
-                    std::print(" ");
+                    s += std::format(" ");
             }
-            std::println();
+            LOGI("[DUMP %d bytes] %s", (int)data.size(), s.c_str());
         }
         void parse_chunk_size(std::span<uint8_t> data)
         {
-            std::print("SetChunkSize: ");
             if (data.size() != 4)
             {
-                std::println("wrong data size");
+                LOGE("SetChunkSize: wrong data size");
             }
             else
             {
                 uint32_t size = from_big_endian<uint32_t>(data);
-                std::println("{}", size);
+                LOGI("SetChunkSize: %d", size);
                 packet_max_size = size;
             }
         }
         void parse_window_ack(std::span<uint8_t> data)
         {
-            std::print("WindowAckSize: ");
             if (data.size() != 4)
             {
-                std::println("wrong data size");
+                LOGE("WindowAckSize: wrong data size");
             }
             else
             {
                 uint32_t size = from_big_endian<uint32_t>(data);
-                std::println("{}", size);
+                LOGI("WindowAckSize: %d", size);
             }
         }
         void parse_client_bw(std::span<uint8_t> data)
         {
-            std::print("SetClientBW: ");
             if (data.size() != 5)
             {
-                std::println("wrong data size");
+                LOGE("SetClientBW: wrong data size");
             }
             else
             {
                 uint32_t size = from_big_endian<uint32_t>(data.subspan(0, 4));
                 uint8_t type = data[4];
-                std::println("{} type {}", size, type);
+                LOGI("SetClientBW: %d type %d", size, type);
             }
         }
         void receive_loop()
@@ -285,10 +286,10 @@ namespace rtmp
                 dump(basic_header);
                 if (bytes != sizeof(basic_header))
                 {
-                    std::print("error: unexpected message size of {} bytes\n", bytes);
+                    LOGE("error: unexpected message size of %d bytes", bytes);
                     break;
                 }
-                std::print("[RECV] basic header 0x{:0x} type {}, cs-id {}\n", std::bit_cast<uint8_t>(basic_header),
+                LOGI("[RECV] basic header 0x%0x type %d, cs-id %d\n", std::bit_cast<uint8_t>(basic_header),
                            static_cast<uint8_t>(basic_header.header_type), static_cast<uint8_t>(basic_header.stream_id));
                 if (basic_header.header_type == ChunkType::Type0)
                 {
@@ -298,11 +299,11 @@ namespace rtmp
                     dump(fh);
                     if (bytes != sizeof(FullHeader) - sizeof(BasicHeader))
                     {
-                        std::print("error: unexpected message size of {} bytes\n", bytes);
+                        LOGE("error: unexpected message size of %d bytes", bytes);
                         break;
                     }
                     auto message_size = fh.size();
-                    std::print(" - full header: message type {}, size {} bytes, ts 0x{:X}\n", to_string(fh.message_type), message_size, fh.ts());
+                    LOGI(" - full header: message type %s, size %d bytes, ts 0x%X\n", to_string(fh.message_type).c_str(), message_size, fh.ts());
 
                     int32_t request_size = std::min<int32_t>(message_size, packet_max_size);
 
@@ -311,7 +312,7 @@ namespace rtmp
                     dump_data(message_buffer);
                     if (bytes != message_buffer.size())
                     {
-                        std::print("error: unexpected message size of {} bytes\n", bytes);
+                        LOGE("error: unexpected message size of %d bytes", bytes);
                         break;
                     }
 
@@ -348,7 +349,7 @@ namespace rtmp
                     dump(h1);
                     if (bytes != sizeof(Type01Header) - sizeof(BasicHeader))
                     {
-                        std::print("error: unexpected message size of {} bytes\n", bytes);
+                        LOGE("error: unexpected message size of %d bytes", bytes);
                         break;
                     }
 
@@ -358,14 +359,14 @@ namespace rtmp
                     fh.message_type = h1.message_type;
 
                     auto message_size = fh.size();
-                    std::print(" - type01 header: message type {}, size {} bytes, timestamp {:X}\n", to_string(fh.message_type), message_size, fh.ts());
+                    LOGI(" - type01 header: message type %s, size %d bytes, timestamp %X", to_string(fh.message_type).c_str(), message_size, fh.ts());
 
                     int32_t request_size = std::min<int32_t>(message_size, packet_max_size);
                     auto message_buffer = std::vector<uint8_t>(request_size, 0);
                     bytes = recv(sockfd, reinterpret_cast<char*>(message_buffer.data()), (int)message_buffer.size(), MSG_WAITALL);
                     if (bytes != message_buffer.size())
                     {
-                        std::print("error: unexpected message size of {} bytes\n", bytes);
+                        LOGE("error: unexpected message size of %d bytes", bytes);
                         break;
                     }
 
@@ -400,7 +401,7 @@ namespace rtmp
                     dump(h1);
                     if (bytes != sizeof(Type2Header) - sizeof(BasicHeader))
                     {
-                        std::print("error: unexpected message size of {} bytes\n", bytes);
+                        LOGE("error: unexpected message size of %d bytes", bytes);
                         break;
                     }
 
@@ -408,14 +409,14 @@ namespace rtmp
                     fh.timestamp = h1.timestamp;
 
                     auto message_size = fh.size();
-                    std::print(" - type01 header: message type {}, size {} bytes, timestamp {:X}\n", to_string(fh.message_type), message_size, fh.ts());
+                    LOGI(" - type01 header: message type %s, size %d bytes, timestamp %X", to_string(fh.message_type).c_str(), message_size, fh.ts());
 
                     int32_t request_size = std::min<int32_t>(message_size, packet_max_size);
                     auto message_buffer = std::vector<uint8_t>(request_size, 0);
                     bytes = recv(sockfd, reinterpret_cast<char*>(message_buffer.data()), (int)message_buffer.size(), MSG_WAITALL);
                     if (bytes != message_buffer.size())
                     {
-                        std::print("error: unexpected message size of {} bytes\n", bytes);
+                        LOGE("error: unexpected message size of %d bytes", bytes);
                         break;
                     }
 
@@ -454,11 +455,11 @@ namespace rtmp
                     bytes = recv(sockfd, reinterpret_cast<char*>(message_buffer.data()), (int)message_buffer.size(), MSG_WAITALL);
                     if (bytes != message_buffer.size())
                     {
-                        std::print("error: unexpected message size of {} bytes\n", bytes);
+                        LOGE("error: unexpected message size of %d bytes", bytes);
                         break;
                     }
-                    std::println(" - type3 header: continuation of header type {} with message type {}, size {}",
-                                 static_cast<uint8_t>(fh.basic_header.header_type), to_string(fh.message_type), message_size);
+                    LOGI(" - type3 header: continuation of header type %d with message type %s, size %d",
+                                 static_cast<uint8_t>(fh.basic_header.header_type), to_string(fh.message_type).c_str(), message_size);
 
                     if (remaining_size > packet_max_size)
                     {
@@ -487,7 +488,7 @@ namespace rtmp
                 }
                 else
                 {
-                    std::println(" - type {:x} header not supported", static_cast<uint8_t>(basic_header.header_type));
+                    LOGE(" - type %x header not supported", static_cast<uint8_t>(basic_header.header_type));
                 }
             }
         }
@@ -506,7 +507,7 @@ namespace rtmp
 
             if (getaddrinfo(host.data(), std::to_string(port).c_str(), &hints, &result) != 0)
             {
-                std::cerr << "getaddrinfo failed\n";
+                LOGE("getaddrinfo failed");
 #if defined(_WIN32)
                 WSACleanup();
 #endif
@@ -566,7 +567,7 @@ namespace rtmp
         {
             auto data = packet.bytes();
             send(sockfd, (const char*)data.data(), (int)data.size(), 0);
-            std::println("[SEND] command: {} bytes", data.size());
+            LOGI("[SEND] command: %d bytes", (int)data.size());
             return true;
         }
         template<typename T>
@@ -575,7 +576,7 @@ namespace rtmp
             auto data = packet.bytes();
             data.append_range(raw_data);
             send(sockfd, (const char*)data.data(), data.size(), 0);
-            std::println("[SEND] command: {} bytes", data.size());
+            LOGI("[SEND] command: %d bytes", (int)data.size());
             return true;
         }
         bool send_packets(const std::vector<Packet>& packets) const noexcept
@@ -584,7 +585,7 @@ namespace rtmp
             for (const auto& p : packets)
                 data.append_range(p.bytes());
             send(sockfd, (const char*)data.data(), (int)data.size(), 0);
-            std::println("[SEND] multiple commands: {} bytes", data.size());
+            LOGI("[SEND] multiple commands: %d bytes", (int)data.size());
             return true;
         }
         void send_chunk_size()
@@ -604,16 +605,16 @@ namespace rtmp
             packet.body.write_string("connect");
             packet.body.write_number(1.0);
             packet.body.write_object({
-                                             { "app", std::string{app} },
-                                             { "type", "nonprivate" },
-                                             { "tcUrl", std::format( "rtmp://{}/{}", m_host, app ) },
-                                             //{ "swfUrl", "rtmp://a.rtmp.youtube.com/live2" },
-                                             //{ "flashVer", "FMLE/3.0" },
-                                     });
+                { "app", std::string{app} },
+                { "type", "nonprivate" },
+                { "tcUrl", std::format( "rtmp://{}/{}", m_host, app ) },
+                //{ "swfUrl", "rtmp://a.rtmp.youtube.com/live2" },
+                //{ "flashVer", "FMLE/3.0" },
+            });
             packet.update_header();
-            std::println("[SEND] commands: connect");
+            LOGI("[SEND] commands: connect");
             send_packet(packet);
-            std::println("[WAIT] _result");
+            LOGI("[WAIT] _result");
             wait_result();
         }
         void send_create_stream_command(std::string_view key)
@@ -651,9 +652,9 @@ namespace rtmp
 
             //std::println("[SEND] commands: releaseStream, FCPublish, createStream");
             //send(sockfd, (const char*)data.data(), data.size(), 0);
-            std::println("[WAIT] _result");
+            LOGI("[WAIT] _result");
             wait_result();
-            std::println("[WAIT] onBWDone");
+            LOGI("[WAIT] onBWDone");
             //wait_result();
 
             rtmp::Packet checkbw;
@@ -713,7 +714,10 @@ namespace rtmp
             std::vector<uint8_t> packet;
             packet.append_range(header.bytes());
             packet.append_range(payload);
-            send(sockfd, (const char*)packet.data(), (int)packet.size(), 0);
+            int sent = send(sockfd, (const char*)packet.data(), (int)packet.size(), 0);
+            if (sent != packet.size())
+                LOGE("send_audio_header FAILED");
+            LOGI("[SEND] audio header: %d bytes", (int)packet.size());
         }
         void send_audio_aac(std::span<const uint8_t> aac_raw, uint32_t ts)
         {
@@ -733,7 +737,8 @@ namespace rtmp
             packet.append_range(payload);
             int sent = send(sockfd, (const char*)packet.data(), (int)packet.size(), 0);
             if (sent != packet.size())
-                std::println("send_audio_aac FAILED");
+                LOGE("send_audio_aac FAILED");
+            LOGI("[SEND] audio frame: %d bytes", (int)packet.size());
         }
         void send_video_header(std::span<const uint8_t> sps, std::span<const uint8_t> pps)
         {
@@ -767,7 +772,8 @@ namespace rtmp
             packet.append_range(buf);
             int sent = send(sockfd, (const char*)packet.data(), (int)packet.size(), 0);
             if (sent != packet.size())
-                std::println("send_video_header FAILED");
+                LOGE("send_video_header FAILED");
+            LOGI("[SEND] video header: %d bytes", (int)packet.size());
         }
         void send_video_h264(std::vector<std::span<const uint8_t>> nals, uint32_t ts, bool keyframe)
         {
@@ -792,29 +798,8 @@ namespace rtmp
             packet.append_range(buf);
             int sent = send(sockfd, (const char*)packet.data(), (int)packet.size(), 0);
             if (sent != packet.size())
-                std::println("send_video_h264 FAILED");
-        }
-        void parse_rtmp_message(const uint8_t* buf, size_t len)
-        {
-            std::cout << "[RECV] " << len << " bytes\n";
-            for (size_t i = 0; i < len; ++i)
-                printf("%02X ", buf[i]);
-            std::cout << "\n";
-
-            if (len > 12 && buf[0] == 0x02) {
-                //parse_amf(buf + 12, len - 12);
-            }
-        }
-        void wait_response()
-        {
-            uint8_t buf[4096];
-            int r = recv(sockfd, (char*)buf, sizeof(buf), 0);
-            if (r > 0) {
-                parse_rtmp_message(buf, r);
-            }
-            else {
-                std::cerr << "No data received or connection error.\n";
-            }
+                LOGE("send_video_h264 FAILED");
+            LOGI("[SEND] video frame: %d bytes", (int)packet.size());
         }
     };
 }
