@@ -6,23 +6,17 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../modules)
-add_subdirectory(${MODULES_DIR}/app modules/app)
 add_subdirectory(${MODULES_DIR}/std modules/std)
-add_subdirectory(${MODULES_DIR}/mylib modules/mylib)
+add_subdirectory(${MODULES_DIR}/app modules/app)
+#add_subdirectory(${MODULES_DIR}/mylib modules/mylib)
+add_subdirectory(${MODULES_DIR}/vk modules/vk)
+add_subdirectory(${MODULES_DIR}/xr modules/xr)
+add_subdirectory(${MODULES_DIR}/encoder modules/encoder)
+add_subdirectory(${MODULES_DIR}/rtmp modules/rtmp)
+add_subdirectory(${MODULES_DIR}/platform modules/platform)
 
-include(FetchContent)
-FetchContent_Declare(
-    VulkanHeaders
-    GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-    GIT_TAG v1.4.309)
-set(VULKAN_HEADERS_ENABLE_MODULE ON)
-FetchContent_MakeAvailable(VulkanHeaders)
-
-find_package(Vulkan)
-
-add_executable(ce_windows
-    src/win_main.cpp)
+add_executable(ce_windows src/win_main.cpp)
 #target_link_directories(ce_windows PRIVATE $ENV{VULKAN_SDK}/Include
-target_link_libraries(ce_windows PRIVATE app std Vulkan::Vulkan Vulkan::VulkanHppModule mylib_static_cpp)
+target_link_libraries(ce_windows PRIVATE app std vk xr rtmp platform)
 target_include_directories(ce_windows PRIVATE "$ENV{WindowsSdkDir}Include/$ENV{WindowsSDKVersion}/cppwinrt")
-set_target_properties(ce_windows PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+#set_target_properties(ce_windows PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")

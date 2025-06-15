@@ -1,8 +1,15 @@
 module;
 
+#ifdef __ANDROID__
 #include <android/log.h>
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
+#elifdef _WIN32
+#define LOGE std::print
+#define LOGI std::print
+#endif
+
+#include <cstdint>
 
 export module vk;
 export import vulkan_hpp;

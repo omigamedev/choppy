@@ -40,7 +40,6 @@ bool VideoEncoder::create() noexcept
 
 bool VideoEncoder::send_frame(std::span<const uint8_t> rgba, uint64_t ts_ms) noexcept
 {
-    ptsUs = ts_ms * 1000;
     ssize_t bufIndex = AMediaCodec_dequeueInputBuffer(codec, -1);
     if (bufIndex >= 0)
     {
@@ -55,7 +54,8 @@ bool VideoEncoder::send_frame(std::span<const uint8_t> rgba, uint64_t ts_ms) noe
             inputBuf + ySize + uvSize, width / 2,
             width, height
         );
-        AMediaCodec_queueInputBuffer(codec, bufIndex, 0, bufSize, ptsUs, 0);
+        AMediaCodec_queueInputBuffer(codec, bufIndex, 0, bufSize, ts_ms * 1000, 0);
+        LOGI("send video frame ts %lu", ts_ms);
         return true;
     }
     return false;

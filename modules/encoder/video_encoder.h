@@ -16,7 +16,6 @@ class VideoEncoder
     int bitrate = 10 << 20;
     int fps = 30;
     int iframeInterval = 1; // seconds
-    uint64_t ptsUs = 0; // Presentation timestamp in microseconds
     std::vector<std::span<const uint8_t>> extract_nals_annexb(std::span<const uint8_t> d);
     std::function<void(std::span<const uint8_t> sps, std::span<const uint8_t> pps)> config_handler;
     std::function<void(std::vector<std::span<const uint8_t>> nals, uint64_t pts_ms, bool keyframe)> packet_handler;

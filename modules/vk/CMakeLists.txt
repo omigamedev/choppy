@@ -1,3 +1,4 @@
+include(FetchContent)
 FetchContent_Declare(
     VulkanHeaders
     GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
@@ -21,7 +22,7 @@ if (WIN32)
         VULKAN_HPP_ENABLE_STD_MODULE=1
         VULKAN_HPP_STD_MODULE=std
         VK_USE_PLATFORM_WIN32_KHR=1)
-elif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Android")
     target_compile_definitions(vk PUBLIC
         VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
         VULKAN_HPP_ENABLE_STD_MODULE=1

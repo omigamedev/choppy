@@ -1,3 +1,5 @@
 add_library(rtmp rtmp.cpp amf.cpp)
 target_include_directories(rtmp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(rtmp PRIVATE log)
+if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+    target_link_libraries(rtmp PRIVATE log)
+endif()

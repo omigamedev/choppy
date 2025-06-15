@@ -46,7 +46,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.games:games-activity:4.0.0")
-    implementation("org.khronos.openxr:openxr_loader_for_android:1.1.47")
+    //implementation("org.khronos.openxr:openxr_loader_for_android:1.1.47")
 }

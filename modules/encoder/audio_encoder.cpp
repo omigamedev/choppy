@@ -19,6 +19,7 @@ bool AudioEncoder::create() noexcept
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, bitrate);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_SAMPLE_RATE, samplerate);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_CHANNEL_COUNT, channels);
+    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_PCM_ENCODING, 2);
 
     codec = AMediaCodec_createEncoderByType("audio/mp4a-latm");
     if (!codec)
@@ -35,7 +36,7 @@ bool AudioEncoder::create() noexcept
     }
 
     AMediaFormat* input_format = AMediaCodec_getInputFormat(codec);
-    AMediaFormat_getInt32(input_format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, &max_input);
+    AMediaFormat_getInt32(input_format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, &max_input_bytes);
     AMediaFormat_getInt32(input_format, AMEDIAFORMAT_KEY_PCM_ENCODING, &pcm_encoding);
     AMediaFormat_delete(input_format);
 
@@ -43,17 +44,16 @@ bool AudioEncoder::create() noexcept
     return true;
 }
 
-bool AudioEncoder::send_frame(std::span<const uint16_t> pcm) noexcept
+bool AudioEncoder::send_frame(std::span<const int16_t> pcm, uint64_t ts_ms) noexcept
 {
-    ptsUs = samples * 1'000'000 / samplerate;
     ssize_t bufIndex = AMediaCodec_dequeueInputBuffer(codec, -1);
     if (bufIndex >= 0)
     {
-        size_t bufSize;
+        size_t bufSize = 0;
         uint8_t* inputBuf = AMediaCodec_getInputBuffer(codec, bufIndex, &bufSize);
-        std::ranges::copy(pcm, reinterpret_cast<uint16_t*>(inputBuf));
-        AMediaCodec_queueInputBuffer(codec, bufIndex, 0, bufSize, ptsUs, 0);
-        samples += pcm.size() / 2;
+        std::ranges::copy(pcm, reinterpret_cast<int16_t*>(inputBuf));
+        AMediaCodec_queueInputBuffer(codec, bufIndex, 0, pcm.size_bytes(), ts_ms * 1000, 0);
+        LOGI("send audio frame ts %lu", ts_ms);
         return true;
     }
     return false;

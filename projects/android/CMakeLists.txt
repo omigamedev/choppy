@@ -10,6 +10,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-pthread)
+endif()
+
 set(MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../modules)
 add_subdirectory(${MODULES_DIR}/app modules/app)
 add_subdirectory(${MODULES_DIR}/std modules/std)
@@ -17,6 +21,7 @@ add_subdirectory(${MODULES_DIR}/mylib modules/mylib)
 add_subdirectory(${MODULES_DIR}/encoder modules/encoder)
 add_subdirectory(${MODULES_DIR}/rtmp modules/rtmp)
 add_subdirectory(${MODULES_DIR}/vk modules/vk)
+add_subdirectory(${MODULES_DIR}/xr modules/xr)
 
 find_package(game-activity REQUIRED CONFIG)
 

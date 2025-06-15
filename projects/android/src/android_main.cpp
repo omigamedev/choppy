@@ -91,24 +91,31 @@ void encoder_loop()
     });
 
     auto start = std::chrono::high_resolution_clock::now();
-    auto pcm = std::vector<uint16_t>(audio_encoder->max_frame_size(), 0);
-    float audio_frame_time = (float)audio_encoder->max_frame_size() / 2 / (float)audio_encoder->get_samplerate();
-    int video_frames = 0;
+    auto pcm = std::vector<int16_t>(audio_encoder->max_input_samples(), 0);
+    float audio_frame_time = (float)(audio_encoder->max_input_samples() / 2) / (float)audio_encoder->get_samplerate();
+    uint64_t video_frames = 0;
+    uint64_t audio_frames = 0;
     while (true)
     {
         auto diff = std::chrono::high_resolution_clock::now() - start;
         int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
-        LOGI("time %llu", ms);
+        //LOGI("time %llu", ms);
         int video_time_ms = video_frames * 1000 / 30;
         if (ms > video_time_ms)
         {
             if (video_encoder->send_frame(rgba, ms))
                 video_frames++;
         }
-        audio_encoder->send_frame(pcm);
+        uint64_t audio_time_ms = audio_frames * 1000 / audio_encoder->get_samplerate();
+        //LOGI("audio time %lu", ms);
+        if (ms > audio_time_ms)
+        {
+            if (audio_encoder->send_frame(pcm, audio_time_ms))
+                audio_frames += pcm.size() / 2;
+        }
         while (video_encoder->receive_packet());
         while (audio_encoder->receive_packet());
-        std::this_thread::sleep_for(std::chrono::milliseconds((int)(audio_frame_time * 1000)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 

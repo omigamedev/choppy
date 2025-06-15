@@ -2,10 +2,8 @@
 
 #include <iostream>
 #include <vector>
-#include <thread>
 #include <string>
 #include <cstdint>
-#include <cstring>
 #include <array>
 #include <ranges>
 #include <condition_variable>
@@ -13,10 +11,7 @@
 #include <optional>
 #include <variant>
 #include <chrono>
-#include <print>
 #include <bit>
-#include <map>
-#include <fstream>
 
 template<size_t size_to, size_t size_from>
 constexpr auto trunc_be(const std::array<uint8_t, size_from>&& bits)

@@ -8,7 +8,9 @@ module;
 #include <bit>
 #include <bitset>
 #include <print>
+#include <vector>
 #include <cstdint>
+#include <cstdio>
 
 export module std;
 
@@ -21,3 +23,5 @@ export module std;
 #include "std/bitset.inc"
 #include "std/print.inc"
 #include "std/cstdint.inc"
+#include "std/vector.inc"
+//#include "std/cstdio.inc"

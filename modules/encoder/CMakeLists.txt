@@ -1,9 +1,7 @@
 include(FetchContent)
-FetchContent_Declare(
-    libyuv
+FetchContent_Declare(libyuv
     GIT_REPOSITORY https://chromium.googlesource.com/libyuv/libyuv
-    GIT_TAG        main
-)
+    GIT_TAG main)
 FetchContent_MakeAvailable(libyuv)
 add_library(encoder video_encoder.cpp audio_encoder.cpp)
 target_include_directories(encoder PRIVATE ${libyuv_SOURCE_DIR}/include)
