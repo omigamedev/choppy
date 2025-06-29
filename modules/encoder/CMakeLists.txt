@@ -1,3 +1,4 @@
+project(ce_encoder)
 include(FetchContent)
 FetchContent_Declare(libyuv
     GIT_REPOSITORY https://chromium.googlesource.com/libyuv/libyuv

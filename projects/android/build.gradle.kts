@@ -1,5 +1,5 @@
 plugins {
-	id("com.android.application") version "8.10.0"
+	id("com.android.application") version "8.11.0"
     kotlin("android") version "2.1.10"
 }
 
@@ -39,10 +39,10 @@ android {
     externalNativeBuild {
         cmake {
             path = file("CMakeLists.txt")
-            version = "3.31.6"
+            version = "4.0.2"
         }
     }
-    ndkVersion = "29.0.13113456"
+    ndkVersion = "29.0.13599879"
 }
 
 dependencies {

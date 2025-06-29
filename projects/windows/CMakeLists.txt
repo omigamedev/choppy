@@ -6,7 +6,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../modules)
-add_subdirectory(${MODULES_DIR}/std modules/std)
 add_subdirectory(${MODULES_DIR}/app modules/app)
 #add_subdirectory(${MODULES_DIR}/mylib modules/mylib)
 add_subdirectory(${MODULES_DIR}/vk modules/vk)
@@ -17,6 +16,6 @@ add_subdirectory(${MODULES_DIR}/platform modules/platform)
 
 add_executable(ce_windows src/win_main.cpp)
 #target_link_directories(ce_windows PRIVATE $ENV{VULKAN_SDK}/Include
-target_link_libraries(ce_windows PRIVATE app std vk xr rtmp platform)
+target_link_libraries(ce_windows PRIVATE app vk xr rtmp platform)
 target_include_directories(ce_windows PRIVATE "$ENV{WindowsSdkDir}Include/$ENV{WindowsSDKVersion}/cppwinrt")
 #set_target_properties(ce_windows PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")

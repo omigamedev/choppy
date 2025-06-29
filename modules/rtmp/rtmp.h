@@ -1,23 +1,27 @@
 #pragma once
-#include <iostream>
 #include <vector>
 #include <thread>
 #include <string>
 #include <cstdint>
-#include <cstring>
 #include <array>
 #include <ranges>
 #include <condition_variable>
-#include <algorithm>
-#include <optional>
-#include <variant>
 #include <chrono>
-#include <print>
 #include <bit>
 #include <map>
-#include <fstream>
 
 #include "amf.h"
+
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <netdb.h>
+#endif
 
 namespace rtmp
 {

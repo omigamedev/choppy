@@ -1,6 +1,10 @@
 add_library(platform)
-target_link_libraries(platform PUBLIC std)
+if(WIN32)
+    set(PLATFORM_SRC windows.cppm)
+else()
+    set(PLATFORM_SRC android.cppm)
+endif()
 target_sources(platform PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES platform.cppm android.cppm windows.cppm)
+    FILES platform.cppm ${PLATFORM_SRC})

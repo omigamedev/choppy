@@ -1,33 +1,32 @@
 include(FetchContent)
+
 FetchContent_Declare(
     VulkanHeaders
     GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
     GIT_TAG v1.4.309)
-set(VULKAN_HEADERS_ENABLE_MODULE ON)
 FetchContent_MakeAvailable(VulkanHeaders)
-
 find_package(Vulkan REQUIRED)
+
+FetchContent_Declare(
+    Volk
+    GIT_REPOSITORY https://github.com/zeux/volk.git
+    GIT_TAG vulkan-sdk-1.4.309)
+if (WIN32)
+    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
+elseif()
+    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_ANDROID_KHR)
+endif()
+FetchContent_MakeAvailable(Volk)
+
+FetchContent_Declare(
+    VulkanMemoryAllocator
+    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+    GIT_TAG v3.3.0)
+FetchContent_MakeAvailable(VulkanMemoryAllocator)
+
 add_library(vk)
 target_sources(vk PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     FILES vk.cppm)
-#target_sources(vk PUBLIC
-#    FILE_SET CXX_MODULES
-#    BASE_DIRS "$ENV{VULKAN_SDK}/Include/vulkan/"
-#    FILES "$ENV{VULKAN_SDK}/Include/vulkan/vulkan.cppm")
-if (WIN32)
-    target_compile_definitions(vk PUBLIC
-        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-        VULKAN_HPP_ENABLE_STD_MODULE=1
-        VULKAN_HPP_STD_MODULE=std
-        VK_USE_PLATFORM_WIN32_KHR=1)
-elseif (CMAKE_SYSTEM_NAME STREQUAL "Android")
-    target_compile_definitions(vk PUBLIC
-        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-        VULKAN_HPP_ENABLE_STD_MODULE=1
-        VULKAN_HPP_STD_MODULE=std
-        VK_USE_PLATFORM_ANDROID_KHR=1)
-endif()
-
-target_link_libraries(vk PUBLIC std Vulkan::Vulkan Vulkan::VulkanHppModule)
+target_link_libraries(vk PUBLIC Vulkan::Vulkan volk)

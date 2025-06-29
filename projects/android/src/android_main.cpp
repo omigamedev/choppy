@@ -10,20 +10,73 @@
 #include <video_encoder.h>
 #include <audio_encoder.h>
 #include <rtmp.h>
+#include <memory>
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
 
-import std;
-import vk;
+import ce.vk;
+import ce.xr;
+import ce.platform;
+import ce.platform_android;
 
-//extern "C" void android_main(struct android_app* state);
-extern "C" int foo(int a, int b);
+class AndroidContext
+{
+    std::unique_ptr<ce::platform::PlatformAndroid> platform;
+    ce::xr::Instance xr_instance;
+    ce::vk::Context vk_context;
+    android_app *pApp;
+public:
+    AndroidContext(android_app *pApp) : pApp(pApp) { }
+    bool create()
+    {
+        platform = std::make_unique<ce::platform::PlatformAndroid>();
+        xr_instance.setup_android(pApp->activity->vm, pApp->activity->javaGameActivity);
+        xr_instance.create();
+        vk_context.create_instance(xr_instance.vulkan_version(), xr_instance.instance_extensions());
+        auto xr_physical_device = xr_instance.physical_device(vk_context.instance());
+        vk_context.create_device(xr_physical_device, xr_instance.device_extensions());
+        auto supported_formats = xr_instance.enumerate_swapchain_formats();
+        // vk: pick a format for color and depth
+        // vk: create the swapchain renderpass
+        // xr: enumerate views
+        // for each view
+        //     vk: create the swapchain image views
+        //
+        return true;
+    }
+    bool start_session()
+    {
+        xr_instance.start_session(vk_context.device(),
+            vk_context.queue_family_index(), vk_context.queue_index());
+        return true;
+    }
+    void main_loop()
+    {
+        int events;
+        android_poll_source *pSource;
+        do
+        {
+            // Process all pending events before running game logic.
+            if (ALooper_pollOnce(-1, nullptr, &events, (void **) &pSource) >= 0)
+            {
+                if (pSource)
+                {
+                    pSource->process(pApp, pSource);
+                }
+            }
+        } while(!pApp->destroyRequested);
+    }
+};
 
 void handle_cmd(android_app *pApp, int32_t cmd)
 {
     switch (cmd) {
         case APP_CMD_INIT_WINDOW:
+            if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
+            {
+                context->start_session();
+            }
             break;
         case APP_CMD_TERM_WINDOW:
             break;
@@ -119,19 +172,16 @@ void encoder_loop()
     }
 }
 
-void android_main(struct android_app *pApp)
+void android_main(android_app *pApp)
 {
-    //auto n = lib::foo(3, 2);
-    //lib::prints("hello");
-    //int s = foo(1, 2);
-
-    choppy::VulkanContext context;
-    context.create();
+    auto context = std::make_unique<AndroidContext>(pApp);
+    context->create();
 
     __android_log_print(ANDROID_LOG_INFO, "android_main", "android_main()");
 
     // Register an event handler for Android events
     pApp->onAppCmd = handle_cmd;
+    pApp->userData = context.get();
 
     // Set input event filters (set it to NULL if the app wants to process all inputs).
     // Note that for key inputs, this example uses the default default_key_filter()
@@ -139,18 +189,5 @@ void android_main(struct android_app *pApp)
     android_app_set_motion_event_filter(pApp, motion_event_filter_func);
 
     auto encoder_thread = std::thread(&encoder_loop);
-
-    int events;
-    android_poll_source *pSource;
-    do
-    {
-        // Process all pending events before running game logic.
-        if (ALooper_pollOnce(-1, nullptr, &events, (void **) &pSource) >= 0)
-        {
-            if (pSource)
-            {
-                pSource->process(pApp, pSource);
-            }
-        }
-    } while(!pApp->destroyRequested);
+    context->main_loop();
 }

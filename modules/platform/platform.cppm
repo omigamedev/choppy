@@ -1,6 +1,6 @@
 module;
+#include <memory>
 export module ce.platform;
-import std;
 
 export namespace ce::platform
 {
@@ -8,10 +8,9 @@ class Window
 {
 public:
 };
-class IPlatform
+class Platform
 {
 public:
-    static IPlatform& Get();
-    static std::shared_ptr<Window> CreateWindow(int width, int height);
+    //virtual std::shared_ptr<Window> CreateWindow(int width, int height) { return {}; };
 };
 }

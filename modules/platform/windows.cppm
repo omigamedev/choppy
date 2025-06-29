@@ -1,21 +1,11 @@
 module;
-export module ce.platform.windows;
-import ce.platform;
+export module ce.platform_windows;
+export import ce.platform;
 
-
-export namespace ce::platform::windows
+export namespace ce::platform
 {
-class PlatformWindows : public IPlatform
+class PlatformWindows : public Platform
 {
 
 };
 }
-
-using namespace ce::platform;
-#ifdef _WIN32
-IPlatform& IPlatform::Get()
-{
-    static IPlatform* platform = new windows::PlatformWindows();
-    return *platform;
-}
-#endif

@@ -17,8 +17,8 @@
 #elifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#define LOGE std::print
-#define LOGI std::print
+#define LOGE printf
+#define LOGI printf
 #endif
 
 std::string rtmp::to_string(rtmp::MessageType t) noexcept {
