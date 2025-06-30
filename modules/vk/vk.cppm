@@ -5,6 +5,8 @@ module;
 #include <functional>
 
 #include <volk.h>
+#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_to_string.hpp>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -12,12 +14,9 @@ module;
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
 #include <vulkan/vulkan_android.h>
 #elifdef _WIN32
-#include <stdio.h>
-#include <cstdint>
-//#include <windows.h>
 #define LOGE(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
-#include <vulkan/vulkan_win32.h>
+// #include <vulkan/vulkan_win32.h>
 #endif
 
 
@@ -27,48 +26,52 @@ export namespace ce::vk
 {
 class Context
 {
-    VkInstance m_instance;
-    VkDevice m_device;
-    VkQueue m_queue;
-    VkRenderPass m_renderpass;
-    VkCommandPool m_cmd_pool_imm;
-    VkPhysicalDevice m_physical_device = nullptr;
-    VkPhysicalDeviceProperties2 m_physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-    uint32_t m_queue_family_index = 0;
-    uint32_t m_queue_index = 0;
-    [[nodiscard]] VkFormat best_color_format(const std::vector<VkFormat>& supported_formats) const noexcept
+    VkInstance m_instance = VK_NULL_HANDLE;
+    VkDevice m_device = VK_NULL_HANDLE;
+    VkQueue m_queue = VK_NULL_HANDLE;
+    VkRenderPass m_renderpass = VK_NULL_HANDLE;
+    VkCommandPool m_cmd_pool_imm = VK_NULL_HANDLE;
+    VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
+    uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
+    const uint32_t m_queue_index = 0;
+    [[nodiscard]] const char* to_string(VkResult r) const noexcept
     {
-        for (const auto format : supported_formats)
-        {
-            VkFormatProperties2 props{ .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2 };
-            vkGetPhysicalDeviceFormatProperties2(m_physical_device, format, &props);
-            if (props.formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)
-                return format;
-        }
-        return VK_FORMAT_UNDEFINED;
+        static char sr[64]{0};
+        const std::string ss = ::vk::to_string(static_cast<::vk::Result>(r));
+        std::copy_n(ss.begin(), std::min(ss.size(), sizeof(sr) - 1), sr);
+        return sr;
     }
 public:
     [[nodiscard]] VkInstance& instance() noexcept { return m_instance; }
     [[nodiscard]] VkDevice& device() noexcept { return m_device; }
     [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
     [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
-    bool create_instance(uint32_t api_version, const std::vector<std::string>& external_ext) noexcept
+    void create_from(VkInstance instance, VkDevice device, VkPhysicalDevice physical_device, uint32_t queue_family_index)
+    {
+        m_instance = instance;
+        m_device = device;
+        m_physical_device = physical_device;
+        m_queue_family_index = queue_family_index;
+    }
+    bool create() noexcept
     {
         volkInitialize();
         std::uint32_t vk_version = 0;
         vkEnumerateInstanceVersion(&vk_version);
-        LOGI("Found Vulkan runtime %d.%d.%d", VK_API_VERSION_MAJOR(vk_version),
-             VK_API_VERSION_MINOR(vk_version), VK_API_VERSION_PATCH(vk_version));
+        LOGI("Found Vulkan runtime %d.%d.%d",
+             VK_API_VERSION_MAJOR(vk_version),
+             VK_API_VERSION_MINOR(vk_version),
+             VK_API_VERSION_PATCH(vk_version));
         const VkApplicationInfo app_info{
             .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-            .pApplicationName = "VulkanApp",
+            .pApplicationName = "choppy_engine",
             .applicationVersion = 0,
-            .apiVersion = std::min(api_version, vk_version)
+            .apiVersion = vk_version
         };
         const std::vector<const char*> layers{
             //"VK_LAYER_KHRONOS_validation"
         };
-        std::vector<const char*> extensions{
+        const std::vector<const char*> extensions{
             VK_KHR_SURFACE_EXTENSION_NAME,
 #ifdef __ANDROID__
             VK_KHR_ANDROID_SURFACE_EXTENSION_NAME
@@ -76,10 +79,6 @@ public:
             VK_KHR_WIN32_SURFACE_EXTENSION_NAME
 #endif
         };
-        for (const std::string& ext : external_ext)
-        {
-            extensions.emplace_back(ext.c_str());
-        }
         const auto instance_info = VkInstanceCreateInfo{
             .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pApplicationInfo = &app_info,
@@ -90,45 +89,42 @@ public:
         };
         if (VkResult result = vkCreateInstance(&instance_info, nullptr, &m_instance); result != VK_SUCCESS)
         {
-            LOGE("Failed to create Vulkan instance");
+            LOGE("Failed to create Vulkan instance: %s", to_string(result));
             return false;
         }
         volkLoadInstance(m_instance);
-        return true;
-    }
-    bool create_device(VkPhysicalDevice physical_device, const std::vector<std::string>& external_ext) noexcept
-    {
-        m_physical_device = physical_device;
-        vkGetPhysicalDeviceProperties2(physical_device, &m_physical_device_properties);
-        LOGI("Vulkan device: %s", m_physical_device_properties.properties.deviceName);
 
-        const std::vector<VkQueueFamilyProperties2> queue_props = [&]{
+        // Find Physical Device
+
+        VkPhysicalDeviceProperties2 physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        vkGetPhysicalDeviceProperties2(m_physical_device, &physical_device_properties);
+        LOGI("Vulkan device: %s", physical_device_properties.properties.deviceName);
+
+        // Create Device
+
+        const std::vector<VkQueueFamilyProperties2> queue_props = [this]{
             uint32_t count = 0;
-            vkGetPhysicalDeviceQueueFamilyProperties2(physical_device, &count, nullptr);
+            vkGetPhysicalDeviceQueueFamilyProperties2(m_physical_device, &count, nullptr);
             std::vector<VkQueueFamilyProperties2> props(count, {.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
-            vkGetPhysicalDeviceQueueFamilyProperties2(physical_device, &count, props.data());
+            vkGetPhysicalDeviceQueueFamilyProperties2(m_physical_device, &count, props.data());
             return props;
         }();
-
         for (int i = 0; i < queue_props.size(); i++)
         {
-            const auto queue_flags = queue_props[i].queueFamilyProperties.queueFlags;
-            const auto has_graphics = queue_flags & VK_QUEUE_GRAPHICS_BIT;
-            const auto has_compute = queue_flags & VK_QUEUE_COMPUTE_BIT;
+            const VkQueueFlags queue_flags = queue_props[i].queueFamilyProperties.queueFlags;
+            const bool has_graphics = queue_flags & VK_QUEUE_GRAPHICS_BIT;
+            const bool has_compute = queue_flags & VK_QUEUE_COMPUTE_BIT;
             if (has_graphics && has_compute)
             {
                 m_queue_family_index = i;
                 break;
             }
         }
-
-        const std::vector<const char*> layers{};
-        std::vector<const char*> extensions{};
-        for (auto& ext : external_ext)
+        if (m_queue_family_index == std::numeric_limits<uint32_t>::max())
         {
-            extensions.emplace_back(ext.c_str());
+            LOGE("Failed to find a suitable queue family");
+            return false;
         }
-
         constexpr std::array queue_priority{1.f};
         const VkDeviceQueueCreateInfo queue_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -140,14 +136,10 @@ public:
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queue_info,
-            .enabledLayerCount = static_cast<uint32_t>(layers.size()),
-            .ppEnabledLayerNames = layers.data(),
-            .enabledExtensionCount = static_cast<uint32_t>(extensions.size()),
-            .ppEnabledExtensionNames = extensions.data()
         };
-        if (VkResult result = vkCreateDevice(physical_device, &device_info, nullptr, &m_device); result != VK_SUCCESS)
+        if (VkResult result = vkCreateDevice(m_physical_device, &device_info, nullptr, &m_device); result != VK_SUCCESS)
         {
-            LOGE("Failed to create Vulkan device");
+            LOGE("Failed to create Vulkan device: %s", to_string(result));
             return false;
         }
         volkLoadDevice(m_device);
@@ -162,7 +154,11 @@ public:
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .queueFamilyIndex = m_queue_family_index
         };
-        vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm);
+        if (VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm); result != VK_SUCCESS)
+        {
+            LOGE("Failed to create command pool");
+            return false;
+        }
 
         return true;
     }
@@ -212,9 +208,9 @@ public:
     }
     bool create_renderpass(const std::vector<VkFormat>& supported_formats)
     {
-        const VkFormat color_format = best_color_format(supported_formats);
+        const VkFormat color_format = {};//best_color_format(supported_formats);
         const VkFormat depth_format = VK_FORMAT_D16_UNORM;
-        const std::array<const VkAttachmentDescription, 2> renderpass_attachments{
+        const std::array renderpass_attachments{
             VkAttachmentDescription{
                 .format = color_format,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -237,14 +233,14 @@ public:
             },
         };
         constexpr VkAttachmentReference renderpass_sub_color{
-                .attachment = 0,
-                .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            .attachment = 0,
+            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         };
         constexpr VkAttachmentReference renderpass_sub_depth{
-                .attachment = 1,
-                .layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+            .attachment = 1,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
         };
-        const std::array<const VkSubpassDescription, 1> renderpass_sub{
+        const std::array renderpass_sub{
             VkSubpassDescription{
                 .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                 .colorAttachmentCount = 1,

@@ -15,10 +15,9 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
 
+import ce.platform_android;
 import ce.vk;
 import ce.xr;
-import ce.platform;
-import ce.platform_android;
 
 class AndroidContext
 {
@@ -32,23 +31,40 @@ public:
     {
         platform = std::make_unique<ce::platform::PlatformAndroid>();
         xr_instance.setup_android(pApp->activity->vm, pApp->activity->javaGameActivity);
-        xr_instance.create();
-        vk_context.create_instance(xr_instance.vulkan_version(), xr_instance.instance_extensions());
-        auto xr_physical_device = xr_instance.physical_device(vk_context.instance());
-        vk_context.create_device(xr_physical_device, xr_instance.device_extensions());
-        auto supported_formats = xr_instance.enumerate_swapchain_formats();
+        if (xr_instance.create())
+        {
+            vk_context.create_from(
+                xr_instance.vk_instance(),
+                xr_instance.device(),
+                xr_instance.physical_device(),
+                xr_instance.queue_family_index());
+        }
+        else
+        {
+            vk_context.create();
+        }
+        return true;
+    }
+    bool start_session()
+    {
+        LOGI("Starting session");
+        if (!xr_instance.start_session())
+        {
+            LOGE("Failed to start session");
+            return false;
+        }
+        LOGI("Creating swapchain");
+        if (!xr_instance.create_swapchain())
+        {
+            LOGE("Failed to create swapchain");
+            return false;
+        }
         // vk: pick a format for color and depth
         // vk: create the swapchain renderpass
         // xr: enumerate views
         // for each view
         //     vk: create the swapchain image views
         //
-        return true;
-    }
-    bool start_session()
-    {
-        xr_instance.start_session(vk_context.device(),
-            vk_context.queue_family_index(), vk_context.queue_index());
         return true;
     }
     void main_loop()
@@ -174,20 +190,20 @@ void encoder_loop()
 
 void android_main(android_app *pApp)
 {
-    auto context = std::make_unique<AndroidContext>(pApp);
-    context->create();
+    AndroidContext context{pApp};
+    context.create();
 
-    __android_log_print(ANDROID_LOG_INFO, "android_main", "android_main()");
+    LOGI("android_main");
 
     // Register an event handler for Android events
     pApp->onAppCmd = handle_cmd;
-    pApp->userData = context.get();
+    pApp->userData = &context;
 
     // Set input event filters (set it to NULL if the app wants to process all inputs).
     // Note that for key inputs, this example uses the default default_key_filter()
     // implemented in android_native_app_glue.c.
     android_app_set_motion_event_filter(pApp, motion_event_filter_func);
 
-    auto encoder_thread = std::thread(&encoder_loop);
-    context->main_loop();
+    //auto encoder_thread = std::thread(&encoder_loop);
+    context.main_loop();
 }

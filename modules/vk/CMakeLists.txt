@@ -1,11 +1,14 @@
 include(FetchContent)
 
+if(WIN32)
+else()
 FetchContent_Declare(
     VulkanHeaders
     GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
     GIT_TAG v1.4.309)
 FetchContent_MakeAvailable(VulkanHeaders)
 find_package(Vulkan REQUIRED)
+endif()
 
 FetchContent_Declare(
     Volk
@@ -29,4 +32,9 @@ target_sources(vk PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     FILES vk.cppm)
-target_link_libraries(vk PUBLIC Vulkan::Vulkan volk)
+target_link_libraries(vk PUBLIC volk)
+if(WIN32)
+    target_compile_definitions(vk PRIVATE NOMINMAX)
+else()
+    target_link_libraries(vk PUBLIC Vulkan-Headers)
+endif()

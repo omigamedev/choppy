@@ -5,7 +5,7 @@ FetchContent_Declare(openxr
 FetchContent_MakeAvailable(openxr)
 add_library(xr)
 if (WIN32)
-    target_compile_definitions(xr PUBLIC XR_USE_PLATFORM_WIN32)
+    target_compile_definitions(xr PUBLIC XR_USE_PLATFORM_WIN32 NOMINMAX)
 else()
     target_compile_definitions(xr PUBLIC XR_USE_PLATFORM_ANDROID)
 endif()
