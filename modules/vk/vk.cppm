@@ -185,7 +185,7 @@ public:
 
         return true;
     }
-    void exec_immediate(std::function<void(VkCommandBuffer& cmd)> fn) const noexcept
+    void exec_immediate(std::string_view name, std::function<void(VkCommandBuffer& cmd)> fn) const noexcept
     {
         VkFence fence = VK_NULL_HANDLE;
         constexpr VkFenceCreateInfo fence_info{
@@ -195,6 +195,17 @@ public:
         {
             LOGE("Failed to create fence");
             return;
+        }
+        if (vkSetDebugUtilsObjectNameEXT)
+        {
+            const std::string fence_name = std::format("immediate_{}_fence", name);
+            const VkDebugUtilsObjectNameInfoEXT name_info = {
+                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                .objectType = VK_OBJECT_TYPE_FENCE,
+                .objectHandle = reinterpret_cast<uint64_t>(fence),
+                .pObjectName = fence_name.c_str(),
+            };
+            vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
         }
         const VkCommandBufferAllocateInfo cmd_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -208,6 +219,17 @@ public:
             LOGE("Failed to allocate command buffer");
             vkDestroyFence(m_device, fence, nullptr);
             return;
+        }
+        if (vkSetDebugUtilsObjectNameEXT)
+        {
+            const std::string cmd_name = std::format("immediate_{}", name);
+            const VkDebugUtilsObjectNameInfoEXT name_info = {
+                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                .objectType = VK_OBJECT_TYPE_COMMAND_BUFFER,
+                .objectHandle = reinterpret_cast<uint64_t>(cmd),
+                .pObjectName = cmd_name.c_str(),
+            };
+            vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
         }
         constexpr VkCommandBufferBeginInfo cmd_begin_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -229,7 +251,7 @@ public:
         vkFreeCommandBuffers(m_device, m_cmd_pool_imm, 1, &cmd);
         vkDestroyFence(m_device, fence, nullptr);
     }
-    void exec(std::function<void(VkCommandBuffer& cmd)> fn) const noexcept
+    void exec(std::string_view name, std::function<void(VkCommandBuffer& cmd)> fn) const noexcept
     {
         const VkCommandBufferAllocateInfo cmd_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -242,6 +264,17 @@ public:
         {
             LOGE("Failed to allocate command buffer");
             return;
+        }
+        if (vkSetDebugUtilsObjectNameEXT)
+        {
+            const std::string cmd_name = std::format("exec_{}", name);
+            const VkDebugUtilsObjectNameInfoEXT name_info = {
+                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                .objectType = VK_OBJECT_TYPE_COMMAND_BUFFER,
+                .objectHandle = reinterpret_cast<uint64_t>(cmd),
+                .pObjectName = cmd_name.c_str(),
+            };
+            vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
         }
         constexpr VkCommandBufferBeginInfo cmd_begin_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,

@@ -57,6 +57,7 @@ public:
             std::println("Failed to initialize Vulkan and OpenXR");
             return false;
         }
+        app.init();
         initialized = true;
         return true;
     }

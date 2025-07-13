@@ -172,6 +172,13 @@ public:
     [[nodiscard]] XrSession session() const noexcept { return m_session; }
     [[nodiscard]] XrSpace space() const noexcept { return m_space; }
     [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
+    [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
+    [[nodiscard]] std::vector<VkImage> swapchain_color_images() const noexcept
+    {
+        std::vector<VkImage> images;
+        std::ranges::transform(color_swapchain_images, std::back_inserter(images), &XrSwapchainImageVulkan2KHR::image);
+        return images;
+    }
 
 #ifdef __ANDROID__
     void setup_android(JavaVM* vm, jobject context)
@@ -467,19 +474,20 @@ public:
         const std::vector<std::string> vk_device_required_extensions = [this]{
             uint32_t num_extensions = 0;
             xrGetVulkanDeviceExtensionsKHR(0, &num_extensions, nullptr);
-            std::string extensions(static_cast<size_t>(num_extensions), '\0');
+            std::string extensions(num_extensions, '\0');
             xrGetVulkanDeviceExtensionsKHR(extensions.size(), &num_extensions, extensions.data());
             return split_string(extensions);
         }();
         std::vector<const char*> vk_device_extensions{
             VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
         };
-        std::array vk_device_optional_extensions{
+        constexpr std::array vk_device_optional_extensions{
             VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
             VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
             VK_EXT_DEBUG_MARKER_EXTENSION_NAME,
             VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
             VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+            VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
         };
         for (const auto& e : vk_device_optional_extensions)
         {
@@ -659,6 +667,20 @@ public:
                 reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
             return images;
         }();
+
+        if (vkSetDebugUtilsObjectNameEXT)
+        {
+            for (const auto& color_swapchain : color_swapchain_images)
+            {
+                const VkDebugUtilsObjectNameInfoEXT name_info = {
+                    .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                    .objectType = VK_OBJECT_TYPE_IMAGE,
+                    .objectHandle = reinterpret_cast<uint64_t>(color_swapchain.image),
+                    .pObjectName = "swapchain_color"
+                };
+                vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
+            }
+        }
 
         // Depth swapchain
 
