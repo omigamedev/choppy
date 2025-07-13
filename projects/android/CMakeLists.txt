@@ -16,7 +16,7 @@ endif()
 
 set(MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../modules)
 add_subdirectory(${MODULES_DIR}/app modules/app)
-add_subdirectory(${MODULES_DIR}/mylib modules/mylib)
+#add_subdirectory(${MODULES_DIR}/mylib modules/mylib)
 add_subdirectory(${MODULES_DIR}/encoder modules/encoder)
 add_subdirectory(${MODULES_DIR}/rtmp modules/rtmp)
 add_subdirectory(${MODULES_DIR}/vk modules/vk)
@@ -26,9 +26,9 @@ add_subdirectory(${MODULES_DIR}/platform modules/platform)
 find_package(game-activity REQUIRED CONFIG)
 
 add_library(main SHARED src/android_main.cpp)
-add_dependencies(main build_rust)
+#add_dependencies(main build_rust)
 target_link_libraries(main PRIVATE
-    mylib_static_cpp
+#    mylib_static_cpp
     encoder rtmp app vk platform
     android log
     game-activity::game-activity_static)

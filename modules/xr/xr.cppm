@@ -28,10 +28,10 @@ export module ce.xr;
 
 export namespace ce::xr
 {
-class Instance
+class Context
 {
     XrInstance m_instance = XR_NULL_HANDLE;
-    XrSystemId m_system;
+    XrSystemId m_system = 0;
     XrSession m_session = XR_NULL_HANDLE;
     XrSpace m_space = XR_NULL_HANDLE;
     VkInstance m_vk_instance = VK_NULL_HANDLE;
@@ -45,28 +45,11 @@ class Instance
     VkFormat color_format = VK_FORMAT_UNDEFINED;
     std::vector<XrSwapchainImageVulkanKHR> color_swapchain_images;
     std::vector<XrSwapchainImageVulkanKHR> depth_swapchain_images;
-    std::vector<XrViewConfigurationView> views;
+    std::vector<XrViewConfigurationView> view_configs;
 #ifdef __ANDROID__
     jobject m_android_context = nullptr;
     JavaVM* m_android_vm = nullptr;
 #endif
-    void print_info()
-    {
-        uint32_t count = 0;
-        // Extensions
-        xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
-        std::vector ext_props(count, XrExtensionProperties{ .type = XR_TYPE_EXTENSION_PROPERTIES });
-        xrEnumerateInstanceExtensionProperties(nullptr, count, &count, ext_props.data());
-        std::sort(ext_props.begin(), ext_props.end(), [](auto& a, auto& b) { return std::string(a.extensionName) < std::string(b.extensionName); });
-        for (const auto& e : ext_props)
-            LOGI("XR Ext: %s\n", e.extensionName);
-        // Layers
-        xrEnumerateApiLayerProperties(0, &count, nullptr);
-        std::vector layers_props(count, XrApiLayerProperties{ .type = XR_TYPE_API_LAYER_PROPERTIES });
-        xrEnumerateApiLayerProperties(count, &count, layers_props.data());
-        for (const auto& p : layers_props)
-            LOGI("XR Api Layer: %s\n", p.layerName);
-    }
     void wait_state(XrSessionState wait_state) const noexcept
     {
         XrEventDataBuffer event_data{ .type = XR_TYPE_EVENT_DATA_BUFFER };
@@ -107,7 +90,8 @@ class Instance
         std::copy_n(ss.begin(), std::min(ss.size(), sizeof(sr) - 1), sr);
         return sr;
     }
-    [[nodiscard]] std::vector<std::string> split_string(std::string_view str, char delimiter = ' ') const noexcept
+    [[nodiscard]] std::vector<std::string> split_string(
+        std::string_view str, char delimiter = ' ') const noexcept
     {
         auto tokens = str
             | std::views::split(delimiter)
@@ -155,6 +139,24 @@ class Instance
         static XrFunction<PFN_xrGetVulkanGraphicsRequirements2KHR> fn{m_instance, "xrGetVulkanGraphicsRequirements2KHR"};
         return fn.ptr(m_instance, m_system, graphicsRequirements);
     }
+    //
+    XRAPI_ATTR XrResult XRAPI_CALL xrGetVulkanInstanceExtensionsKHR(
+        uint32_t                                    bufferCapacityInput,
+        uint32_t*                                   bufferCountOutput,
+        char*                                       buffer)
+    {
+        static XrFunction<PFN_xrGetVulkanInstanceExtensionsKHR> fn{m_instance, "xrGetVulkanInstanceExtensionsKHR"};
+        return fn.ptr(m_instance, m_system, bufferCapacityInput, bufferCountOutput, buffer);
+    }
+    XRAPI_ATTR XrResult XRAPI_CALL xrGetVulkanDeviceExtensionsKHR(
+        uint32_t                                    bufferCapacityInput,
+        uint32_t*                                   bufferCountOutput,
+        char*                                       buffer)
+    {
+        static XrFunction<PFN_xrGetVulkanDeviceExtensionsKHR> fn{m_instance, "xrGetVulkanDeviceExtensionsKHR"};
+        return fn.ptr(m_instance, m_system, bufferCapacityInput, bufferCountOutput, buffer);
+    }
+
     XRAPI_ATTR XrResult XRAPI_CALL xrInitializeLoaderKHR(
             const XrLoaderInitInfoBaseHeaderKHR*        loaderInitInfo)
     {
@@ -182,27 +184,49 @@ public:
         //print_info();
 
 #ifdef __ANDROID__
-        const XrLoaderInitInfoAndroidKHR loader_init {
+        const XrLoaderInitInfoAndroidKHR loader_init{
             .type = XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR,
             .applicationVM = m_android_vm,
             .applicationContext = m_android_context,
         };
-        if (XrResult result = xrInitializeLoaderKHR(reinterpret_cast<const XrLoaderInitInfoBaseHeaderKHR*>(&loader_init)); !XR_SUCCEEDED(result))
+        const auto loader_init_ptr =
+            reinterpret_cast<const XrLoaderInitInfoBaseHeaderKHR*>(&loader_init);
+        if (XrResult result = xrInitializeLoaderKHR(loader_init_ptr);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrInitializeLoaderKHR failed: %s", to_string(result));
             return false;
         }
 #endif
 
+        const std::vector<XrExtensionProperties> xr_instance_extentions = []{
+            uint32_t count = 0;
+            xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
+            std::vector ext_props(count,
+                XrExtensionProperties{.type = XR_TYPE_EXTENSION_PROPERTIES});
+            xrEnumerateInstanceExtensionProperties(nullptr, count, &count, ext_props.data());
+            return ext_props;
+        }();
+        const std::vector<XrApiLayerProperties> xr_instance_layers = [] {
+            uint32_t count = 0;
+            xrEnumerateApiLayerProperties(0, &count, nullptr);
+            std::vector layers_props(count,
+                XrApiLayerProperties{.type = XR_TYPE_API_LAYER_PROPERTIES});
+            xrEnumerateApiLayerProperties(count, &count, layers_props.data());
+            return layers_props;
+        }();
+
+        for (const auto& e : xr_instance_extentions)
+            LOGI("XR Ext: %s\n", e.extensionName);
+        for (const auto& p : xr_instance_layers)
+            LOGI("XR Api Layer: %s\n", p.layerName);
+
         // Create Instance
 
         const std::vector<const char*> extensions{
             //XR_EXT_DEBUG_UTILS_EXTENSION_NAME,
-            //XR_KHR_VULKAN_ENABLE_EXTENSION_NAME,
+            XR_KHR_VULKAN_ENABLE_EXTENSION_NAME,
             XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME,
-//#ifdef __ANDROID__
-//            XR_KHR_LOADER_INIT_EXTENSION_NAME,
-//#endif
             //XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME,
             //XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
         };
@@ -220,13 +244,15 @@ public:
             .enabledExtensionCount = static_cast<uint32_t>(extensions.size()),
             .enabledExtensionNames = extensions.data(),
         };
-        if (XrResult result = xrCreateInstance(&instance_info, &m_instance); !XR_SUCCEEDED(result))
+        if (XrResult result = xrCreateInstance(&instance_info, &m_instance);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrCreateInstance failed: %s", to_string(result));
             return false;
         }
         XrInstanceProperties instance_props{.type = XR_TYPE_INSTANCE_PROPERTIES};
-        if (XrResult result = xrGetInstanceProperties(m_instance, &instance_props); !XR_SUCCEEDED(result))
+        if (XrResult result = xrGetInstanceProperties(m_instance, &instance_props);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrGetInstanceProperties failed: %s", to_string(result));
             return false;
@@ -244,7 +270,8 @@ public:
             return false;
         }
         XrSystemProperties system_props{.type = XR_TYPE_SYSTEM_PROPERTIES};
-        if (XrResult result = xrGetSystemProperties(m_instance, m_system, &system_props); !XR_SUCCEEDED(result))
+        if (XrResult result = xrGetSystemProperties(m_instance, m_system, &system_props);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrGetSystemProperties failed: %s", to_string(result));
             return false;
@@ -253,33 +280,69 @@ public:
 
         // Create Vulkan Instance
 
+        volkInitialize();
+        const auto instance_extensions = [this] {
+            uint32_t count = 0;
+            vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+            std::vector<VkExtensionProperties> props(count, VkExtensionProperties{});
+            vkEnumerateInstanceExtensionProperties(nullptr, &count, props.data());
+            return props;
+        }();
+        for (const auto& e : instance_extensions)
+        {
+            LOGI("Vulkan Instance Ext: %s\n", e.extensionName);
+        }
         XrGraphicsRequirementsVulkan2KHR vulkan_req{.type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
-        if (XrResult result = xrGetVulkanGraphicsRequirements2KHR(&vulkan_req); !XR_SUCCEEDED(result))
+        if (XrResult result = xrGetVulkanGraphicsRequirements2KHR(&vulkan_req);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrGetVulkanGraphicsRequirements2KHR failed: %s", to_string(result));
             return false;
         }
+        LOGI("XR max supported Vulkan: %u.%u.%u",
+            XR_VERSION_MAJOR(vulkan_req.maxApiVersionSupported),
+            XR_VERSION_MINOR(vulkan_req.maxApiVersionSupported),
+            XR_VERSION_PATCH(vulkan_req.maxApiVersionSupported));
         uint32_t vk_req_version = VK_MAKE_VERSION(
             XR_VERSION_MAJOR(vulkan_req.maxApiVersionSupported),
             XR_VERSION_MINOR(vulkan_req.maxApiVersionSupported),
             XR_VERSION_PATCH(vulkan_req.maxApiVersionSupported));
-        volkInitialize();
         std::uint32_t vk_runtime_version = 0;
-        if (VkResult result = vkEnumerateInstanceVersion(&vk_runtime_version); result != VK_SUCCESS)
+        if (VkResult result = vkEnumerateInstanceVersion(&vk_runtime_version);
+            result != VK_SUCCESS)
         {
             LOGE("vkEnumerateInstanceVersion failed: %s", to_string(result));
             return false;
         }
-        uint32_t vk_version = std::min(vk_req_version, vk_runtime_version);
+        LOGI("Device runtime Vulkan: %u.%u.%u",
+            VK_VERSION_MAJOR(vk_runtime_version),
+            VK_VERSION_MINOR(vk_runtime_version),
+            VK_VERSION_PATCH(vk_runtime_version));
+        uint32_t vk_version = std::max(vk_req_version, vk_runtime_version);
         const VkApplicationInfo app_info{
             .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
             .pApplicationName = "choppy_engine",
             .applicationVersion = 0,
-            .apiVersion = vk_version
+            .apiVersion = VK_API_VERSION_1_3
         };
+        const std::vector<std::string> vk_instance_required_extensions = [this]{
+            uint32_t num_extensions = 0;
+            xrGetVulkanInstanceExtensionsKHR(0, &num_extensions, nullptr);
+            std::string extensions(static_cast<size_t>(num_extensions), '\0');
+            xrGetVulkanInstanceExtensionsKHR(extensions.size(), &num_extensions, extensions.data());
+            return split_string(extensions);
+        }();
+        std::vector<const char*> vk_instance_extensions;
+        for (const auto& e : vk_instance_required_extensions)
+        {
+            LOGI("Vulkan Instance Required Ext: %s", e.c_str());
+            vk_instance_extensions.push_back(e.c_str());
+        }
         const VkInstanceCreateInfo vk_instance_info{
             .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pApplicationInfo = &app_info,
+            .enabledExtensionCount = static_cast<uint32_t>(vk_instance_extensions.size()),
+            .ppEnabledExtensionNames = vk_instance_extensions.data(),
         };
         XrVulkanInstanceCreateInfoKHR vk_create_info{
             .type = XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR,
@@ -288,7 +351,8 @@ public:
             .vulkanCreateInfo = &vk_instance_info
         };
         VkResult vk_create_result;
-        if (XrResult result = xrCreateVulkanInstanceKHR(&vk_create_info, &m_vk_instance, &vk_create_result); !XR_SUCCEEDED(result))
+        if (XrResult result = xrCreateVulkanInstanceKHR(&vk_create_info, &m_vk_instance, &vk_create_result);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrCreateVulkanInstanceKHR failed: %s", to_string(result));
             return false;
@@ -307,25 +371,38 @@ public:
             .systemId = m_system,
             .vulkanInstance = m_vk_instance
         };
-        if (XrResult result = xrGetVulkanGraphicsDevice2KHR(&info, &m_physical_device); !XR_SUCCEEDED(result))
+        if (XrResult result = xrGetVulkanGraphicsDevice2KHR(&info, &m_physical_device);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrGetVulkanGraphicsDevice2KHR failed: %s", to_string(result));
             return false;
         }
-        VkPhysicalDeviceProperties2 physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        VkPhysicalDeviceProperties2 physical_device_properties{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         vkGetPhysicalDeviceProperties2(m_physical_device, &physical_device_properties);
         LOGI("Vulkan device: %s", physical_device_properties.properties.deviceName);
+        const auto device_extensions = [this] {
+            uint32_t count = 0;
+            vkEnumerateDeviceExtensionProperties(m_physical_device, nullptr, &count, nullptr);
+            std::vector<VkExtensionProperties> props(count, VkExtensionProperties{});
+            vkEnumerateDeviceExtensionProperties(m_physical_device, nullptr, &count, props.data());
+            return props;
+        }();
+        for (const auto& e : device_extensions)
+        {
+            LOGI("XR Vulkan Device Ext: %s\n", e.extensionName);
+        }
 
         // Create Device
 
         const std::vector<VkQueueFamilyProperties2> queue_props = [this]{
             uint32_t count = 0;
             vkGetPhysicalDeviceQueueFamilyProperties2(m_physical_device, &count, nullptr);
-            std::vector<VkQueueFamilyProperties2> props(count, {.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
+            std::vector<VkQueueFamilyProperties2> props(count,
+                {.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
             vkGetPhysicalDeviceQueueFamilyProperties2(m_physical_device, &count, props.data());
             return props;
         }();
-
         for (int i = 0; i < queue_props.size(); i++)
         {
             const VkQueueFlags queue_flags = queue_props[i].queueFamilyProperties.queueFlags;
@@ -343,6 +420,19 @@ public:
             return false;
         }
 
+        const std::vector<std::string> vk_device_required_extensions = [this]{
+            uint32_t num_extensions = 0;
+            xrGetVulkanDeviceExtensionsKHR(0, &num_extensions, nullptr);
+            std::string extensions(static_cast<size_t>(num_extensions), '\0');
+            xrGetVulkanDeviceExtensionsKHR(extensions.size(), &num_extensions, extensions.data());
+            return split_string(extensions);
+        }();
+        std::vector<const char*> vk_device_extensions;
+        for (const auto& e : vk_device_required_extensions)
+        {
+            LOGI("XR Vulkan Device Required Ext: %s", e.c_str());
+            vk_device_extensions.push_back(e.c_str());
+        }
         constexpr std::array queue_priority{1.f};
         const VkDeviceQueueCreateInfo queue_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -354,6 +444,8 @@ public:
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queue_info,
+            .enabledExtensionCount = static_cast<uint32_t>(vk_device_extensions.size()),
+            .ppEnabledExtensionNames = vk_device_extensions.data()
         };
         XrVulkanDeviceCreateInfoKHR device_create_info{
             .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR,
@@ -362,7 +454,8 @@ public:
             .vulkanPhysicalDevice = m_physical_device,
             .vulkanCreateInfo = &device_info
         };
-        if (XrResult result = xrCreateVulkanDeviceKHR(&device_create_info, &m_device, &vk_create_result); !XR_SUCCEEDED(result))
+        if (XrResult result = xrCreateVulkanDeviceKHR(&device_create_info, &m_device, &vk_create_result);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrCreateVulkanDeviceKHR failed: %s", to_string(result));
             return false;
@@ -391,7 +484,8 @@ public:
             .next = &binding,
             .systemId = m_system
         };
-        if (XrResult result = xrCreateSession(m_instance, &info, &m_session); !XR_SUCCEEDED(result))
+        if (XrResult result = xrCreateSession(m_instance, &info, &m_session);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrCreateSession failed: %s", to_string(result));
             return false;
@@ -404,7 +498,8 @@ public:
                 .position = { .x = 0, .y = 0, .z = 0 }
             }
         };
-        if (XrResult result = xrCreateReferenceSpace(m_session, &space_info, &m_space); !XR_SUCCEEDED(result))
+        if (XrResult result = xrCreateReferenceSpace(m_session, &space_info, &m_space);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrCreateReferenceSpace failed: %s", to_string(result));
             return false;
@@ -414,7 +509,8 @@ public:
             .type = XR_TYPE_SESSION_BEGIN_INFO,
             .primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO
         };
-        if (XrResult result = xrBeginSession(m_session, &begin_info); !XR_SUCCEEDED(result))
+        if (XrResult result = xrBeginSession(m_session, &begin_info);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrBeginSession failed: %s", to_string(result));
             return false;
@@ -451,7 +547,7 @@ public:
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
         color_format = find_format(supported_color_formats,
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
-        views = [this]{
+        view_configs = [this]{
             uint32_t count = 0;
             xrEnumerateViewConfigurationViews(m_instance, m_system,
                 XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &count, nullptr);
@@ -469,14 +565,15 @@ public:
             .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
             .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
             .format = color_format,
-            .sampleCount = views[0].recommendedSwapchainSampleCount,
-            .width = views[0].recommendedImageRectWidth,
-            .height = views[0].recommendedImageRectHeight,
+            .sampleCount = view_configs[0].recommendedSwapchainSampleCount,
+            .width = view_configs[0].recommendedImageRectWidth,
+            .height = view_configs[0].recommendedImageRectHeight,
             .faceCount = 1,
-            .arraySize = static_cast<uint32_t>(views.size()),
+            .arraySize = static_cast<uint32_t>(view_configs.size()),
             .mipCount = 1
         };
-        if (XrResult result = xrCreateSwapchain(m_session, &color_swapchain_info, &color_swapchain); !XR_SUCCEEDED(result))
+        if (XrResult result = xrCreateSwapchain(m_session, &color_swapchain_info, &color_swapchain);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrCreateSwapchain failed: %s", to_string(result));
             return false;
@@ -497,14 +594,15 @@ public:
             .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
             .usageFlags = XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
             .format = depth_format,
-            .sampleCount = views[0].recommendedSwapchainSampleCount,
-            .width = views[0].recommendedImageRectWidth,
-            .height = views[0].recommendedImageRectHeight,
+            .sampleCount = view_configs[0].recommendedSwapchainSampleCount,
+            .width = view_configs[0].recommendedImageRectWidth,
+            .height = view_configs[0].recommendedImageRectHeight,
             .faceCount = 1,
-            .arraySize = static_cast<uint32_t>(views.size()),
+            .arraySize = static_cast<uint32_t>(view_configs.size()),
             .mipCount = 1
         };
-        if (XrResult result = xrCreateSwapchain(m_session, &depth_swapchain_info, &depth_swapchain); !XR_SUCCEEDED(result))
+        if (XrResult result = xrCreateSwapchain(m_session, &depth_swapchain_info, &depth_swapchain);
+            !XR_SUCCEEDED(result))
         {
             LOGE("xrCreateSwapchain failed: %s", to_string(result));
             return false;
@@ -520,6 +618,104 @@ public:
         }();
 
         return true;
+    }
+    void present() noexcept
+    {
+        const XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
+        XrFrameState frame_state{.type = XR_TYPE_FRAME_STATE};
+        if (const XrResult result = xrWaitFrame(m_session, &wait_info, &frame_state); !XR_SUCCEEDED(result))
+        {
+            LOGE("xrWaitFrame failed: %s", to_string(result));
+            return;
+        }
+        const XrFrameBeginInfo begin_info{.type = XR_TYPE_FRAME_BEGIN_INFO};
+        if (const XrResult result = xrBeginFrame(m_session, &begin_info); !XR_SUCCEEDED(result))
+        {
+            LOGE("xrBeginFrame failed: %s", to_string(result));
+            return;
+        }
+
+        std::vector<XrView> views(view_configs.size(), XrView{.type = XR_TYPE_VIEW});
+        XrViewState view_state{.type = XR_TYPE_VIEW_STATE};
+        XrViewLocateInfo view_locate_info{
+            .type = XR_TYPE_VIEW_LOCATE_INFO,
+            .viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+            .displayTime = frame_state.predictedDisplayTime,
+            .space = m_space
+        };
+        uint32_t views_count = 0;
+        if (const XrResult result = xrLocateViews(m_session, &view_locate_info, &view_state,
+            (uint32_t)views.size(), &views_count, views.data()); !XR_SUCCEEDED(result))
+        {
+            LOGE("xrLocateViews failed: %s", to_string(result));
+            return;
+        }
+
+        uint32_t acquired_index = 0;
+        XrSwapchainImageAcquireInfo acquire_info{.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+        if (XrResult result = xrAcquireSwapchainImage(color_swapchain, &acquire_info, &acquired_index); !XR_SUCCEEDED(result))
+        {
+            LOGE("xrAcquireSwapchainImage failed: %s", to_string(result));
+            return;
+        }
+
+        XrSwapchainImageWaitInfo image_wait_info{.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION};
+        if (XrResult result = xrWaitSwapchainImage(color_swapchain, &image_wait_info); !XR_SUCCEEDED(result))
+        {
+            LOGE("xrWaitSwapchainImage failed: %s", to_string(result));
+            return;
+        }
+
+        std::vector<XrCompositionLayerProjectionView> layer_views(views_count);
+        for (uint32_t i = 0; i < views_count; i++)
+        {
+            // RENDER FRAME
+
+            layer_views[i] = XrCompositionLayerProjectionView{
+                .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
+                .pose = views[i].pose,
+                .fov = views[i].fov,
+                .subImage = XrSwapchainSubImage{
+                    .swapchain = color_swapchain,
+                    .imageRect = {
+                        .offset = {0, 0},
+                        .extent = {
+                            (int32_t)view_configs[i].recommendedImageRectWidth,
+                            (int32_t)view_configs[i].recommendedImageRectHeight
+                        }
+                    },
+                    .imageArrayIndex = i
+                }
+            };
+        }
+
+        XrSwapchainImageReleaseInfo release_info{.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        if (XrResult result = xrReleaseSwapchainImage(color_swapchain, &release_info); !XR_SUCCEEDED(result))
+        {
+            LOGE("xrReleaseSwapchainImage failed: %s", to_string(result));
+            return;
+        }
+
+        XrCompositionLayerProjection projection_layer{
+            .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
+            .layerFlags = 0,
+            .space = m_space,
+            .viewCount = (uint32_t)layer_views.size(),
+            .views = layer_views.data(),
+        };
+
+        std::vector<XrCompositionLayerBaseHeader*> layers{
+            reinterpret_cast<XrCompositionLayerBaseHeader*>(&projection_layer)
+        };
+
+        XrFrameEndInfo end_info{
+            .type = XR_TYPE_FRAME_END_INFO,
+            .displayTime = frame_state.predictedDisplayTime,
+            .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
+            .layerCount = (uint32_t)layers.size(),
+            .layers = layers.data()
+        };
+        xrEndFrame(m_session, &end_info);
     }
 };
 struct Session

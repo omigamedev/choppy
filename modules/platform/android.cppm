@@ -1,10 +1,10 @@
 module;
-export module ce.platform_android;
-export import ce.platform;
+import ce.platform;
+export module ce.android;
 
 export namespace ce::platform
 {
-class PlatformAndroid : public Platform
+class Android : public Platform
 {
 
 };

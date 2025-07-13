@@ -1,10 +1,10 @@
 module;
-export module ce.platform_windows;
-export import ce.platform;
+export module ce.windows;
+import ce.platform;
 
 export namespace ce::platform
 {
-class PlatformWindows : public Platform
+class Windows : public Platform
 {
 
 };

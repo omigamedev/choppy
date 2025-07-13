@@ -4,16 +4,17 @@
 #include <windows.h>
 #include <volk.h>
 
-import ce.platform_windows;
+import ce.windows;
+import ce.app;
 import ce.xr;
 import ce.vk;
 
 class WindowsContext
 {
-    std::unique_ptr<ce::platform::PlatformWindows> platform;
-    ce::xr::Instance xr_instance;
-    ce::vk::Context vk_context;
+    ce::app::AppBase app;
+    std::unique_ptr<ce::platform::Windows> platform;
     HWND m_wnd = nullptr;
+    bool initialized = false;
     bool create_window()
     {
         //WNDCLASS wc
@@ -21,30 +22,32 @@ class WindowsContext
 public:
     bool create()
     {
-        auto platform = std::make_unique<ce::platform::PlatformWindows>();
-        if (xr_instance.create())
+        app.platform() = std::make_unique<ce::platform::Windows>();
+        auto& xr = app.xr() = std::make_shared<ce::xr::Context>();
+        auto& vk = app.vk() = std::make_shared<ce::vk::Context>();
+        if (xr->create())
         {
             std::println("OpenXR initialized");
-            vk_context.create_from(
-                xr_instance.vk_instance(),
-                xr_instance.device(),
-                xr_instance.physical_device(),
-                xr_instance.queue_family_index());
+            vk->create_from(
+                xr->vk_instance(),
+                xr->device(),
+                xr->physical_device(),
+                xr->queue_family_index());
             std::println("Start XR session");
-            if (!xr_instance.start_session())
+            if (!xr->start_session())
             {
                 std::println("Failed to start session");
                 return false;
             }
             std::println("Create XR swapchain");
-            if (!xr_instance.create_swapchain())
+            if (!xr->create_swapchain())
             {
                 std::println("Failed to initialize swapchain");
                 return false;
             }
             std::println("XR created succesfully");
         }
-        else if (vk_context.create())
+        else if (vk->create())
         {
             std::println("Failed to initialize OpenXR, using Vulkan");
         }
@@ -53,11 +56,16 @@ public:
             std::println("Failed to initialize Vulkan and OpenXR");
             return false;
         }
+        initialized = true;
         return true;
     }
     void tick()
     {
-
+        if (initialized)
+        {
+            auto& xr = app.xr();
+            xr->present();
+        }
     }
     void destroy()
     {

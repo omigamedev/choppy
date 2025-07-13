@@ -11,7 +11,6 @@ else()
 endif()
 target_compile_definitions(xr PUBLIC
     XR_USE_GRAPHICS_API_VULKAN
-    XR_KHR_vulkan_enable2
     XR_EXTENSION_PROTOTYPES)
 target_link_libraries(xr PUBLIC OpenXR::headers openxr_loader vk)
 #target_include_directories(xr PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/openxr-hpp)

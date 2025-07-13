@@ -1,5 +1,3 @@
-#include <lib.h>
-
 #include <jni.h>
 #include <android/asset_manager.h>
 #include <android/configuration.h>
@@ -15,46 +13,50 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
 
-import ce.platform_android;
 import ce.vk;
 import ce.xr;
+import ce.android;
+import ce.app;
 
 class AndroidContext
 {
-    std::unique_ptr<ce::platform::PlatformAndroid> platform;
-    ce::xr::Instance xr_instance;
-    ce::vk::Context vk_context;
+    ce::app::AppBase app;
     android_app *pApp;
+    bool session_started = false;
 public:
     AndroidContext(android_app *pApp) : pApp(pApp) { }
     bool create()
     {
-        platform = std::make_unique<ce::platform::PlatformAndroid>();
-        xr_instance.setup_android(pApp->activity->vm, pApp->activity->javaGameActivity);
-        if (xr_instance.create())
+        app.platform() = std::make_shared<ce::platform::Android>();
+        auto& xr = app.xr() = std::make_shared<ce::xr::Context>();
+        auto& vk = app.vk() = std::make_shared<ce::vk::Context>();
+        xr->setup_android(pApp->activity->vm, pApp->activity->javaGameActivity);
+        if (xr->create())
         {
-            vk_context.create_from(
-                xr_instance.vk_instance(),
-                xr_instance.device(),
-                xr_instance.physical_device(),
-                xr_instance.queue_family_index());
+            vk->create_from(
+                xr->vk_instance(),
+                xr->device(),
+                xr->physical_device(),
+                xr->queue_family_index());
         }
         else
         {
-            vk_context.create();
+            vk->create();
         }
         return true;
     }
     bool start_session()
     {
+        auto& xr = app.xr();
+        auto& vk = app.vk();
         LOGI("Starting session");
-        if (!xr_instance.start_session())
+        if (!xr->start_session())
         {
             LOGE("Failed to start session");
             return false;
         }
         LOGI("Creating swapchain");
-        if (!xr_instance.create_swapchain())
+        if (!xr->create_swapchain())
         {
             LOGE("Failed to create swapchain");
             return false;
@@ -65,6 +67,7 @@ public:
         // for each view
         //     vk: create the swapchain image views
         //
+        session_started = true;
         return true;
     }
     void main_loop()
@@ -74,13 +77,19 @@ public:
         do
         {
             // Process all pending events before running game logic.
-            if (ALooper_pollOnce(-1, nullptr, &events, (void **) &pSource) >= 0)
+            if (ALooper_pollOnce(0, nullptr, &events, (void **) &pSource) >= 0)
             {
                 if (pSource)
                 {
                     pSource->process(pApp, pSource);
                 }
             }
+            if (session_started)
+            {
+                auto& xr = app.xr();
+                xr->present();
+            }
+            app.tick(0);
         } while(!pApp->destroyRequested);
     }
 };
@@ -89,12 +98,14 @@ void handle_cmd(android_app *pApp, int32_t cmd)
 {
     switch (cmd) {
         case APP_CMD_INIT_WINDOW:
+            LOGI("APP_CMD_INIT_WINDOW");
             if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
             {
                 context->start_session();
             }
             break;
         case APP_CMD_TERM_WINDOW:
+            LOGI("APP_CMD_TERM_WINDOW");
             break;
         default:
             break;
