@@ -1,6 +1,7 @@
 ﻿#include <memory>
 #include <print>
 #define WIN32_LEAN_AND_MEAN
+#include <chrono>
 #include <windows.h>
 #include <volk.h>
 
@@ -59,14 +60,6 @@ public:
         initialized = true;
         return true;
     }
-    void tick()
-    {
-        if (initialized)
-        {
-            auto& xr = app.xr();
-            xr->present();
-        }
-    }
     void destroy()
     {
 
@@ -75,6 +68,7 @@ public:
     {
         std::println("starting main loop");
         MSG msg;
+        static auto start_time = std::chrono::high_resolution_clock::now();
         while (true)
         {
             while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
@@ -87,7 +81,13 @@ public:
                     return;
                 }
             }
-            tick();
+            if (initialized)
+            {
+                auto current_time = std::chrono::high_resolution_clock::now();
+                float delta_time = std::chrono::duration<float>(current_time - start_time).count();
+                start_time = current_time;
+                app.tick(delta_time);
+            }
         }
     }
 };

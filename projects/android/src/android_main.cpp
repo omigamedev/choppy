@@ -9,6 +9,7 @@
 #include <audio_encoder.h>
 #include <rtmp.h>
 #include <memory>
+#include <volk.h>
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
@@ -74,6 +75,7 @@ public:
     {
         int events;
         android_poll_source *pSource;
+        auto start_time = std::chrono::high_resolution_clock::now();
         do
         {
             // Process all pending events before running game logic.
@@ -84,12 +86,13 @@ public:
                     pSource->process(pApp, pSource);
                 }
             }
+            auto current_time = std::chrono::high_resolution_clock::now();
+            float delta_time = std::chrono::duration<float>(current_time - start_time).count();
+            start_time = current_time;
             if (session_started)
             {
-                auto& xr = app.xr();
-                xr->present();
+                app.tick(delta_time);
             }
-            app.tick(0);
         } while(!pApp->destroyRequested);
     }
 };

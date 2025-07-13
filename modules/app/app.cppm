@@ -1,5 +1,8 @@
 module;
 #include <memory>
+#include <cmath>
+#include <volk.h>
+
 export module ce.app;
 import ce.platform;
 import ce.xr;
@@ -17,8 +20,17 @@ export namespace ce::app
         [[nodiscard]] auto& platform() noexcept { return m_platform; }
         [[nodiscard]] auto& xr() noexcept { return m_xr; }
         [[nodiscard]] auto& vk() noexcept { return m_vk; }
-        void tick(float delta_seconds) noexcept
+        void tick(float dt) noexcept
         {
+            static float time = 0;
+            time += dt;
+            m_xr->present([this, t=time](VkImage color){
+                m_vk->exec([color, t](VkCommandBuffer& cmd){
+                    VkClearColorValue clear_color = {0.0f, 0.0f, fabsf(sinf(t * 0.1f)), 1.0f};
+                    VkImageSubresourceRange subresource_range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2};
+                    vkCmdClearColorImage(cmd, color, VK_IMAGE_LAYOUT_GENERAL, &clear_color, 1, &subresource_range);
+                });
+            });
 
         }
         bool on_init() noexcept

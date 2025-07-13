@@ -46,12 +46,35 @@ public:
     [[nodiscard]] VkDevice& device() noexcept { return m_device; }
     [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
     [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
-    void create_from(VkInstance instance, VkDevice device, VkPhysicalDevice physical_device, uint32_t queue_family_index)
+    bool create_from(VkInstance instance, VkDevice device,
+        VkPhysicalDevice physical_device, uint32_t queue_family_index) noexcept
     {
         m_instance = instance;
         m_device = device;
         m_physical_device = physical_device;
         m_queue_family_index = queue_family_index;
+
+        const VkDeviceQueueInfo2 get_queue_info{
+            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2,
+            .queueFamilyIndex = m_queue_family_index,
+            .queueIndex = m_queue_index
+        };
+        vkGetDeviceQueue2(m_device, &get_queue_info, &m_queue);
+        if (m_queue == VK_NULL_HANDLE)
+        {
+            LOGE("Failed to get device queue info");
+            return false;
+        }
+        const VkCommandPoolCreateInfo pool_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .queueFamilyIndex = m_queue_family_index
+        };
+        if (VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm); result != VK_SUCCESS)
+        {
+            LOGE("Failed to create command pool");
+            return false;
+        }
+        return true;
     }
     bool create() noexcept
     {
@@ -205,6 +228,34 @@ public:
         }
         vkFreeCommandBuffers(m_device, m_cmd_pool_imm, 1, &cmd);
         vkDestroyFence(m_device, fence, nullptr);
+    }
+    void exec(std::function<void(VkCommandBuffer& cmd)> fn) const noexcept
+    {
+        const VkCommandBufferAllocateInfo cmd_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = m_cmd_pool_imm,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1
+        };
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        if (VkResult result = vkAllocateCommandBuffers(m_device, &cmd_info, &cmd); result != VK_SUCCESS)
+        {
+            LOGE("Failed to allocate command buffer");
+            return;
+        }
+        constexpr VkCommandBufferBeginInfo cmd_begin_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+        };
+        vkBeginCommandBuffer(cmd, &cmd_begin_info);
+        fn(cmd);
+        vkEndCommandBuffer(cmd);
+        const VkSubmitInfo submit_info{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd
+        };
+        vkQueueSubmit(m_queue, 1, &submit_info, VK_NULL_HANDLE);
     }
     bool create_renderpass(const std::vector<VkFormat>& supported_formats)
     {

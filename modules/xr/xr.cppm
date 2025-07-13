@@ -14,6 +14,7 @@ module;
 #include <cstdio>
 #include <vector>
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <ranges>
 #include <thread>
@@ -217,14 +218,14 @@ public:
         }();
 
         for (const auto& e : xr_instance_extentions)
-            LOGI("XR Ext: %s\n", e.extensionName);
+            LOGI("XR Ext: %s", e.extensionName);
         for (const auto& p : xr_instance_layers)
-            LOGI("XR Api Layer: %s\n", p.layerName);
+            LOGI("XR Api Layer: %s", p.layerName);
 
         // Create Instance
 
         const std::vector<const char*> extensions{
-            //XR_EXT_DEBUG_UTILS_EXTENSION_NAME,
+            XR_EXT_DEBUG_UTILS_EXTENSION_NAME,
             XR_KHR_VULKAN_ENABLE_EXTENSION_NAME,
             XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME,
             //XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME,
@@ -290,7 +291,7 @@ public:
         }();
         for (const auto& e : instance_extensions)
         {
-            LOGI("Vulkan Instance Ext: %s\n", e.extensionName);
+            LOGI("Vulkan Instance Ext: %s", e.extensionName);
         }
         XrGraphicsRequirementsVulkan2KHR vulkan_req{.type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
         if (XrResult result = xrGetVulkanGraphicsRequirements2KHR(&vulkan_req);
@@ -325,14 +326,53 @@ public:
             .applicationVersion = 0,
             .apiVersion = VK_API_VERSION_1_3
         };
+        const std::vector<std::string> vk_instance_available_layers = [this]{
+            uint32_t count = 0;
+            vkEnumerateInstanceLayerProperties(&count, nullptr);
+            std::vector<VkLayerProperties> layers(static_cast<size_t>(count));
+            vkEnumerateInstanceLayerProperties(&count, layers.data());
+            return layers
+                | std::views::transform([](const VkLayerProperties& v)->std::string{ return v.layerName; })
+                | std::ranges::to<std::vector<std::string>>();
+        }();
+        std::vector<const char*> vk_instance_layers;
+        for (const auto& e : vk_instance_available_layers)
+        {
+            if (e == "VK_LAYER_KHRONOS_validation")
+                vk_instance_layers.push_back(e.c_str());
+            LOGI("Vulkan Layer: %s", e.c_str());
+        }
+
+        const std::vector<std::string> vk_instance_available_extensions = [this]{
+            uint32_t count = 0;
+            vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+            std::vector<VkExtensionProperties > extensions(static_cast<size_t>(count));
+            vkEnumerateInstanceExtensionProperties(nullptr, &count, extensions.data());
+            return extensions
+               | std::views::transform([](const VkExtensionProperties& v)->std::string{ return v.extensionName; })
+               | std::ranges::to<std::vector<std::string>>();
+        }();
         const std::vector<std::string> vk_instance_required_extensions = [this]{
             uint32_t num_extensions = 0;
             xrGetVulkanInstanceExtensionsKHR(0, &num_extensions, nullptr);
-            std::string extensions(static_cast<size_t>(num_extensions), '\0');
+            std::string extensions(num_extensions, '\0');
             xrGetVulkanInstanceExtensionsKHR(extensions.size(), &num_extensions, extensions.data());
             return split_string(extensions);
         }();
-        std::vector<const char*> vk_instance_extensions;
+        std::vector<const char*> vk_instance_extensions{
+        };
+        const std::array vk_instance_optional_extensions{
+            VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+            VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
+            VK_EXT_DEBUG_MARKER_EXTENSION_NAME,
+        };
+        for (const auto& e : vk_instance_optional_extensions)
+        {
+            if (std::ranges::contains(vk_instance_available_extensions, e))
+            {
+                vk_instance_extensions.push_back(e);
+            }
+        }
         for (const auto& e : vk_instance_required_extensions)
         {
             LOGI("Vulkan Instance Required Ext: %s", e.c_str());
@@ -341,6 +381,8 @@ public:
         const VkInstanceCreateInfo vk_instance_info{
             .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pApplicationInfo = &app_info,
+            .enabledLayerCount = static_cast<uint32_t>(vk_instance_layers.size()),
+            .ppEnabledLayerNames = vk_instance_layers.data(),
             .enabledExtensionCount = static_cast<uint32_t>(vk_instance_extensions.size()),
             .ppEnabledExtensionNames = vk_instance_extensions.data(),
         };
@@ -386,11 +428,13 @@ public:
             vkEnumerateDeviceExtensionProperties(m_physical_device, nullptr, &count, nullptr);
             std::vector<VkExtensionProperties> props(count, VkExtensionProperties{});
             vkEnumerateDeviceExtensionProperties(m_physical_device, nullptr, &count, props.data());
-            return props;
+            return props
+               | std::views::transform([](const VkExtensionProperties& v)->std::string{ return v.extensionName; })
+               | std::ranges::to<std::vector<std::string>>();
         }();
         for (const auto& e : device_extensions)
         {
-            LOGI("XR Vulkan Device Ext: %s\n", e.extensionName);
+            LOGI("XR Vulkan Device Ext: %s", e.c_str());
         }
 
         // Create Device
@@ -427,7 +471,23 @@ public:
             xrGetVulkanDeviceExtensionsKHR(extensions.size(), &num_extensions, extensions.data());
             return split_string(extensions);
         }();
-        std::vector<const char*> vk_device_extensions;
+        std::vector<const char*> vk_device_extensions{
+            VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+        };
+        std::array vk_device_optional_extensions{
+            VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+            VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
+            VK_EXT_DEBUG_MARKER_EXTENSION_NAME,
+            VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
+            VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+        };
+        for (const auto& e : vk_device_optional_extensions)
+        {
+            if (std::ranges::contains(device_extensions, e))
+            {
+                vk_device_extensions.push_back(e);
+            }
+        }
         for (const auto& e : vk_device_required_extensions)
         {
             LOGI("XR Vulkan Device Required Ext: %s", e.c_str());
@@ -539,13 +599,25 @@ public:
                 | std::views::transform([](int64_t v) { return static_cast<VkFormat>(v); })
                 | std::ranges::to<std::vector<VkFormat>>();
         }();
+        const std::array desired_color_formats{
+            VK_FORMAT_R8G8B8A8_SRGB,
+            VK_FORMAT_B8G8R8A8_SRGB,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_FORMAT_B8G8R8A8_UNORM,
+        };
+        std::vector<VkFormat> color_formats;
+        for (const auto format : supported_color_formats)
+        {
+            if (std::ranges::contains(desired_color_formats, format))
+                color_formats.push_back(format);
+        }
         const std::array desired_depth_formats{
             VK_FORMAT_D32_SFLOAT,
             VK_FORMAT_D16_UNORM,
         };
         depth_format = find_format(desired_depth_formats,
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
-        color_format = find_format(supported_color_formats,
+        color_format = find_format(color_formats,
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
         view_configs = [this]{
             uint32_t count = 0;
@@ -619,7 +691,7 @@ public:
 
         return true;
     }
-    void present() noexcept
+    void present(std::function<void(VkImage color)> render_callback) noexcept
     {
         const XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frame_state{.type = XR_TYPE_FRAME_STATE};
@@ -666,11 +738,11 @@ public:
             return;
         }
 
+        render_callback(color_swapchain_images[acquired_index].image);
+
         std::vector<XrCompositionLayerProjectionView> layer_views(views_count);
         for (uint32_t i = 0; i < views_count; i++)
         {
-            // RENDER FRAME
-
             layer_views[i] = XrCompositionLayerProjectionView{
                 .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
                 .pose = views[i].pose,
