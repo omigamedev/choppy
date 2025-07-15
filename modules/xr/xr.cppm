@@ -327,7 +327,7 @@ public:
             VK_VERSION_MINOR(vk_runtime_version),
             VK_VERSION_PATCH(vk_runtime_version));
         uint32_t vk_version = std::max(vk_req_version, vk_runtime_version);
-        const VkApplicationInfo app_info{
+        constexpr VkApplicationInfo app_info{
             .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
             .pApplicationName = "choppy_engine",
             .applicationVersion = 0,

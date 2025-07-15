@@ -13,6 +13,7 @@ add_subdirectory(${MODULES_DIR}/xr modules/xr)
 add_subdirectory(${MODULES_DIR}/encoder modules/encoder)
 add_subdirectory(${MODULES_DIR}/rtmp modules/rtmp)
 add_subdirectory(${MODULES_DIR}/platform modules/platform)
+add_subdirectory(${MODULES_DIR}/shaders modules/shaders)
 
 add_executable(ce_windows src/win_main.cpp)
 #target_link_directories(ce_windows PRIVATE $ENV{VULKAN_SDK}/Include

@@ -7,6 +7,7 @@ module;
 #include <volk.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_to_string.hpp>
+#include <vk_mem_alloc.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -19,8 +20,8 @@ module;
 // #include <vulkan/vulkan_win32.h>
 #endif
 
-
 export module ce.vk;
+import vk.utils;
 
 export namespace ce::vk
 {
@@ -34,6 +35,7 @@ class Context
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
     const uint32_t m_queue_index = 0;
+    VmaAllocator m_vma = VK_NULL_HANDLE;
     [[nodiscard]] const char* to_string(VkResult r) const noexcept
     {
         static char sr[64]{0};
@@ -50,8 +52,11 @@ public:
         VkPhysicalDevice physical_device, uint32_t queue_family_index) noexcept
     {
         m_instance = instance;
+        debug_name("ce_instance", m_instance);
         m_device = device;
+        debug_name("ce__device", m_device);
         m_physical_device = physical_device;
+        debug_name("ce_physical_device", m_physical_device);
         m_queue_family_index = queue_family_index;
 
         const VkDeviceQueueInfo2 get_queue_info{
@@ -65,15 +70,17 @@ public:
             LOGE("Failed to get device queue info");
             return false;
         }
+        debug_name("ce_queue", m_queue);
         const VkCommandPoolCreateInfo pool_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .queueFamilyIndex = m_queue_family_index
         };
-        if (VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm); result != VK_SUCCESS)
+        if (const VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm); result != VK_SUCCESS)
         {
             LOGE("Failed to create command pool");
             return false;
         }
+        debug_name("ce_command_pool_imm", m_cmd_pool_imm);
         return true;
     }
     bool create() noexcept
@@ -115,10 +122,12 @@ public:
             LOGE("Failed to create Vulkan instance: %s", to_string(result));
             return false;
         }
+        debug_name("ce_instance", m_instance);
         volkLoadInstance(m_instance);
 
         // Find Physical Device
-
+        // TODO: find a suitable device
+        debug_name("ce_physical_device", m_physical_device);
         VkPhysicalDeviceProperties2 physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         vkGetPhysicalDeviceProperties2(m_physical_device, &physical_device_properties);
         LOGI("Vulkan device: %s", physical_device_properties.properties.deviceName);
@@ -165,6 +174,7 @@ public:
             LOGE("Failed to create Vulkan device: %s", to_string(result));
             return false;
         }
+        debug_name("ce_device", m_device);
         volkLoadDevice(m_device);
 
         const VkDeviceQueueInfo2 get_queue_info{
@@ -173,7 +183,7 @@ public:
             .queueIndex = m_queue_index
         };
         vkGetDeviceQueue2(m_device, &get_queue_info, &m_queue);
-        const VkCommandPoolCreateInfo pool_info = {
+        const VkCommandPoolCreateInfo pool_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .queueFamilyIndex = m_queue_family_index
         };
@@ -182,31 +192,36 @@ public:
             LOGE("Failed to create command pool");
             return false;
         }
-
+        debug_name("ce_command_pool_imm", m_cmd_pool_imm);
+        // Init VMA
+        VmaVulkanFunctions vulkanFunctions = {};
+        vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+        vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+        VmaAllocatorCreateInfo allocatorCreateInfo = {};
+        allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_1;
+        allocatorCreateInfo.physicalDevice = m_physical_device;
+        allocatorCreateInfo.device = m_device;
+        allocatorCreateInfo.instance = m_instance;
+        allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
+        if (vmaCreateAllocator(&allocatorCreateInfo, &m_vma) != VK_SUCCESS)
+        {
+            LOGE("vmaCreateAllocator failed");
+            return false;
+        }
         return true;
     }
-    void exec_immediate(std::string_view name, std::function<void(VkCommandBuffer& cmd)> fn) const noexcept
+    void exec_immediate(std::string_view name, const std::function<void(VkCommandBuffer cmd)>& fn) const noexcept
     {
         VkFence fence = VK_NULL_HANDLE;
         constexpr VkFenceCreateInfo fence_info{
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         };
-        if (VkResult result = vkCreateFence(m_device, &fence_info, nullptr, &fence); result != VK_SUCCESS)
+        if (const VkResult result = vkCreateFence(m_device, &fence_info, nullptr, &fence); result != VK_SUCCESS)
         {
             LOGE("Failed to create fence");
             return;
         }
-        if (vkSetDebugUtilsObjectNameEXT)
-        {
-            const std::string fence_name = std::format("immediate_{}_fence", name);
-            const VkDebugUtilsObjectNameInfoEXT name_info = {
-                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
-                .objectType = VK_OBJECT_TYPE_FENCE,
-                .objectHandle = reinterpret_cast<uint64_t>(fence),
-                .pObjectName = fence_name.c_str(),
-            };
-            vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
-        }
+        debug_name(std::format("immediate_{}_fence", name), fence);
         const VkCommandBufferAllocateInfo cmd_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .commandPool = m_cmd_pool_imm,
@@ -214,23 +229,13 @@ public:
             .commandBufferCount = 1
         };
         VkCommandBuffer cmd = VK_NULL_HANDLE;
-        if (VkResult result = vkAllocateCommandBuffers(m_device, &cmd_info, &cmd); result != VK_SUCCESS)
+        if (const VkResult result = vkAllocateCommandBuffers(m_device, &cmd_info, &cmd); result != VK_SUCCESS)
         {
             LOGE("Failed to allocate command buffer");
             vkDestroyFence(m_device, fence, nullptr);
             return;
         }
-        if (vkSetDebugUtilsObjectNameEXT)
-        {
-            const std::string cmd_name = std::format("immediate_{}", name);
-            const VkDebugUtilsObjectNameInfoEXT name_info = {
-                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
-                .objectType = VK_OBJECT_TYPE_COMMAND_BUFFER,
-                .objectHandle = reinterpret_cast<uint64_t>(cmd),
-                .pObjectName = cmd_name.c_str(),
-            };
-            vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
-        }
+        debug_name(std::format("immediate_{}", name), cmd);
         constexpr VkCommandBufferBeginInfo cmd_begin_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
@@ -244,14 +249,15 @@ public:
             .pCommandBuffers = &cmd
         };
         vkQueueSubmit(m_queue, 1, &submit_info, fence);
-        if (VkResult result = vkWaitForFences(m_device, 1, &fence, true, std::numeric_limits<uint64_t>::max()); result != VK_SUCCESS)
+        if (const VkResult result = vkWaitForFences(m_device, 1, &fence, true, std::numeric_limits<uint64_t>::max());
+            result != VK_SUCCESS)
         {
             LOGE("Failed to wait for fence");
         }
         vkFreeCommandBuffers(m_device, m_cmd_pool_imm, 1, &cmd);
         vkDestroyFence(m_device, fence, nullptr);
     }
-    void exec(std::string_view name, std::function<void(VkCommandBuffer& cmd)> fn) const noexcept
+    void exec(std::string_view name, const std::function<void(VkCommandBuffer cmd)>& fn) const noexcept
     {
         const VkCommandBufferAllocateInfo cmd_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -260,22 +266,12 @@ public:
             .commandBufferCount = 1
         };
         VkCommandBuffer cmd = VK_NULL_HANDLE;
-        if (VkResult result = vkAllocateCommandBuffers(m_device, &cmd_info, &cmd); result != VK_SUCCESS)
+        if (const VkResult result = vkAllocateCommandBuffers(m_device, &cmd_info, &cmd); result != VK_SUCCESS)
         {
             LOGE("Failed to allocate command buffer");
             return;
         }
-        if (vkSetDebugUtilsObjectNameEXT)
-        {
-            const std::string cmd_name = std::format("exec_{}", name);
-            const VkDebugUtilsObjectNameInfoEXT name_info = {
-                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
-                .objectType = VK_OBJECT_TYPE_COMMAND_BUFFER,
-                .objectHandle = reinterpret_cast<uint64_t>(cmd),
-                .pObjectName = cmd_name.c_str(),
-            };
-            vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
-        }
+        debug_name(std::format("exec_{}", name), cmd);
         constexpr VkCommandBufferBeginInfo cmd_begin_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
@@ -290,10 +286,8 @@ public:
         };
         vkQueueSubmit(m_queue, 1, &submit_info, VK_NULL_HANDLE);
     }
-    bool create_renderpass(const std::vector<VkFormat>& supported_formats)
+    bool create_renderpass(const VkFormat color_format, const VkFormat depth_format) noexcept
     {
-        const VkFormat color_format = {};//best_color_format(supported_formats);
-        const VkFormat depth_format = VK_FORMAT_D16_UNORM;
         const std::array renderpass_attachments{
             VkAttachmentDescription{
                 .format = color_format,
@@ -334,17 +328,33 @@ public:
         };
         const VkRenderPassCreateInfo renderpass_info{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-            .attachmentCount = (uint32_t)renderpass_attachments.size(),
+            .attachmentCount = static_cast<uint32_t>(renderpass_attachments.size()),
             .pAttachments = renderpass_attachments.data(),
-            .subpassCount = (uint32_t)renderpass_sub.size(),
+            .subpassCount = static_cast<uint32_t>(renderpass_sub.size()),
             .pSubpasses = renderpass_sub.data()
         };
-        if (VkResult result = vkCreateRenderPass(m_device, &renderpass_info, nullptr, &m_renderpass); result != VK_SUCCESS)
+        if (const VkResult result = vkCreateRenderPass(m_device, &renderpass_info, nullptr, &m_renderpass);
+            result != VK_SUCCESS)
         {
             LOGE("Failed to create renderpass");
             return false;
         }
+        debug_name("ce_renderpass", m_renderpass);
         return true;
+    }
+    void debug_name(std::string_view name, auto obj) const noexcept
+    {
+        if (vkSetDebugUtilsObjectNameEXT)
+        {
+            const std::string cmd_name = std::format("exec_{}", name);
+            const VkDebugUtilsObjectNameInfoEXT name_info{
+                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                .objectType = utils::get_type(obj),
+                .objectHandle = reinterpret_cast<uint64_t>(obj),
+                .pObjectName = cmd_name.c_str(),
+            };
+            vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
+        }
     }
 };
 }
