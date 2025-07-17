@@ -1,5 +1,5 @@
 plugins {
-	id("com.android.application") version "8.11.0"
+	id("com.android.application") version "8.11.1"
     kotlin("android") version "2.1.10"
 }
 
@@ -36,6 +36,7 @@ android {
     }
     sourceSets["main"].manifest.srcFile("AndroidManifest.xml")
     sourceSets["main"].kotlin.srcDir("java")
+    sourceSets["main"].assets.srcDirs(listOf("assets", "assets_gen"))
     externalNativeBuild {
         cmake {
             path = file("CMakeLists.txt")

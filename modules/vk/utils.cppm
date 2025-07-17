@@ -1,11 +1,21 @@
 module;
+#include <string>
 #include <type_traits>
+#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_to_string.hpp>
 #include <vulkan/vulkan_core.h>
 
 export module vk.utils;
 
 export namespace ce::vk::utils
 {
+[[nodiscard]] const char* to_string(VkResult r) noexcept
+{
+    static char sr[64]{0};
+    const std::string ss = ::vk::to_string(static_cast<::vk::Result>(r));
+    std::copy_n(ss.begin(), std::min(ss.size(), sizeof(sr) - 1), sr);
+    return sr;
+}
 template<typename T>
 constexpr VkObjectType get_type(T obj) noexcept
 {

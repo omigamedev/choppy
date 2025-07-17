@@ -16,21 +16,26 @@
 
 import ce.vk;
 import ce.xr;
-import ce.android;
 import ce.app;
+import ce.platform;
+import ce.platform.android;
+import ce.platform.globals;
+
+using namespace ce;
 
 class AndroidContext
 {
-    ce::app::AppBase app;
+    app::AppBase app;
     android_app *pApp;
     bool session_started = false;
 public:
     AndroidContext(android_app *pApp) : pApp(pApp) { }
     bool create()
     {
-        app.platform() = std::make_shared<ce::platform::Android>();
-        auto& xr = app.xr() = std::make_shared<ce::xr::Context>();
-        auto& vk = app.vk() = std::make_shared<ce::vk::Context>();
+        auto& platform = platform::GetPlatform<platform::Android>();
+        platform.setup_android(pApp);
+        const auto& xr = app.xr() = std::make_shared<xr::Context>();
+        const auto& vk = app.vk() = std::make_shared<vk::Context>();
         xr->setup_android(pApp->activity->vm, pApp->activity->javaGameActivity);
         if (xr->create())
         {
@@ -69,6 +74,7 @@ public:
         //     vk: create the swapchain image views
         //
         session_started = true;
+        app.init();
         return true;
     }
     void main_loop()

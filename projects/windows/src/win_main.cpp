@@ -5,7 +5,6 @@
 #include <windows.h>
 #include <volk.h>
 
-import ce.windows;
 import ce.app;
 import ce.xr;
 import ce.vk;
@@ -13,7 +12,6 @@ import ce.vk;
 class WindowsContext
 {
     ce::app::AppBase app;
-    std::unique_ptr<ce::platform::Windows> platform;
     HWND m_wnd = nullptr;
     bool initialized = false;
     bool create_window()
@@ -23,9 +21,8 @@ class WindowsContext
 public:
     bool create()
     {
-        app.platform() = std::make_unique<ce::platform::Windows>();
-        auto& xr = app.xr() = std::make_shared<ce::xr::Context>();
-        auto& vk = app.vk() = std::make_shared<ce::vk::Context>();
+        const auto& xr = app.xr() = std::make_shared<ce::xr::Context>();
+        const auto& vk = app.vk() = std::make_shared<ce::vk::Context>();
         if (xr->create())
         {
             std::println("OpenXR initialized");
@@ -84,8 +81,8 @@ public:
             }
             if (initialized)
             {
-                auto current_time = std::chrono::high_resolution_clock::now();
-                float delta_time = std::chrono::duration<float>(current_time - start_time).count();
+                const auto current_time = std::chrono::high_resolution_clock::now();
+                const float delta_time = std::chrono::duration<float>(current_time - start_time).count();
                 start_time = current_time;
                 app.tick(delta_time);
             }

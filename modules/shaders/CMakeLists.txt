@@ -64,8 +64,13 @@ foreach(ENTRY_INDEX RANGE ${MAX_INDEX})
 
     # Append the profile to the output filename to prevent VS/PS builds
     # from the same source file from overwriting each other.
-    set(SPIRV_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${FILE_WE}-${HLSL_PROFILE}.spv)
-    set(REFLECTION_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${FILE_WE}-${HLSL_PROFILE}.spv.txt)
+    if (WIN32)
+        set(SPIRV_OUTPUT ${CMAKE_BINARY_DIR}/assets/shaders/${FILE_WE}-${HLSL_PROFILE}.spv)
+        set(REFLECTION_OUTPUT ${CMAKE_BINARY_DIR}/assets/shaders/${FILE_WE}-${HLSL_PROFILE}.spv.txt)
+    else()
+        set(SPIRV_OUTPUT ${CMAKE_SOURCE_DIR}/assets_gen/shaders/${FILE_WE}-${HLSL_PROFILE}.spv)
+        set(REFLECTION_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${FILE_WE}-${HLSL_PROFILE}.spv.txt)
+    endif()
 
     add_custom_command(
         OUTPUT ${SPIRV_OUTPUT} ${REFLECTION_OUTPUT}
@@ -73,9 +78,8 @@ foreach(ENTRY_INDEX RANGE ${MAX_INDEX})
             -E ${ENTRY_POINT} $<IF:$<CONFIG:DEBUG>,-Od,-O1> -Zi -Fo ${SPIRV_OUTPUT} ${FILE}
         COMMAND ${SPIRV_REFLECT_EXECUTABLE} ${SPIRV_OUTPUT} > ${REFLECTION_OUTPUT}
         MAIN_DEPENDENCY ${SHADER_SOURCES}
-        COMMENT "Compiling HLSL: ${FILE} (${HLSL_PROFILE})"
-        VERBATIM
-    )
+        COMMENT "Compiling HLSL: ${FILE} (${HLSL_PROFILE}) to ${SPIRV_OUTPUT}"
+        VERBATIM)
 
     # Add the generated files to our list.
     list(APPEND HLSL_GENERATED_FILES ${SPIRV_OUTPUT} ${REFLECTION_OUTPUT})
@@ -85,9 +89,9 @@ add_custom_target(shaders-spv ALL
     DEPENDS ${HLSL_GENERATED_FILES} ${SHADER_HEADERS_LIST}
     COMMENT "Building all shaders")
 
-add_library(shaders)
-target_link_libraries(shaders PUBLIC glmcppm vk)
+add_library(shaders OBJECT)
 add_dependencies(shaders shaders-spv)
+target_link_libraries(shaders PUBLIC glmcppm vk)
 target_sources(shaders PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_LIST_DIR}

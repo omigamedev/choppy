@@ -1,11 +1,5 @@
 #include "solid-flat.h"
 
-
-cbuffer PerFrameConstants : register(b0)
-{
-    matrix WorldViewProjection;
-};
-
 PixelInput VSMain(VertexInput input)
 {
     PixelInput output;

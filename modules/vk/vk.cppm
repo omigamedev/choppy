@@ -1,12 +1,12 @@
 module;
 #include <string>
+#include <utility>
 #include <vector>
 #include <array>
+#include <format>
 #include <functional>
 
 #include <volk.h>
-#include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_to_string.hpp>
 #include <vk_mem_alloc.h>
 
 #ifdef __ANDROID__
@@ -22,6 +22,7 @@ module;
 
 export module ce.vk;
 import vk.utils;
+import ce.platform.globals;
 
 export namespace ce::vk
 {
@@ -36,25 +37,19 @@ class Context
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
     const uint32_t m_queue_index = 0;
     VmaAllocator m_vma = VK_NULL_HANDLE;
-    [[nodiscard]] const char* to_string(VkResult r) const noexcept
-    {
-        static char sr[64]{0};
-        const std::string ss = ::vk::to_string(static_cast<::vk::Result>(r));
-        std::copy_n(ss.begin(), std::min(ss.size(), sizeof(sr) - 1), sr);
-        return sr;
-    }
 public:
-    [[nodiscard]] VkInstance& instance() noexcept { return m_instance; }
-    [[nodiscard]] VkDevice& device() noexcept { return m_device; }
+    [[nodiscard]] VkInstance instance() const noexcept { return m_instance; }
+    [[nodiscard]] VkDevice device() const noexcept { return m_device; }
     [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
     [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
+    [[nodiscard]] VmaAllocator vma() const noexcept { return m_vma; }
     bool create_from(VkInstance instance, VkDevice device,
         VkPhysicalDevice physical_device, uint32_t queue_family_index) noexcept
     {
         m_instance = instance;
-        debug_name("ce_instance", m_instance);
         m_device = device;
-        debug_name("ce__device", m_device);
+        debug_name("ce_instance", m_instance);
+        debug_name("ce_device", m_device);
         m_physical_device = physical_device;
         debug_name("ce_physical_device", m_physical_device);
         m_queue_family_index = queue_family_index;
@@ -81,6 +76,21 @@ public:
             return false;
         }
         debug_name("ce_command_pool_imm", m_cmd_pool_imm);
+        // Init VMA
+        VmaVulkanFunctions vulkanFunctions = {};
+        vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+        vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+        VmaAllocatorCreateInfo allocatorCreateInfo = {};
+        allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+        allocatorCreateInfo.physicalDevice = m_physical_device;
+        allocatorCreateInfo.device = m_device;
+        allocatorCreateInfo.instance = m_instance;
+        allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
+        if (vmaCreateAllocator(&allocatorCreateInfo, &m_vma) != VK_SUCCESS)
+        {
+            LOGE("vmaCreateAllocator failed");
+            return false;
+        }
         return true;
     }
     bool create() noexcept
@@ -119,7 +129,7 @@ public:
         };
         if (VkResult result = vkCreateInstance(&instance_info, nullptr, &m_instance); result != VK_SUCCESS)
         {
-            LOGE("Failed to create Vulkan instance: %s", to_string(result));
+            LOGE("Failed to create Vulkan instance: %s", utils::to_string(result));
             return false;
         }
         debug_name("ce_instance", m_instance);
@@ -171,7 +181,7 @@ public:
         };
         if (VkResult result = vkCreateDevice(m_physical_device, &device_info, nullptr, &m_device); result != VK_SUCCESS)
         {
-            LOGE("Failed to create Vulkan device: %s", to_string(result));
+            LOGE("Failed to create Vulkan device: %s", utils::to_string(result));
             return false;
         }
         debug_name("ce_device", m_device);
@@ -198,7 +208,7 @@ public:
         vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
         vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
         VmaAllocatorCreateInfo allocatorCreateInfo = {};
-        allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_1;
+        allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_3;
         allocatorCreateInfo.physicalDevice = m_physical_device;
         allocatorCreateInfo.device = m_device;
         allocatorCreateInfo.instance = m_instance;
@@ -346,15 +356,104 @@ public:
     {
         if (vkSetDebugUtilsObjectNameEXT)
         {
-            const std::string cmd_name = std::format("exec_{}", name);
             const VkDebugUtilsObjectNameInfoEXT name_info{
                 .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                 .objectType = utils::get_type(obj),
                 .objectHandle = reinterpret_cast<uint64_t>(obj),
-                .pObjectName = cmd_name.c_str(),
+                .pObjectName = name.data(),
             };
             vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
         }
+    }
+};
+class ShaderModule
+{
+protected:
+    std::weak_ptr<Context> m_vk;
+    std::string m_name;
+    VkShaderModule m_module_vs{VK_NULL_HANDLE};
+    VkShaderModule m_module_ps{VK_NULL_HANDLE};
+    VkDescriptorSetLayout m_set_layout{VK_NULL_HANDLE};
+    VkPipelineLayout m_layout{VK_NULL_HANDLE};
+    VkPipeline m_pipeline{VK_NULL_HANDLE};
+    std::vector<VkDescriptorSet> m_descr_sets{};
+
+    [[nodiscard]] std::optional<VkShaderModule> create_shader_module(const std::string& asset_path) const
+    {
+        LOGI("Loading shader %s", asset_path.c_str());
+        const auto& vk = m_vk.lock();
+        if (!vk)
+        {
+            LOGE("Failed to retrieve vulkan Context");
+            return std::nullopt;
+        }
+        const auto& p = platform::GetPlatform();
+        std::vector<uint8_t> shader_code;
+        if (auto result = p.read_file(asset_path))
+        {
+            shader_code = std::move(result.value());
+        }
+        else
+        {
+            LOGE("Failed to read shader code: %s", asset_path.c_str());
+            return std::nullopt;
+        }
+        assert(shader_code.size() % sizeof(uint32_t) == 0 && "shader bytecode should be aligned to 4 bytes");
+        const VkShaderModuleCreateInfo info{
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = static_cast<uint32_t>(shader_code.size()),
+            .pCode = reinterpret_cast<uint32_t*>(shader_code.data())
+        };
+        VkShaderModule module{VK_NULL_HANDLE};
+        if (const VkResult result = vkCreateShaderModule(vk->device(), &info, nullptr, &module); result != VK_SUCCESS)
+        {
+            LOGE("Failed to create shader module: %s", utils::to_string(result));
+            return std::nullopt;
+        }
+        const auto filename = [asset_path]
+        {
+            if (const auto pos = asset_path.find_last_of('/');
+                pos != std::string_view::npos && pos < asset_path.size() - 1)
+            {
+                return asset_path.substr(pos + 1);
+            }
+            return asset_path;
+        }();
+        vk->debug_name(filename, module);
+        return module;
+    }
+public:
+    ShaderModule(const std::shared_ptr<Context>& vk, std::string name) noexcept
+        : m_vk(vk), m_name(std::move(name)) { }
+    virtual ~ShaderModule() noexcept
+    {
+        LOGI("Destroying shader module: %s", m_name.c_str());
+        const auto& vk = m_vk.lock();
+        if (!vk)
+        {
+            LOGE("Failed to retrieve vulkan Context");
+            return;
+        }
+        if (m_module_vs != VK_NULL_HANDLE)
+            vkDestroyShaderModule(vk->device(), m_module_vs, nullptr);
+        if (m_module_ps != VK_NULL_HANDLE)
+            vkDestroyShaderModule(vk->device(), m_module_ps, nullptr);
+        m_module_vs = VK_NULL_HANDLE;
+        m_module_ps = VK_NULL_HANDLE;
+    }
+    bool load_from_file(const std::string& vs_path, const std::string& ps_path) noexcept
+    {
+        if (auto ps = create_shader_module(ps_path), vs = create_shader_module(vs_path); vs && ps)
+        {
+            m_module_ps = ps.value();
+            m_module_vs = vs.value();
+        }
+        else
+        {
+            LOGE("Failed loading shader %s", m_name.c_str());
+            return false;
+        }
+        return true;
     }
 };
 }

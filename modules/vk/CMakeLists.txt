@@ -27,15 +27,15 @@ FetchContent_Declare(
     GIT_TAG v3.3.0)
 FetchContent_MakeAvailable(VulkanMemoryAllocator)
 
-add_library(vk)
+add_library(vk OBJECT)
 target_sources(vk PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     FILES vk.cppm utils.cppm)
-target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator)
+target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator platform)
 target_compile_definitions(vk PRIVATE VMA_IMPLEMENTATION)
 if(WIN32)
-    target_compile_definitions(vk PRIVATE NOMINMAX)
+    target_compile_definitions(vk PUBLIC NOMINMAX)
 else()
     target_link_libraries(vk PUBLIC Vulkan-Headers)
 endif()
