@@ -30,6 +30,16 @@ import ce.vk.utils;
 
 export namespace ce::xr
 {
+struct FrameContext final
+{
+    VkExtent2D size;
+    VkImage color_image;
+    VkImage depth_image;
+    VkImageView color_view;
+    VkImageView depth_view;
+    VkFramebuffer framebuffer;
+    VkRenderPass renderpass;
+};
 class Context final
 {
     XrInstance m_instance = XR_NULL_HANDLE;
@@ -41,6 +51,7 @@ class Context final
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
+    VkExtent2D m_framebuffer_size{};
     const uint32_t m_queue_index = 0;
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
     XrSwapchain color_swapchain = XR_NULL_HANDLE;
@@ -49,11 +60,21 @@ class Context final
     VkFormat color_format = VK_FORMAT_UNDEFINED;
     std::vector<XrSwapchainImageVulkanKHR> color_swapchain_images;
     std::vector<XrSwapchainImageVulkanKHR> depth_swapchain_images;
+    std::vector<VkImageView> color_swapchain_views;
+    std::vector<VkImageView> depth_swapchain_views;
     std::vector<XrViewConfigurationView> view_configs;
 #ifdef __ANDROID__
     jobject m_android_context = nullptr;
     JavaVM* m_android_vm = nullptr;
 #endif
+    [[nodiscard]] std::vector<VkImage> swapchain_images(
+        const std::vector<XrSwapchainImageVulkanKHR>& swapchain) const noexcept
+    {
+        std::vector<VkImage> images;
+        std::ranges::transform(swapchain,
+            std::back_inserter(images), &XrSwapchainImageVulkan2KHR::image);
+        return images;
+    }
     void wait_state(const XrSessionState wait_state) const noexcept
     {
         XrEventDataBuffer event_data{ .type = XR_TYPE_EVENT_DATA_BUFFER };
@@ -187,11 +208,15 @@ public:
     [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
     [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
     [[nodiscard]] VkRenderPass renderpass() const noexcept { return m_renderpass; }
+    [[nodiscard]] VkFramebuffer framebuffer() const noexcept { return m_framebuffer; }
+    [[nodiscard]] VkExtent2D framebuffer_size() const noexcept { return m_framebuffer_size; }
     [[nodiscard]] std::vector<VkImage> swapchain_color_images() const noexcept
     {
-        std::vector<VkImage> images;
-        std::ranges::transform(color_swapchain_images, std::back_inserter(images), &XrSwapchainImageVulkan2KHR::image);
-        return images;
+        return swapchain_images(color_swapchain_images);
+    }
+    [[nodiscard]] std::vector<VkImage> swapchain_depth_images() const noexcept
+    {
+        return swapchain_images(depth_swapchain_images);
     }
 
 #ifdef __ANDROID__
@@ -199,13 +224,6 @@ public:
     {
         m_android_context = context;
         m_android_vm = vm;
-    }
-#endif
-    bool create() noexcept
-    {
-        //print_info();
-
-#ifdef __ANDROID__
         const XrLoaderInitInfoAndroidKHR loader_init{
             .type = XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR,
             .applicationVM = m_android_vm,
@@ -219,8 +237,10 @@ public:
             LOGE("xrInitializeLoaderKHR failed: %s", to_string(result));
             return false;
         }
+    }
 #endif
-
+    bool create() noexcept
+    {
         const std::vector<XrExtensionProperties> xr_instance_extentions = []{
             uint32_t count = 0;
             xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
@@ -668,7 +688,8 @@ public:
         }
         return true;
     }
-    [[nodiscard]] VkFormat find_format(std::span<const VkFormat> formats, VkFormatFeatureFlags features) const noexcept
+    [[nodiscard]] VkFormat find_format(const std::span<const VkFormat> formats,
+        const VkFormatFeatureFlags features) const noexcept
     {
         for (const auto format : formats)
         {
@@ -720,6 +741,8 @@ public:
                 &count, views.data());
             return views;
         }();
+        m_framebuffer_size.width = view_configs[0].recommendedImageRectWidth;
+        m_framebuffer_size.height = view_configs[0].recommendedImageRectHeight;
 
         // Color swapchain
 
@@ -728,8 +751,8 @@ public:
             .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
             .format = color_format,
             .sampleCount = view_configs[0].recommendedSwapchainSampleCount,
-            .width = view_configs[0].recommendedImageRectWidth,
-            .height = view_configs[0].recommendedImageRectHeight,
+            .width = m_framebuffer_size.width,
+            .height = m_framebuffer_size.height,
             .faceCount = 1,
             .arraySize = static_cast<uint32_t>(view_configs.size()),
             .mipCount = 1
@@ -770,8 +793,8 @@ public:
             .usageFlags = XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
             .format = depth_format,
             .sampleCount = view_configs[0].recommendedSwapchainSampleCount,
-            .width = view_configs[0].recommendedImageRectWidth,
-            .height = view_configs[0].recommendedImageRectHeight,
+            .width = m_framebuffer_size.width,
+            .height = m_framebuffer_size.height,
             .faceCount = 1,
             .arraySize = static_cast<uint32_t>(view_configs.size()),
             .mipCount = 1
@@ -784,14 +807,66 @@ public:
         }
         depth_swapchain_images = [this] {
             uint32_t count = 0;
-            xrEnumerateSwapchainImages(color_swapchain, 0, &count, nullptr);
+            xrEnumerateSwapchainImages(depth_swapchain, 0, &count, nullptr);
             std::vector images(count, XrSwapchainImageVulkanKHR{.type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
-            xrEnumerateSwapchainImages(color_swapchain, count, &count,
+            xrEnumerateSwapchainImages(depth_swapchain, count, &count,
                 reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
             return images;
         }();
 
+        // Views
+
+        color_swapchain_views.resize(color_swapchain_images.size());
+        depth_swapchain_views.resize(color_swapchain_images.size());
+        for (uint32_t i = 0; i < color_swapchain_images.size(); i++)
+        {
+            // Color
+            const VkImageViewCreateInfo color_info{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = color_swapchain_images[i].image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                .format = color_format,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 2
+                }
+            };
+            if (const VkResult result = vkCreateImageView(m_device, &color_info, nullptr, &color_swapchain_views[i]);
+                result != VK_SUCCESS)
+            {
+                LOGE("vkCreateImageView failed: %s", to_string(result));
+                return false;
+            }
+            debug_name(std::format("swapchain_color_view[{}]", i), color_swapchain_views[i]);
+
+            // Depth
+            const VkImageViewCreateInfo depth_info{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = depth_swapchain_images[i].image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                .format = depth_format,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 2
+                }
+            };
+            if (const VkResult result = vkCreateImageView(m_device, &depth_info, nullptr, &depth_swapchain_views[i]);
+                result != VK_SUCCESS)
+            {
+                LOGE("vkCreateImageView failed: %s", to_string(result));
+                return false;
+            }
+            debug_name(std::format("swapchain_depth_view[{}]", i), depth_swapchain_views[i]);
+        }
+
         // Renderpass
+
         const std::array renderpass_attachments{
             VkAttachmentDescription{
                 .format = color_format,
@@ -853,22 +928,26 @@ public:
             return false;
         }
         debug_name("ce_renderpass", m_renderpass);
+
         // Framebuffer
+
+        constexpr VkImageUsageFlags xr_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         const std::vector attachment_images_info{
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
-                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                .width = view_configs[0].recommendedImageRectWidth,
-                .height = view_configs[0].recommendedImageRectHeight,
+                .usage = xr_usage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                .width = m_framebuffer_size.width,
+                .height = m_framebuffer_size.height,
                 .layerCount = 2,
                 .viewFormatCount = 1,
                 .pViewFormats = &color_format,
             },
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
-                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                .width = view_configs[0].recommendedImageRectWidth,
-                .height = view_configs[0].recommendedImageRectHeight,
+                .usage = xr_usage | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                .width = m_framebuffer_size.width,
+                .height = m_framebuffer_size.height,
                 .layerCount = 2,
                 .viewFormatCount = 1,
                 .pViewFormats = &depth_format,
@@ -885,8 +964,8 @@ public:
             .flags = VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT,  // Key flag
             .renderPass = m_renderpass,
             .attachmentCount = static_cast<uint32_t>(attachment_images_info.size()),
-            .width = view_configs[0].recommendedImageRectWidth,
-            .height = view_configs[0].recommendedImageRectHeight,
+            .width = m_framebuffer_size.width,
+            .height = m_framebuffer_size.height,
             .layers = 1, // must be one if multiview is used
         };
         if (const VkResult result = vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffer);
@@ -898,7 +977,7 @@ public:
         debug_name("ce_framebuffer", m_framebuffer);
         return true;
     }
-    void present(const std::function<void(VkImage color)>& render_callback) noexcept
+    void present(const std::function<void(const FrameContext& frame)>& render_callback) const noexcept
     {
         constexpr XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frame_state{.type = XR_TYPE_FRAME_STATE};
@@ -947,9 +1026,17 @@ public:
             return;
         }
 
-        render_callback(color_swapchain_images[acquired_index].image);
+        render_callback({
+            .size = m_framebuffer_size,
+            .color_image = color_swapchain_images[acquired_index].image,
+            .depth_image = depth_swapchain_images[acquired_index].image,
+            .color_view = color_swapchain_views[acquired_index],
+            .depth_view = depth_swapchain_views[acquired_index],
+            .framebuffer = m_framebuffer,
+            .renderpass = m_renderpass,
+        });
 
-        std::vector<XrCompositionLayerProjectionView> layer_views(views_count);
+        std::vector layer_views(views_count, XrCompositionLayerProjectionView{});
         for (uint32_t i = 0; i < views_count; i++)
         {
             layer_views[i] = XrCompositionLayerProjectionView{
@@ -961,8 +1048,8 @@ public:
                     .imageRect = {
                         .offset = {0, 0},
                         .extent = {
-                            static_cast<int32_t>(view_configs[i].recommendedImageRectWidth),
-                            static_cast<int32_t>(view_configs[i].recommendedImageRectHeight)
+                            static_cast<int32_t>(m_framebuffer_size.width),
+                            static_cast<int32_t>(m_framebuffer_size.height)
                         }
                     },
                     .imageArrayIndex = i
