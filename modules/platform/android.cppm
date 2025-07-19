@@ -14,9 +14,10 @@ class Android final : public Platform
 {
     AAssetManager* m_asset_manager = nullptr;
 public:
-    void setup_android(android_app *pApp)
+    bool setup_android(android_app *pApp)
     {
         m_asset_manager = pApp->activity->assetManager;
+        return true;
     }
     [[nodiscard]] std::optional<std::vector<uint8_t>> read_file(
         const std::string& path) const noexcept

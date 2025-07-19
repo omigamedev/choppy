@@ -220,7 +220,7 @@ public:
     }
 
 #ifdef __ANDROID__
-    void setup_android(JavaVM* vm, jobject context)
+    bool setup_android(JavaVM* vm, jobject context)
     {
         m_android_context = context;
         m_android_vm = vm;
@@ -237,6 +237,7 @@ public:
             LOGE("xrInitializeLoaderKHR failed: %s", to_string(result));
             return false;
         }
+        return true;
     }
 #endif
     bool create() noexcept
@@ -515,7 +516,7 @@ public:
         }();
         std::vector vk_device_extensions{
             VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
-            VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+            VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
             VK_KHR_MULTIVIEW_EXTENSION_NAME,
             VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME,
             VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
@@ -528,7 +529,7 @@ public:
             VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
             VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME,
         };
-        for (const auto& e : vk_device_optional_extensions)
+        for (const char* e : vk_device_optional_extensions)
         {
             if (std::ranges::contains(device_extensions, e))
             {
@@ -536,7 +537,7 @@ public:
                 LOGI("VK Optional Ext: %s", e);
             }
         }
-        for (const auto& e : vk_device_required_extensions)
+        for (const std::string& e : vk_device_required_extensions)
         {
             LOGI("VK Xr-Required Ext: %s", e.c_str());
             vk_device_extensions.push_back(e.c_str());
@@ -629,10 +630,6 @@ public:
             !XR_SUCCEEDED(result))
         {
             LOGE("xrCreateVulkanDeviceKHR failed: %s", to_string(result));
-            return false;
-        }
-        if (vk_create_result != VK_SUCCESS)
-        {
             LOGE("vkCreateDevice failed: %s", to_string(vk_create_result));
             return false;
         }

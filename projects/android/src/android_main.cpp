@@ -33,10 +33,18 @@ public:
     bool create()
     {
         auto& platform = platform::GetPlatform<platform::Android>();
-        platform.setup_android(pApp);
+        if (!platform.setup_android(pApp))
+        {
+            LOGE("setup_android failed");
+            return false;
+        }
         const auto& xr = app.xr() = std::make_shared<xr::Context>();
         const auto& vk = app.vk() = std::make_shared<vk::Context>();
-        xr->setup_android(pApp->activity->vm, pApp->activity->javaGameActivity);
+        if (!xr->setup_android(pApp->activity->vm, pApp->activity->javaGameActivity))
+        {
+            LOGE("xr->setup_android failed");
+            return false;
+        }
         if (xr->create())
         {
             vk->create_from(
@@ -47,7 +55,8 @@ public:
         }
         else
         {
-            vk->create();
+            LOGE("XR initialization failed, exiting");
+            return false;
         }
         return true;
     }
@@ -211,7 +220,11 @@ void encoder_loop()
 void android_main(android_app *pApp)
 {
     AndroidContext context{pApp};
-    context.create();
+    if (!context.create())
+    {
+        GameActivity_finish(pApp->activity);
+        return;
+    }
 
     LOGI("android_main");
 
