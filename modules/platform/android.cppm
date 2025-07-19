@@ -1,7 +1,7 @@
 module;
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 #include <android/asset_manager.h>
-#include <assert.h>
+#include <cassert>
 #include <vector>
 #include <optional>
 #include <string_view>

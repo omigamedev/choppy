@@ -5,7 +5,7 @@ module;
 #include <vulkan/vulkan_to_string.hpp>
 #include <vulkan/vulkan_core.h>
 
-export module vk.utils;
+export module ce.vk.utils;
 
 export namespace ce::vk::utils
 {

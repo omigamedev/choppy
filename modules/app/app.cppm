@@ -14,7 +14,7 @@ import glm;
 
 export namespace ce::app
 {
-class AppBase
+class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
     std::shared_ptr<vk::Context> m_vk;
@@ -25,7 +25,7 @@ public:
     void init() noexcept
     {
         const auto solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
-        solid_flat->create();
+        solid_flat->create(m_xr->renderpass());
     }
     void tick(const float dt) const noexcept
     {

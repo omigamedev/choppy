@@ -8,7 +8,7 @@ cbuffer PerFrameConstants REGISTER(b0)
 
 struct VertexInput
 {
-    float3 position SEM(POSITION);
+    [[vk::location(0)]] float3 position SEM(POSITION0);
 };
 
 struct PixelInput

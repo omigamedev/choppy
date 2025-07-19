@@ -21,12 +21,12 @@ module;
 #endif
 
 export module ce.vk;
-import vk.utils;
+import ce.vk.utils;
 import ce.platform.globals;
 
 export namespace ce::vk
 {
-class Context
+class Context final
 {
     VkInstance m_instance = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
@@ -378,15 +378,12 @@ protected:
     VkPipeline m_pipeline{VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> m_descr_sets{};
 
-    [[nodiscard]] std::optional<VkShaderModule> create_shader_module(const std::string& asset_path) const
+    ShaderModule(const std::shared_ptr<Context>& vk, std::string name) noexcept
+        : m_vk(vk), m_name(std::move(name)) { }
+    [[nodiscard]] std::optional<VkShaderModule> create_shader_module(
+        const std::shared_ptr<Context>& vk, const std::string& asset_path) const
     {
         LOGI("Loading shader %s", asset_path.c_str());
-        const auto& vk = m_vk.lock();
-        if (!vk)
-        {
-            LOGE("Failed to retrieve vulkan Context");
-            return std::nullopt;
-        }
         const auto& p = platform::GetPlatform();
         std::vector<uint8_t> shader_code;
         if (auto result = p.read_file(asset_path))
@@ -405,7 +402,8 @@ protected:
             .pCode = reinterpret_cast<uint32_t*>(shader_code.data())
         };
         VkShaderModule module{VK_NULL_HANDLE};
-        if (const VkResult result = vkCreateShaderModule(vk->device(), &info, nullptr, &module); result != VK_SUCCESS)
+        if (const VkResult result = vkCreateShaderModule(vk->device(), &info, nullptr, &module);
+            result != VK_SUCCESS)
         {
             LOGE("Failed to create shader module: %s", utils::to_string(result));
             return std::nullopt;
@@ -422,28 +420,10 @@ protected:
         vk->debug_name(filename, module);
         return module;
     }
-public:
-    ShaderModule(const std::shared_ptr<Context>& vk, std::string name) noexcept
-        : m_vk(vk), m_name(std::move(name)) { }
-    virtual ~ShaderModule() noexcept
+    bool load_from_file(const std::shared_ptr<Context>& vk,
+        const std::string& vs_path, const std::string& ps_path) noexcept
     {
-        LOGI("Destroying shader module: %s", m_name.c_str());
-        const auto& vk = m_vk.lock();
-        if (!vk)
-        {
-            LOGE("Failed to retrieve vulkan Context");
-            return;
-        }
-        if (m_module_vs != VK_NULL_HANDLE)
-            vkDestroyShaderModule(vk->device(), m_module_vs, nullptr);
-        if (m_module_ps != VK_NULL_HANDLE)
-            vkDestroyShaderModule(vk->device(), m_module_ps, nullptr);
-        m_module_vs = VK_NULL_HANDLE;
-        m_module_ps = VK_NULL_HANDLE;
-    }
-    bool load_from_file(const std::string& vs_path, const std::string& ps_path) noexcept
-    {
-        if (auto ps = create_shader_module(ps_path), vs = create_shader_module(vs_path); vs && ps)
+        if (auto ps = create_shader_module(vk, ps_path), vs = create_shader_module(vk, vs_path); vs && ps)
         {
             m_module_ps = ps.value();
             m_module_vs = vs.value();
@@ -454,6 +434,20 @@ public:
             return false;
         }
         return true;
+    }
+public:
+    virtual ~ShaderModule() noexcept
+    {
+        LOGI("Destroying shader module: %s", m_name.c_str());
+        if (const auto& vk = m_vk.lock())
+        {
+            if (m_module_vs != VK_NULL_HANDLE)
+                vkDestroyShaderModule(vk->device(), m_module_vs, nullptr);
+            if (m_module_ps != VK_NULL_HANDLE)
+                vkDestroyShaderModule(vk->device(), m_module_ps, nullptr);
+        }
+        m_module_vs = VK_NULL_HANDLE;
+        m_module_ps = VK_NULL_HANDLE;
     }
 };
 }
