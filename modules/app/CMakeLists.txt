@@ -6,6 +6,11 @@ FetchContent_MakeAvailable(glm)
 
 add_library(glmcppm OBJECT)
 target_link_libraries(glmcppm PUBLIC glm::glm)
+target_compile_definitions(glmcppm PUBLIC
+    GLM_ENABLE_EXPERIMENTAL
+    #GLM_FORCE_RADIANS
+    #GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
 target_sources(glmcppm PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${glm_SOURCE_DIR}/glm

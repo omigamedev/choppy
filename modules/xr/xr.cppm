@@ -23,9 +23,12 @@ module;
 #include <vulkan/vulkan_to_string.hpp>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#include <xr_linear.h>
 
 export module ce.xr;
 import ce.vk.utils;
+import ce.xr.utils;
+import glm;
 
 export namespace ce::xr
 {
@@ -38,6 +41,8 @@ struct FrameContext final
     VkImageView depth_view;
     VkFramebuffer framebuffer;
     VkRenderPass renderpass;
+    glm::mat4 view[2];
+    glm::mat4 projection[2];
 };
 class Context final
 {
@@ -1034,7 +1039,7 @@ public:
             return;
         }
 
-        render_callback({
+        FrameContext frame{
             .size = m_framebuffer_size,
             .color_image = color_swapchain_images[acquired_index].image,
             .depth_image = depth_swapchain_images[acquired_index].image,
@@ -1042,7 +1047,21 @@ public:
             .depth_view = depth_swapchain_views[acquired_index],
             .framebuffer = m_framebuffer,
             .renderpass = m_renderpass,
-        });
+        };
+
+        for (uint32_t i = 0; i < views_count; i++)
+        {
+            XrMatrix4x4f projection_matrix;
+            XrMatrix4x4f_CreateProjectionFov(&projection_matrix,
+                GRAPHICS_VULKAN, views[i].fov, 0.1f, 100.f);
+            const glm::mat4 proj = glm::gtc::make_mat4(projection_matrix.m);
+            const glm::mat4 cam_t = glm::gtx::translate(glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position)));
+            const glm::quat cam_q = glm::gtc::make_quat(reinterpret_cast<float*>(&views[i].pose.orientation));
+            frame.projection[i] = proj;
+            frame.view[i] = glm::inverse(cam_t * glm::gtc::mat4_cast(cam_q));
+        }
+
+        render_callback(frame);
 
         std::vector layer_views(views_count, XrCompositionLayerProjectionView{});
         for (uint32_t i = 0; i < views_count; i++)

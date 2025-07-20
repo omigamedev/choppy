@@ -3,7 +3,7 @@
 
 cbuffer PerFrameConstants REGISTER(b0)
 {
-    float4x4 WorldViewProjection;
+    float4x4 WorldViewProjection[2];
 };
 
 struct VertexInput

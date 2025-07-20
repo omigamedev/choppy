@@ -7,10 +7,9 @@ module;
 #include <volk.h>
 
 #include "vk_mem_alloc.h"
-#define GLM_ENABLE_EXPERIMENTAL
 #include "glm/gtx/compatibility.hpp"
-#include "glm/gtx/euler_angles.hpp"
-#include "glm/gtx/quaternion.hpp"
+// #include "glm/gtx/euler_angles.hpp"
+// #include "glm/gtx/quaternion.hpp"
 
 export module ce.app;
 import ce.platform;
@@ -77,17 +76,15 @@ public:
     {
         static float time = 0;
         time += dt;
-        uniform.WorldViewProjection = glm::eulerAngleZ(glm::radians(time * 90.f));
-        m_vk->exec("update_scene", [this](VkCommandBuffer cmd)
-        {
-            solid_flat->uniform()->update_cmd<shaders::SolidFlatShader::PerFrameConstants>(cmd, uniform);
-        });
         m_xr->present([this, t=time](const xr::FrameContext& frame){
+            uniform.WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0]);
+            uniform.WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1]);
             m_vk->exec("render_eye", [this, frame, t](VkCommandBuffer cmd){
+                solid_flat->uniform()->update_cmd<shaders::SolidFlatShader::PerFrameConstants>(cmd, uniform);
                 const std::array rgb{
                     fabsf(sinf(t * 5.9f)),
                     fabsf(sinf(t * 1.9f)),
-                    fabsf(sinf(t * 10.9f))
+                    fabsf(sinf(t * 0.9f))
                 };
                 const std::array clear_value{
                     VkClearValue{.color = {rgb[0], rgb[1], rgb[2], 1.f}},

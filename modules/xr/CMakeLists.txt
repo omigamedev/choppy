@@ -11,9 +11,9 @@ else()
     target_compile_definitions(xr PUBLIC XR_USE_PLATFORM_ANDROID)
 endif()
 target_compile_definitions(xr PUBLIC XR_USE_GRAPHICS_API_VULKAN XR_EXTENSION_PROTOTYPES)
-target_link_libraries(xr PUBLIC OpenXR::headers openxr_loader vk)
-#target_include_directories(xr PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/openxr-hpp)
+target_link_libraries(xr PUBLIC OpenXR::headers openxr_loader vk glmcppm)
+target_include_directories(xr PUBLIC ${openxr_SOURCE_DIR}/src/common)
 target_sources(xr PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES xr.cppm)
+    FILES xr.cppm utils.cppm)

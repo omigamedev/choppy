@@ -5,8 +5,7 @@ module;
 #include <memory>
 #include <volk.h>
 #include <vk_mem_alloc.h>
-#define GLM_ENABLE_EXPERIMENTAL
-#include "glm/gtx/compatibility.hpp"
+#include <glm/gtx/compatibility.hpp>
 
 export module ce.shaders.solidflat;
 import ce.shaders;
