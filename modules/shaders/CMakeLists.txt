@@ -59,8 +59,8 @@ foreach(ENTRY_INDEX RANGE ${MAX_INDEX})
     # Get the base filename without the extension
     get_filename_component(FILE_WE ${FILE} NAME_WE)
     get_filename_component(FILE_DIR ${FILE} DIRECTORY)
-    file(GLOB SHADER_SOURCES "${FILE_DIR}/*.h")
-    message(STATUS "Shader ${FILE} in ${FILE_DIR} depends on ${SHADER_SOURCES}")
+    file(GLOB SHADER_SOURCES "${FILE_DIR}/*.h" ${FILE})
+    # message(STATUS "Shader ${FILE} in ${FILE_DIR} depends on ${SHADER_SOURCES}")
 
     # Append the profile to the output filename to prevent VS/PS builds
     # from the same source file from overwriting each other.
