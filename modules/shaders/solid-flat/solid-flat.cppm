@@ -18,56 +18,18 @@ export namespace ce::shaders
 {
     class SolidFlatShader final : public vk::ShaderModule
     {
+    public:
         #include "solid-flat.h"
-        struct UniformsBuffer
-        {
-            VkBuffer buffer = VK_NULL_HANDLE;
-            VmaAllocation mem = VK_NULL_HANDLE;
-            VmaAllocationInfo mem_info{};
-            VkBuffer staging_buffer = VK_NULL_HANDLE;
-            VmaAllocation staging_mem = VK_NULL_HANDLE;
-            VmaAllocationInfo staging_mem_info{};
-            PerFrameConstants* staging_ptr = nullptr; // mapped to staging buffer
-        };
-        static std::vector<UniformsBuffer> uniforms;
+    private:
+        std::shared_ptr<vk::Buffer> m_uniform;
         bool create_uniform(const std::shared_ptr<vk::Context>& vk) noexcept
         {
-            auto& uniform = uniforms.emplace_back();
-            constexpr VkBufferCreateInfo buffer_info{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .size = sizeof(PerFrameConstants),
-                .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            };
-            constexpr VmaAllocationCreateInfo buffer_alloc_info{
-                .flags = 0,
-                .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            };
-            if (const VkResult result = vmaCreateBuffer(vk->vma(), &buffer_info, &buffer_alloc_info,
-                &uniform.buffer, &uniform.mem, &uniform.mem_info); result != VK_SUCCESS)
+            m_uniform = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::Uniform");
+            if (!m_uniform->create(sizeof(PerFrameConstants),
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT))
             {
                 return false;
             }
-            vk->debug_name(std::format("{}-PerFrameConstants", m_name), uniform.buffer);
-            // Create staging buffer
-            constexpr VkBufferCreateInfo staging_buffer_info{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .size = sizeof(PerFrameConstants),
-                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            };
-            constexpr VmaAllocationCreateInfo staging_buffer_alloc_info{
-                .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                    VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-            };
-            if (const VkResult result = vmaCreateBuffer(vk->vma(), &staging_buffer_info, &staging_buffer_alloc_info,
-                &uniform.staging_buffer, &uniform.staging_mem, &uniform.staging_mem_info); result != VK_SUCCESS)
-            {
-                return false;
-            }
-            vk->debug_name(std::format("{}-PerFrameConstantsStaging", m_name), uniform.staging_buffer);
-            uniform.staging_ptr = reinterpret_cast<PerFrameConstants*>(
-                static_cast<uint8_t*>(uniform.staging_mem_info.pMappedData));
             return true;
         }
         bool create_layout(const std::shared_ptr<vk::Context>& vk)
@@ -219,15 +181,74 @@ export namespace ce::shaders
             }
             return true;
         }
+        bool create_sets(const std::shared_ptr<vk::Context>& vk) noexcept
+        {
+            // Descriptor Pool
+            constexpr std::array descr_pool_sizes{
+                VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1024 },
+                // VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024 },
+                // VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024 },
+            };
+            const VkDescriptorPoolCreateInfo descr_pool_info{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                .maxSets = 1024,
+                .poolSizeCount = static_cast<uint32_t>(descr_pool_sizes.size()),
+                .pPoolSizes = descr_pool_sizes.data()
+            };
+            if (const VkResult result = vkCreateDescriptorPool(vk->device(),
+                &descr_pool_info, nullptr, &m_descriptor_pool); result != VK_SUCCESS)
+            {
+                return false;
+            }
+            vk->debug_name(std::format("{}_descr_pool", m_name), m_descriptor_pool);
+
+            // Descriptor Sets
+            m_descr_sets = std::vector(1024, VkDescriptorSet{VK_NULL_HANDLE});
+            const std::vector set_layouts(m_descr_sets.size(), m_set_layout);
+            const VkDescriptorSetAllocateInfo set_alloc_info{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = m_descriptor_pool,
+                .descriptorSetCount = static_cast<uint32_t>(set_layouts.size()),
+                .pSetLayouts = set_layouts.data()
+            };
+            if (const VkResult result = vkAllocateDescriptorSets(vk->device(),
+                &set_alloc_info, m_descr_sets.data()); result != VK_SUCCESS)
+            {
+                return false;
+            }
+            const VkDescriptorBufferInfo Uniforms_descriptor_info{
+                .buffer = m_uniform->buffer(),
+                .offset = 0,
+                .range = VK_WHOLE_SIZE
+            };
+            const std::vector write_descriptor_sets{
+                // Uniforms (type.Uniforms)
+                VkWriteDescriptorSet{
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = m_descr_sets[0],
+                    .dstBinding = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pBufferInfo = &Uniforms_descriptor_info
+                },
+            };
+            vkUpdateDescriptorSets(vk->device(), static_cast<uint32_t>(write_descriptor_sets.size()),
+                write_descriptor_sets.data(), 0, nullptr);
+            return true;
+        }
     public:
         explicit SolidFlatShader(const std::shared_ptr<vk::Context>& vk, const std::string_view name)
             : ShaderModule(vk, std::format("SolidFlat-{}", name)) { }
         ~SolidFlatShader() noexcept override = default;
-        bool create(const VkRenderPass renderpass) noexcept
+        [[nodiscard]] VkPipeline pipeline() const noexcept { return m_pipeline; }
+        [[nodiscard]] VkPipelineLayout layout() const noexcept { return m_layout; }
+        [[nodiscard]] VkDescriptorSet descriptor_set(const uint32_t index) const noexcept { return m_descr_sets[index]; }
+        [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform() const noexcept { return m_uniform; }
+        bool create(VkRenderPass renderpass) noexcept
         {
             const auto vk = m_vk.lock();
             if (!load_from_file(vk, "assets/shaders/solid-flat-vs.spv", "assets/shaders/solid-flat-ps.spv") ||
-                !create_uniform(vk) || !create_layout(vk) || !create_pipeline(vk, renderpass))
+                !create_uniform(vk) || !create_layout(vk) || !create_pipeline(vk, renderpass) || !create_sets(vk))
             {
                 return false;
             }
@@ -235,5 +256,3 @@ export namespace ce::shaders
         }
     };
 }
-
-std::vector<ce::shaders::SolidFlatShader::UniformsBuffer> ce::shaders::SolidFlatShader::uniforms;

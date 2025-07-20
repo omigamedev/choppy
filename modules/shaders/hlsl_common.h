@@ -3,6 +3,7 @@
     #define SEM(sem) : sem
     #define REGISTER(reg) : register(reg)
 #else
+    #pragma clang diagnostic ignored "-Wunknown-attributes"
     #define cbuffer struct
     #define SEM(sem)
     #define REGISTER(reg)

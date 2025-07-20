@@ -15,7 +15,6 @@ module;
 #include <vector>
 #include <algorithm>
 #include <functional>
-#include <memory>
 #include <ranges>
 #include <thread>
 #include <span>
@@ -52,6 +51,7 @@ class Context final
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
     VkExtent2D m_framebuffer_size{};
+    VkViewport m_viewport{};
     const uint32_t m_queue_index = 0;
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
     XrSwapchain color_swapchain = XR_NULL_HANDLE;
@@ -67,8 +67,8 @@ class Context final
     jobject m_android_context = nullptr;
     JavaVM* m_android_vm = nullptr;
 #endif
-    [[nodiscard]] std::vector<VkImage> swapchain_images(
-        const std::vector<XrSwapchainImageVulkanKHR>& swapchain) const noexcept
+    [[nodiscard]] static std::vector<VkImage> swapchain_images(
+        const std::vector<XrSwapchainImageVulkanKHR>& swapchain) noexcept
     {
         std::vector<VkImage> images;
         std::ranges::transform(swapchain,
@@ -121,12 +121,12 @@ class Context final
         xrResultToString(m_instance, r, sr);
         return sr;
     }
-    [[nodiscard]] const char* to_string(const VkResult r) const noexcept
+    [[nodiscard]] static const char* to_string(const VkResult r) noexcept
     {
         return vk::utils::to_string(r);
     }
-    [[nodiscard]] std::vector<std::string> split_string(
-        std::string_view str, char delimiter = ' ') const noexcept
+    [[nodiscard]] static std::vector<std::string> split_string(
+        std::string_view str, char delimiter = ' ') noexcept
     {
         auto tokens = str
             | std::views::split(delimiter)
@@ -148,7 +148,7 @@ class Context final
     XRAPI_ATTR XrResult XRAPI_CALL xrCreateVulkanInstanceKHR(
         const XrVulkanInstanceCreateInfoKHR*        createInfo,
         VkInstance*                                 vulkanInstance,
-        VkResult*                                   vulkanResult)
+        VkResult*                                   vulkanResult) const
     {
         static XrFunction<PFN_xrCreateVulkanInstanceKHR> fn{m_instance, "xrCreateVulkanInstanceKHR"};
         return fn.ptr(m_instance, createInfo, vulkanInstance, vulkanResult);
@@ -156,20 +156,20 @@ class Context final
     XRAPI_ATTR XrResult XRAPI_CALL xrCreateVulkanDeviceKHR(
         const XrVulkanDeviceCreateInfoKHR*          createInfo,
         VkDevice*                                   vulkanDevice,
-        VkResult*                                   vulkanResult)
+        VkResult*                                   vulkanResult) const
     {
         static XrFunction<PFN_xrCreateVulkanDeviceKHR> fn{m_instance, "xrCreateVulkanDeviceKHR"};
         return fn.ptr(m_instance, createInfo, vulkanDevice, vulkanResult);
     }
     XRAPI_ATTR XrResult XRAPI_CALL xrGetVulkanGraphicsDevice2KHR(
         const XrVulkanGraphicsDeviceGetInfoKHR*     getInfo,
-        VkPhysicalDevice*                           vulkanPhysicalDevice)
+        VkPhysicalDevice*                           vulkanPhysicalDevice) const
     {
         static XrFunction<PFN_xrGetVulkanGraphicsDevice2KHR> fn{m_instance, "xrGetVulkanGraphicsDevice2KHR"};
         return fn.ptr(m_instance, getInfo, vulkanPhysicalDevice);
     }
     XRAPI_ATTR XrResult XRAPI_CALL xrGetVulkanGraphicsRequirements2KHR(
-        XrGraphicsRequirementsVulkanKHR*            graphicsRequirements)
+        XrGraphicsRequirementsVulkanKHR*            graphicsRequirements) const
     {
         static XrFunction<PFN_xrGetVulkanGraphicsRequirements2KHR> fn{m_instance, "xrGetVulkanGraphicsRequirements2KHR"};
         return fn.ptr(m_instance, m_system, graphicsRequirements);
@@ -178,7 +178,7 @@ class Context final
     XRAPI_ATTR XrResult XRAPI_CALL xrGetVulkanInstanceExtensionsKHR(
         uint32_t                                    bufferCapacityInput,
         uint32_t*                                   bufferCountOutput,
-        char*                                       buffer)
+        char*                                       buffer) const
     {
         static XrFunction<PFN_xrGetVulkanInstanceExtensionsKHR> fn{m_instance, "xrGetVulkanInstanceExtensionsKHR"};
         return fn.ptr(m_instance, m_system, bufferCapacityInput, bufferCountOutput, buffer);
@@ -186,13 +186,13 @@ class Context final
     XRAPI_ATTR XrResult XRAPI_CALL xrGetVulkanDeviceExtensionsKHR(
         uint32_t                                    bufferCapacityInput,
         uint32_t*                                   bufferCountOutput,
-        char*                                       buffer)
+        char*                                       buffer) const
     {
         static XrFunction<PFN_xrGetVulkanDeviceExtensionsKHR> fn{m_instance, "xrGetVulkanDeviceExtensionsKHR"};
         return fn.ptr(m_instance, m_system, bufferCapacityInput, bufferCountOutput, buffer);
     }
 
-    XRAPI_ATTR XrResult XRAPI_CALL xrInitializeLoaderKHR(
+    XRAPI_ATTR static XrResult XRAPI_CALL xrInitializeLoaderKHR(
             const XrLoaderInitInfoBaseHeaderKHR*        loaderInitInfo)
     {
         static XrFunction<PFN_xrInitializeLoaderKHR> fn{XR_NULL_HANDLE, "xrInitializeLoaderKHR"};
@@ -210,6 +210,16 @@ public:
     [[nodiscard]] VkRenderPass renderpass() const noexcept { return m_renderpass; }
     [[nodiscard]] VkFramebuffer framebuffer() const noexcept { return m_framebuffer; }
     [[nodiscard]] VkExtent2D framebuffer_size() const noexcept { return m_framebuffer_size; }
+    [[nodiscard]] VkViewport viewport() const noexcept
+    {
+        return VkViewport{0, 0,
+            static_cast<float>(m_framebuffer_size.width),
+            static_cast<float>(m_framebuffer_size.height), 0, 1};
+    }
+    [[nodiscard]] VkRect2D scissor() const noexcept
+    {
+        return VkRect2D{0, 0, m_framebuffer_size.width, m_framebuffer_size.height};
+    }
     [[nodiscard]] std::vector<VkImage> swapchain_color_images() const noexcept
     {
         return swapchain_images(color_swapchain_images);
@@ -476,10 +486,10 @@ public:
                | std::views::transform([](const VkExtensionProperties& v)->std::string{ return v.extensionName; })
                | std::ranges::to<std::vector<std::string>>();
         }();
-        for (const auto& e : device_extensions)
-        {
-            // LOGI("XR Vulkan Device Ext: %s", e.c_str());
-        }
+        // for (const auto& e : device_extensions)
+        // {
+        //     LOGI("XR Vulkan Device Ext: %s", e.c_str());
+        // }
 
         // Create Device
 
@@ -521,6 +531,7 @@ public:
             VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME,
             VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
             VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+            VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
         };
         constexpr std::array vk_device_optional_extensions{
             VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
@@ -604,7 +615,7 @@ public:
         robustness_feature.robustImageAccess2 = false;
         multiview_feature.multiviewGeometryShader = false;
         multiview_feature.multiviewTessellationShader = false;
-        bda_feature.bufferDeviceAddressCaptureReplay = false;
+        bda_feature.bufferDeviceAddressCaptureReplay = false; // enable for debugging BDA
         bda_feature.bufferDeviceAddressMultiDevice = false;
         // enable supported features
         const VkPhysicalDeviceFeatures2 enabled_features{
