@@ -60,7 +60,7 @@ foreach(ENTRY_INDEX RANGE ${MAX_INDEX})
     get_filename_component(FILE_WE ${FILE} NAME_WE)
     get_filename_component(FILE_DIR ${FILE} DIRECTORY)
     file(GLOB SHADER_SOURCES "${FILE_DIR}/*.h" ${FILE})
-    # message(STATUS "Shader ${FILE} in ${FILE_DIR} depends on ${SHADER_SOURCES}")
+    message(STATUS "Shader ${FILE} in ${FILE_DIR} depends on ${SHADER_SOURCES}")
 
     # Append the profile to the output filename to prevent VS/PS builds
     # from the same source file from overwriting each other.
@@ -77,7 +77,7 @@ foreach(ENTRY_INDEX RANGE ${MAX_INDEX})
         COMMAND ${DXC_EXECUTABLE} -spirv -T ${HLSL_PROFILE}_${HLSL_PROFILE_VERSION}
             -E ${ENTRY_POINT} $<IF:$<CONFIG:DEBUG>,-Od,-O1> -Zi -Fo ${SPIRV_OUTPUT} ${FILE}
         COMMAND ${SPIRV_REFLECT_EXECUTABLE} ${SPIRV_OUTPUT} > ${REFLECTION_OUTPUT}
-        MAIN_DEPENDENCY ${SHADER_SOURCES}
+        DEPENDS ${SHADER_SOURCES}
         COMMENT "Compiling HLSL: ${FILE} (${HLSL_PROFILE}) to ${SPIRV_OUTPUT}"
         VERBATIM)
 

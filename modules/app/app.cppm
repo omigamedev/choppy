@@ -35,15 +35,41 @@ public:
     ~AppBase() = default;
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
+
+    static std::vector<shaders::SolidFlatShader::VertexInput> build_triangle() noexcept
+    {
+        return std::vector<shaders::SolidFlatShader::VertexInput>{
+            {.position = {-0.5f, -0.5f, 0.5f, 1.f}, .color = {1, 0, 0, 1}},
+            {.position = {-0.5f,  0.5f, 0.5f, 1.f}, .color = {0, 1, 0, 1}},
+            {.position = { 0.5f, -0.5f, 0.5f, 1.f}, .color = {0, 0, 1, 1}},
+        };
+    }
+    static std::vector<shaders::SolidFlatShader::VertexInput> build_floor(
+        const int32_t cols, const int32_t rows, const float size)
+    {
+        std::vector<shaders::SolidFlatShader::VertexInput> v;
+        const float x_off = -(rows / 2) * size;
+        const float z_off = -(cols / 2) * size;
+        const float h = 0;
+        for (int i = 0; i < rows; ++i)
+        {
+            for (int j = 0; j < cols; ++j)
+            {
+                v.emplace_back(glm::vec4{x_off + i * size, h, z_off +  j * size, 1}, glm::vec4{1, 0, 0, 1});
+                v.emplace_back(glm::vec4{x_off + i * size, h, z_off + (j + 1) * size, 1}, glm::vec4{0, 1, 0, 1});
+                v.emplace_back(glm::vec4{x_off + (i + 1) * size, h, z_off + j * size, 1}, glm::vec4{1, 1, 0, 1});
+                v.emplace_back(glm::vec4{x_off + (i + 1) * size, h, z_off + j * size, 1}, glm::vec4{1, 1, 0, 1});
+                v.emplace_back(glm::vec4{x_off + i * size, h, z_off + (j + 1) * size, 1}, glm::vec4{0, 1, 0, 1});
+                v.emplace_back(glm::vec4{x_off + (i + 1) * size, h, z_off + (j + 1) * size, 1}, glm::vec4{0, 0, 1, 1});
+            }
+        }
+        return v;
+    }
     void init() noexcept
     {
         solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
         solid_flat->create(m_xr->renderpass());
-        vertices = std::vector<shaders::SolidFlatShader::VertexInput>{
-            {float3{-0.5f, -0.5f, 0.5f}},
-            {float3{-0.5f,  0.5f, 0.5f}},
-            {float3{ 0.5f, -0.5f, 0.5f}},
-        };
+        vertices = build_floor(20, 20, 0.1f);
         m_vertex_buffer = std::make_shared<vk::Buffer>(m_vk, "VertexBuffer");
         m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -77,8 +103,9 @@ public:
         static float time = 0;
         time += dt;
         m_xr->present([this, t=time](const xr::FrameContext& frame){
-            uniform.WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0]);
-            uniform.WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1]);
+            const glm::mat4 camera = glm::gtx::translate(glm::vec3{0, -1, 0});
+            uniform.WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * camera);
+            uniform.WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * camera);
             m_vk->exec("render_eye", [this, frame, t](VkCommandBuffer cmd){
                 solid_flat->uniform()->update_cmd<shaders::SolidFlatShader::PerFrameConstants>(cmd, uniform);
                 const std::array rgb{
@@ -126,7 +153,7 @@ public:
                 const VkDescriptorSet descriptor_set = solid_flat->descriptor_set(0);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
-                vkCmdDraw(cmd, 3, 1, 0, 0);
+                vkCmdDraw(cmd, vertices.size(), 1, 0, 0);
 
                 // End rendering
 

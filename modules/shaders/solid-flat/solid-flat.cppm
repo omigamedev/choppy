@@ -92,7 +92,7 @@ export namespace ce::shaders
             constexpr std::array input_binding{
                 VkVertexInputBindingDescription{
                     .binding = 0,
-                    .stride = sizeof(VertexInput::position),
+                    .stride = sizeof(VertexInput),
                     .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
                 }
             };
@@ -100,9 +100,15 @@ export namespace ce::shaders
                 VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
-                    .format = VK_FORMAT_R32G32B32_SFLOAT,
+                    .format = VK_FORMAT_R32G32B32A32_SFLOAT,
                     .offset = offsetof(VertexInput, position)
-                }
+                },
+                VkVertexInputAttributeDescription{
+                    .location = 1,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                    .offset = offsetof(VertexInput, color)
+                },
             };
             const VkPipelineVertexInputStateCreateInfo input{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
