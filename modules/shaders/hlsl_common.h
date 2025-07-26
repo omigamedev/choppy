@@ -3,6 +3,7 @@
     #define SEM(sem) : sem
     #define REGISTER(reg) : register(reg)
 #else
+    #include "hlsl_types.h"
     #ifdef __clang__
         #pragma clang diagnostic ignored "-Wunknown-attributes"
     #endif

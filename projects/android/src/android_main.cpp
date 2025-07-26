@@ -81,7 +81,6 @@ public:
         // xr: enumerate views
         // for each view
         //     vk: create the swapchain image views
-        //
         session_started = true;
         app.init();
         return true;

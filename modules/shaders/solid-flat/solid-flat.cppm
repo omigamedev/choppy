@@ -12,7 +12,6 @@ import ce.shaders;
 import ce.vk;
 import glm;
 
-using namespace glm;
 export namespace ce::shaders
 {
     class SolidFlatShader final : public vk::ShaderModule

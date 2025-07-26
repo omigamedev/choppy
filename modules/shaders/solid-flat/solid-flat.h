@@ -15,5 +15,5 @@ struct VertexInput
 struct PixelInput
 {
     float4 position SEM(SV_POSITION);
-    float4 color SEM(COLOR);
+    [[vk::location(1)]] float4 color SEM(COLOR);
 };

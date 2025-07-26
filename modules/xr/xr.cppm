@@ -49,6 +49,7 @@ class Context final
     XrInstance m_instance = XR_NULL_HANDLE;
     XrSystemId m_system = 0;
     XrSession m_session = XR_NULL_HANDLE;
+    XrSessionState m_session_state = XR_SESSION_STATE_UNKNOWN;
     XrSpace m_space = XR_NULL_HANDLE;
     VkInstance m_vk_instance = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
@@ -68,6 +69,12 @@ class Context final
     std::vector<VkImageView> color_swapchain_views;
     std::vector<VkImageView> depth_swapchain_views;
     std::vector<XrViewConfigurationView> view_configs;
+    // Input bindings
+    XrActionSet m_action_set = XR_NULL_HANDLE;
+    XrAction m_action_teleport = XR_NULL_HANDLE;
+    XrAction m_action_haptic = XR_NULL_HANDLE;
+    XrPath m_hand_path_left = XR_NULL_PATH;
+    XrPath m_hand_path_right = XR_NULL_PATH;
 #ifdef __ANDROID__
     jobject m_android_context = nullptr;
     JavaVM* m_android_vm = nullptr;
@@ -232,6 +239,14 @@ public:
     [[nodiscard]] std::vector<VkImage> swapchain_depth_images() const noexcept
     {
         return swapchain_images(depth_swapchain_images);
+    }
+    [[nodiscard]] bool state_active() const noexcept
+    {
+        return m_session_state == XR_SESSION_STATE_VISIBLE || m_session_state == XR_SESSION_STATE_FOCUSED;
+    }
+    [[nodiscard]] bool state_focused() const noexcept
+    {
+        return m_session_state == XR_SESSION_STATE_FOCUSED;
     }
 
 #ifdef __ANDROID__
@@ -990,6 +1005,187 @@ public:
         debug_name("ce_framebuffer", m_framebuffer);
         return true;
     }
+    bool bind_input() noexcept
+    {
+        // Create an action set
+        XrActionSetCreateInfo action_set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
+        std::ranges::copy("gameplay", action_set_info.actionSetName);
+        std::ranges::copy("Gameplay", action_set_info.localizedActionSetName);
+        action_set_info.priority = 0;
+        if (const XrResult result = xrCreateActionSet(m_instance, &action_set_info, &m_action_set);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrCreateActionSet failed: %s", to_string(result));
+            return false;
+        }
+
+        // create a "teleport" input action
+        XrActionCreateInfo action_info{XR_TYPE_ACTION_CREATE_INFO};
+        std::ranges::copy("teleport", action_info.actionName);
+        std::ranges::copy("Teleport", action_info.localizedActionName);
+        action_info.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+        if (const XrResult result = xrCreateAction(m_action_set, &action_info, &m_action_teleport);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrCreateAction failed: %s", to_string(result));
+            return false;
+        }
+
+        xrStringToPath(m_instance, "/user/hand/left", &m_hand_path_left);
+        xrStringToPath(m_instance, "/user/hand/right", &m_hand_path_right);
+
+        // create a "player_hit" output
+        const std::array hand_subaction_paths{
+            m_hand_path_left,
+            m_hand_path_right
+        };
+        XrActionCreateInfo hapticsactioninfo{XR_TYPE_ACTION_CREATE_INFO};
+        std::ranges::copy("player_hit", hapticsactioninfo.actionName);
+        std::ranges::copy("Player hit", hapticsactioninfo.localizedActionName);
+        hapticsactioninfo.actionType = XR_ACTION_TYPE_VIBRATION_OUTPUT;
+        hapticsactioninfo.countSubactionPaths = static_cast<uint32_t>(hand_subaction_paths.size());
+        hapticsactioninfo.subactionPaths = hand_subaction_paths.data();
+        if (const XrResult result = xrCreateAction(m_action_set, &hapticsactioninfo, &m_action_haptic);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrCreateAction failed: %s", to_string(result));
+            return false;
+        }
+
+        XrPath triggerClickPath, hapticPath;
+        if (const XrResult result = xrStringToPath(m_instance, "/user/hand/right/input/a/click",
+            &triggerClickPath); result != XR_SUCCESS)
+        {
+            LOGE("xrStringToPath failed: %s", to_string(result));
+            return false;
+        }
+        if (const XrResult result = xrStringToPath(m_instance, "/user/hand/right/output/haptic", &hapticPath);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrStringToPath failed: %s", to_string(result));
+            return false;
+        }
+
+        XrPath interactionProfilePath;
+        if (const XrResult result = xrStringToPath(m_instance, "/interaction_profiles/oculus/touch_controller",
+            &interactionProfilePath); result != XR_SUCCESS)
+        {
+            LOGE("xrStringToPath failed: %s", to_string(result));
+            return false;
+        }
+
+        const std::array bindings{
+            XrActionSuggestedBinding{m_action_teleport, triggerClickPath},
+            XrActionSuggestedBinding{m_action_haptic, hapticPath},
+        };
+
+        XrInteractionProfileSuggestedBinding suggestedBindings{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+        suggestedBindings.interactionProfile = interactionProfilePath;
+        suggestedBindings.countSuggestedBindings = bindings.size();
+        suggestedBindings.suggestedBindings = bindings.data();
+        if (const XrResult result = xrSuggestInteractionProfileBindings(m_instance, &suggestedBindings);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrSuggestInteractionProfileBinding failed: %s", to_string(result));
+            return false;
+        }
+
+        XrSessionActionSetsAttachInfo attachInfo{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
+        attachInfo.countActionSets = 1;
+        attachInfo.actionSets = &m_action_set;
+        if (const XrResult result = xrAttachSessionActionSets(m_session, &attachInfo);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrAttachSessionActionSets failed: %s", to_string(result));
+            return false;
+        }
+
+        return true;
+    }
+    bool sync_input() const noexcept
+    {
+        // sync action data
+        XrActiveActionSet activeActionSet{m_action_set, XR_NULL_PATH};
+        XrActionsSyncInfo syncInfo{XR_TYPE_ACTIONS_SYNC_INFO};
+        syncInfo.countActiveActionSets = 1;
+        syncInfo.activeActionSets = &activeActionSet;
+        if (const XrResult result = xrSyncActions(m_session, &syncInfo);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrSyncActions failed: %s", to_string(result));
+            return false;
+        }
+
+        // query input action state
+        XrActionStateBoolean teleportState{XR_TYPE_ACTION_STATE_BOOLEAN};
+        XrActionStateGetInfo getInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+        getInfo.action = m_action_teleport;
+        if (const XrResult result = xrGetActionStateBoolean(m_session, &getInfo, &teleportState);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrGetActionStateBoolean failed: %s", to_string(result));
+            return false;
+        }
+
+        if (teleportState.changedSinceLastSync && teleportState.currentState)
+        {
+            LOGI("FIRE");
+            // fire haptics using output action
+            XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
+            vibration.amplitude = 0.5;
+            vibration.duration = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::milliseconds(300)).count();
+            vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+            XrHapticActionInfo hapticActionInfo{XR_TYPE_HAPTIC_ACTION_INFO};
+            hapticActionInfo.action = m_action_haptic;
+            hapticActionInfo.subactionPath = m_hand_path_right;
+            const auto header = reinterpret_cast<const XrHapticBaseHeader*>(&vibration);
+            if (const XrResult result = xrApplyHapticFeedback(m_session, &hapticActionInfo, header);
+                result != XR_SUCCESS)
+            {
+                LOGE("xrApplyHapticFeedback failed: %s", to_string(result));
+                return false;
+            }
+        }
+        return true;
+    }
+    void handle_state_change(const XrEventDataSessionStateChanged* e) noexcept
+    {
+        switch (e->state) {
+        case XR_SESSION_STATE_IDLE:
+            break;
+        case XR_SESSION_STATE_READY:
+            break;
+        case XR_SESSION_STATE_SYNCHRONIZED:
+            break;
+        case XR_SESSION_STATE_VISIBLE:
+            break;
+        case XR_SESSION_STATE_FOCUSED:
+            break;
+        case XR_SESSION_STATE_STOPPING:
+            break;
+        case XR_SESSION_STATE_LOSS_PENDING:
+            break;
+        case XR_SESSION_STATE_EXITING:
+            break;
+        default:
+            break;
+        }
+    }
+    void poll_events() noexcept
+    {
+        XrEventDataBuffer event_data{.type = XR_TYPE_EVENT_DATA_BUFFER};
+        while (xrPollEvent(m_instance, &event_data) == XR_SUCCESS)
+        {
+            if (event_data.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED)
+            {
+                const auto* e = reinterpret_cast<const XrEventDataSessionStateChanged*>(&event_data);
+                LOGI("OpenXR session state changed to: %s", utils::to_string(e->state));
+                m_session_state = e->state;
+                handle_state_change(e);
+            }
+            event_data.type = XR_TYPE_EVENT_DATA_BUFFER; // Reset for the next poll
+        }
+    }
     void present(const std::function<void(const FrameContext& frame)>& render_callback) const noexcept
     {
         constexpr XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
@@ -1039,29 +1235,32 @@ public:
             return;
         }
 
-        FrameContext frame{
-            .size = m_framebuffer_size,
-            .color_image = color_swapchain_images[acquired_index].image,
-            .depth_image = depth_swapchain_images[acquired_index].image,
-            .color_view = color_swapchain_views[acquired_index],
-            .depth_view = depth_swapchain_views[acquired_index],
-            .framebuffer = m_framebuffer,
-            .renderpass = m_renderpass,
-        };
-
-        for (uint32_t i = 0; i < views_count; i++)
+        if (frame_state.shouldRender)
         {
-            XrMatrix4x4f projection_matrix;
-            XrMatrix4x4f_CreateProjectionFov(&projection_matrix,
-                GRAPHICS_VULKAN, views[i].fov, 0.1f, 100.f);
-            const glm::mat4 proj = glm::gtc::make_mat4(projection_matrix.m);
-            const glm::mat4 cam_t = glm::gtx::translate(glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position)));
-            const glm::quat cam_q = glm::gtc::make_quat(reinterpret_cast<float*>(&views[i].pose.orientation));
-            frame.projection[i] = proj;
-            frame.view[i] = glm::inverse(cam_t * glm::gtc::mat4_cast(cam_q));
-        }
+            FrameContext frame{
+                .size = m_framebuffer_size,
+                .color_image = color_swapchain_images[acquired_index].image,
+                .depth_image = depth_swapchain_images[acquired_index].image,
+                .color_view = color_swapchain_views[acquired_index],
+                .depth_view = depth_swapchain_views[acquired_index],
+                .framebuffer = m_framebuffer,
+                .renderpass = m_renderpass,
+            };
 
-        render_callback(frame);
+            for (uint32_t i = 0; i < views_count; i++)
+            {
+                XrMatrix4x4f projection_matrix;
+                XrMatrix4x4f_CreateProjectionFov(&projection_matrix,
+                    GRAPHICS_VULKAN, views[i].fov, 0.1f, 100.f);
+                const glm::mat4 proj = glm::gtc::make_mat4(projection_matrix.m);
+                const glm::mat4 cam_t = glm::gtx::translate(glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position)));
+                const glm::quat cam_q = glm::gtc::make_quat(reinterpret_cast<float*>(&views[i].pose.orientation));
+                frame.projection[i] = proj;
+                frame.view[i] = glm::inverse(cam_t * glm::gtc::mat4_cast(cam_q));
+            }
+
+            render_callback(frame);
+        }
 
         std::vector layer_views(views_count, XrCompositionLayerProjectionView{});
         for (uint32_t i = 0; i < views_count; i++)
