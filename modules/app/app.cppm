@@ -183,6 +183,7 @@ public:
                 LOGE("Failed to sync input");
             }
             m_xr->present([this, dt](const xr::FrameContext& frame){
+                m_xr->sync_pose(frame.display_time);
                 const glm::mat4 camera = glm::gtx::translate(glm::vec3{0, -1, 0});
                 uniform.WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * camera);
                 uniform.WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * camera);
