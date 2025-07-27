@@ -32,7 +32,7 @@ import glm;
 
 export namespace ce::app
 {
-class Cube
+class Cube final
 {
     std::shared_ptr<vk::Buffer> m_vertex_buffer;
     std::shared_ptr<vk::Buffer> m_index_buffer;
@@ -116,6 +116,9 @@ class AppBase final
     shaders::SolidFlatShader::PerFrameConstants uniform{};
 	siv::PerlinNoise perlin{ std::random_device{} };
     std::shared_ptr<Cube> m_cube;
+    std::vector<VkCommandBuffer> m_present_cmd;
+    std::vector<VkFence> m_present_fences;
+    uint32_t m_present_index = 0;
 public:
     ~AppBase() = default;
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
@@ -157,6 +160,9 @@ public:
     }
     void init() noexcept
     {
+        m_present_cmd = m_vk->create_command_buffers("eye_frame", m_xr->swapchain_count());
+        m_present_fences = m_vk->create_fences("eye_fence", m_xr->swapchain_count(), VK_FENCE_CREATE_SIGNALED_BIT);
+
         m_xr->bind_input();
         solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
         solid_flat->create(m_xr->renderpass());
@@ -295,12 +301,23 @@ public:
             {
                 LOGE("Failed to sync input");
             }
+            vkWaitForFences(m_vk->device(), 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
+            vkResetFences(m_vk->device(), 1, &m_present_fences[m_present_index]);
+            vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
+
+            constexpr VkCommandBufferBeginInfo cmd_begin_info{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            };
+            vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
+
             m_xr->present([this, dt](const xr::FrameContext& frame){
                 m_xr->sync_pose(frame.display_time);
-                m_vk->exec("render_eye", [this, frame, dt](VkCommandBuffer cmd){
-                    render(frame, dt, cmd);
-                });
+                render(frame, dt, m_present_cmd[m_present_index]);
             });
+
+            vkEndCommandBuffer(m_present_cmd[m_present_index]);
+            m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index]);
+            m_present_index = (m_present_index + 1) % m_xr->swapchain_count();
         }
         else
         {

@@ -34,6 +34,7 @@ class Context final
     VkDevice m_device = VK_NULL_HANDLE;
     VkQueue m_queue = VK_NULL_HANDLE;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
+    VkCommandPool m_cmd_pool = VK_NULL_HANDLE;
     VkCommandPool m_cmd_pool_imm = VK_NULL_HANDLE;
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
     VkPhysicalDeviceLimits m_physical_device_limits = {};
@@ -66,7 +67,6 @@ public:
         m_physical_device_limits = physical_device_properties.properties.limits;
         LOGI("Vulkan device: %s", physical_device_properties.properties.deviceName);
 
-
         const VkDeviceQueueInfo2 get_queue_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2,
             .queueFamilyIndex = m_queue_family_index,
@@ -79,17 +79,34 @@ public:
             return false;
         }
         debug_name("ce_queue", m_queue);
-        const VkCommandPoolCreateInfo pool_info = {
+
+        // Immediate command pool
+        const VkCommandPoolCreateInfo pool_imm_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .queueFamilyIndex = m_queue_family_index
         };
-        if (const VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm);
+        if (const VkResult result = vkCreateCommandPool(m_device, &pool_imm_info, nullptr, &m_cmd_pool_imm);
             result != VK_SUCCESS)
         {
             LOGE("Failed to create command pool");
             return false;
         }
         debug_name("ce_command_pool_imm", m_cmd_pool_imm);
+
+        // Resettable command queue
+        const VkCommandPoolCreateInfo pool_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = m_queue_family_index
+        };
+        if (const VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create command pool");
+            return false;
+        }
+        debug_name("ce_command_pool", m_cmd_pool);
+
         // Init VMA
         VmaVulkanFunctions vulkanFunctions = {};
         vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
@@ -234,6 +251,78 @@ public:
         }
         return true;
     }
+    [[nodiscard]] VkCommandBuffer create_command_buffer(const std::string& name) const noexcept
+    {
+        const VkCommandBufferAllocateInfo cmd_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = m_cmd_pool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1
+        };
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        if (const VkResult result = vkAllocateCommandBuffers(m_device, &cmd_info, &cmd); result != VK_SUCCESS)
+        {
+            LOGE("Failed to allocate command buffer");
+            return VK_NULL_HANDLE;
+        }
+        debug_name(name, cmd);
+        return cmd;
+    }
+    [[nodiscard]] std::vector<VkCommandBuffer> create_command_buffers(
+        const std::string& name, const uint32_t count) const noexcept
+    {
+        const VkCommandBufferAllocateInfo cmd_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = m_cmd_pool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = count
+        };
+        std::vector<VkCommandBuffer> cmds(count);
+        if (const VkResult result = vkAllocateCommandBuffers(m_device, &cmd_info, cmds.data()); result != VK_SUCCESS)
+        {
+            LOGE("Failed to allocate command buffer");
+            return {};
+        }
+        for (uint32_t i = 0; i < count; i++)
+        {
+            debug_name(std::format("{}[{}]", name, i), cmds[i]);
+        }
+        return cmds;
+    }
+    [[nodiscard]] VkFence create_fence(const std::string& name, const VkFenceCreateFlags flags = {}) const noexcept
+    {
+        VkFence fence = VK_NULL_HANDLE;
+        const VkFenceCreateInfo fence_info{
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = flags
+        };
+        if (const VkResult result = vkCreateFence(m_device, &fence_info, nullptr, &fence); result != VK_SUCCESS)
+        {
+            LOGE("Failed to create fence");
+            return VK_NULL_HANDLE;
+        }
+        debug_name(name, fence);
+        return fence;
+    }
+    [[nodiscard]] std::vector<VkFence> create_fences(const std::string& name,
+        const uint32_t count, const VkFenceCreateFlags flags = {}) const noexcept
+    {
+        std::vector<VkFence> fences(count, VK_NULL_HANDLE);
+        const VkFenceCreateInfo fence_info{
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = flags
+        };
+        for (uint32_t i = 0; i < count; i++)
+        {
+            if (const VkResult result = vkCreateFence(m_device, &fence_info, nullptr, &fences[i]); result != VK_SUCCESS)
+            {
+                LOGE("Failed to create fence %d", i);
+                continue;
+            }
+            debug_name(std::format("{}[{}]", name, i), fences[i]);
+        }
+        return fences;
+    }
     void exec_immediate(std::string_view name, const std::function<void(VkCommandBuffer cmd)>& fn) const noexcept
     {
         VkFence fence = VK_NULL_HANDLE;
@@ -280,6 +369,15 @@ public:
         }
         vkFreeCommandBuffers(m_device, m_cmd_pool_imm, 1, &cmd);
         vkDestroyFence(m_device, fence, nullptr);
+    }
+    void submit(VkCommandBuffer cmd, VkFence fence = VK_NULL_HANDLE) const noexcept
+    {
+        const VkSubmitInfo submit_info{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd
+        };
+        vkQueueSubmit(m_queue, 1, &submit_info, fence);
     }
     void exec(std::string_view name, const std::function<void(VkCommandBuffer cmd)>& fn) const noexcept
     {

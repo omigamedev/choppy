@@ -236,6 +236,10 @@ public:
     {
         return VkRect2D{0, 0, m_framebuffer_size.width, m_framebuffer_size.height};
     }
+    [[nodiscard]] uint32_t swapchain_count() const noexcept
+    {
+        return static_cast<uint32_t>(color_swapchain_images.size());
+    }
     [[nodiscard]] std::vector<VkImage> swapchain_color_images() const noexcept
     {
         return swapchain_images(color_swapchain_images);
@@ -1015,7 +1019,7 @@ public:
         debug_name("ce_framebuffer", m_framebuffer);
         return true;
     }
-    XrActionSet create_action_set(const std::string_view name) const noexcept
+    [[nodiscard]] XrActionSet create_action_set(const std::string_view name) const noexcept
     {
         XrActionSetCreateInfo action_set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
         std::ranges::copy(name, action_set_info.actionSetName);
@@ -1030,7 +1034,7 @@ public:
         }
         return action_set;
     }
-    XrSpace create_action_space(XrAction action, const XrPath hand) const noexcept
+    [[nodiscard]] XrSpace create_action_space(XrAction action, const XrPath hand) const noexcept
     {
         const XrActionSpaceCreateInfo info{
             .type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
@@ -1047,7 +1051,7 @@ public:
         }
         return space;
     }
-    XrAction create_action(const std::string_view name, XrActionType type,
+    [[nodiscard]] XrAction create_action(const std::string_view name, XrActionType type,
         const std::span<const XrPath> subactions = {}) const noexcept
     {
         XrActionCreateInfo action_info{XR_TYPE_ACTION_CREATE_INFO};
@@ -1065,7 +1069,7 @@ public:
         }
         return action;
     }
-    XrPath create_path(const std::string& path) const noexcept
+    [[nodiscard]] XrPath create_path(const std::string& path) const noexcept
     {
         XrPath xr_path = XR_NULL_PATH;
         if (const XrResult result = xrStringToPath(m_instance, path.c_str(), &xr_path);
@@ -1134,7 +1138,7 @@ public:
         }
         return true;
     }
-    std::optional<XrActionStateBoolean> action_state_boolean(XrAction action) const noexcept
+    [[nodiscard]] std::optional<XrActionStateBoolean> action_state_boolean(XrAction action) const noexcept
     {
         XrActionStateBoolean state{XR_TYPE_ACTION_STATE_BOOLEAN};
         XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
@@ -1147,7 +1151,7 @@ public:
         }
         return state;
     }
-    std::optional<XrPosef> action_state_pose(XrAction action, const XrPath hand_path,
+    [[nodiscard]] std::optional<XrPosef> action_state_pose(XrAction action, const XrPath hand_path,
         XrSpace space, const XrTime time) const noexcept
     {
         XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
