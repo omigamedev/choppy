@@ -910,7 +910,8 @@ public:
         // Renderpass
 
         const std::array renderpass_attachments{
-            VkAttachmentDescription{
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
                 .format = color_format,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -920,7 +921,8 @@ public:
                 .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
             },
-            VkAttachmentDescription{
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
                 .format = depth_format,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -931,39 +933,34 @@ public:
                 .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
             },
         };
-        constexpr VkAttachmentReference renderpass_sub_color{
+        constexpr VkAttachmentReference2 renderpass_sub_color{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
             .attachment = 0,
             .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         };
-        constexpr VkAttachmentReference renderpass_sub_depth{
+        constexpr VkAttachmentReference2 renderpass_sub_depth{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
             .attachment = 1,
             .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
         };
         const std::array renderpass_sub{
-            VkSubpassDescription{
+            VkSubpassDescription2{
+                .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2,
                 .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+                .viewMask = 0b11, // enable multiview rendering
                 .colorAttachmentCount = 1,
                 .pColorAttachments = &renderpass_sub_color,
                 .pDepthStencilAttachment = &renderpass_sub_depth
             },
         };
-        constexpr uint32_t multiview_mask = 0b11;
-        const VkRenderPassMultiviewCreateInfo renderpass_multiview_info{
-            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO,
-            .subpassCount = 1,
-            .pViewMasks = &multiview_mask,
-            .correlationMaskCount = 1,
-            .pCorrelationMasks = &multiview_mask,
-        };
-        const VkRenderPassCreateInfo renderpass_info{
-            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-            .pNext = &renderpass_multiview_info,
+        const VkRenderPassCreateInfo2 renderpass_info{
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2,
             .attachmentCount = static_cast<uint32_t>(renderpass_attachments.size()),
             .pAttachments = renderpass_attachments.data(),
             .subpassCount = static_cast<uint32_t>(renderpass_sub.size()),
             .pSubpasses = renderpass_sub.data()
         };
-        if (const VkResult result = vkCreateRenderPass(m_device, &renderpass_info, nullptr, &m_renderpass);
+        if (const VkResult result = vkCreateRenderPass2(m_device, &renderpass_info, nullptr, &m_renderpass);
             result != VK_SUCCESS)
         {
             LOGE("vkCreateRenderPass failed: %s", to_string(result));
