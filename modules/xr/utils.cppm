@@ -39,7 +39,7 @@ export namespace ce::xr::utils
     );
     const glm::mat4 rotationMatrix = glm::gtc::mat4_cast(orientation);
     const glm::mat4 translationMatrix = glm::gtc::translate(glm::mat4(1.0f), position);
-    return glm::inverse(translationMatrix * rotationMatrix);
+    return translationMatrix * rotationMatrix;
 }
 [[nodiscard]] glm::mat4 projection(const XrFovf& fov, const float nearZ, const float farZ) noexcept
 {

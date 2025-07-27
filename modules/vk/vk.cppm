@@ -36,6 +36,7 @@ class Context final
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkCommandPool m_cmd_pool_imm = VK_NULL_HANDLE;
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
+    VkPhysicalDeviceLimits m_physical_device_limits = {};
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
     const uint32_t m_queue_index = 0;
     VmaAllocator m_vma = VK_NULL_HANDLE;
@@ -45,6 +46,10 @@ public:
     [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
     [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
     [[nodiscard]] VmaAllocator vma() const noexcept { return m_vma; }
+    [[nodiscard]] const VkPhysicalDeviceLimits& physical_device_limits() const noexcept
+    {
+        return m_physical_device_limits;
+    }
     bool create_from(VkInstance instance, VkDevice device,
         VkPhysicalDevice physical_device, uint32_t queue_family_index) noexcept
     {
@@ -55,6 +60,12 @@ public:
         m_physical_device = physical_device;
         debug_name("ce_physical_device", m_physical_device);
         m_queue_family_index = queue_family_index;
+
+        VkPhysicalDeviceProperties2 physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        vkGetPhysicalDeviceProperties2(m_physical_device, &physical_device_properties);
+        m_physical_device_limits = physical_device_properties.properties.limits;
+        LOGI("Vulkan device: %s", physical_device_properties.properties.deviceName);
+
 
         const VkDeviceQueueInfo2 get_queue_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2,
@@ -72,7 +83,8 @@ public:
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .queueFamilyIndex = m_queue_family_index
         };
-        if (const VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm); result != VK_SUCCESS)
+        if (const VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm);
+            result != VK_SUCCESS)
         {
             LOGE("Failed to create command pool");
             return false;

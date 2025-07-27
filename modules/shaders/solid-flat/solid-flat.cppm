@@ -23,7 +23,8 @@ export namespace ce::shaders
         bool create_uniform(const std::shared_ptr<vk::Context>& vk) noexcept
         {
             m_uniform = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::Uniform");
-            if (!m_uniform->create(sizeof(PerFrameConstants),
+            const VkPhysicalDeviceLimits& limits = vk->physical_device_limits();
+            if (!m_uniform->create(sizeof(PerFrameConstants) * 1024,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT))
             {
                 return false;
@@ -220,22 +221,24 @@ export namespace ce::shaders
             {
                 return false;
             }
-            const VkDescriptorBufferInfo Uniforms_descriptor_info{
-                .buffer = m_uniform->buffer(),
-                .offset = 0,
-                .range = VK_WHOLE_SIZE
-            };
-            const std::vector write_descriptor_sets{
-                // Uniforms (type.Uniforms)
-                VkWriteDescriptorSet{
+            std::vector<VkDescriptorBufferInfo> Uniforms_descriptor_info(1024);
+            std::vector<VkWriteDescriptorSet> write_descriptor_sets(1024);
+            for (uint32_t i = 0; i < 1024; ++i)
+            {
+                Uniforms_descriptor_info[i] = {
+                    .buffer = m_uniform->buffer(),
+                    .offset = sizeof(PerFrameConstants) * i,
+                    .range = sizeof(PerFrameConstants)
+                };
+                write_descriptor_sets[i] = {
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = m_descr_sets[0],
+                    .dstSet = m_descr_sets[i],
                     .dstBinding = 0,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pBufferInfo = &Uniforms_descriptor_info
-                },
-            };
+                    .pBufferInfo = &Uniforms_descriptor_info[i]
+                };
+            }
             vkUpdateDescriptorSets(vk->device(), static_cast<uint32_t>(write_descriptor_sets.size()),
                 write_descriptor_sets.data(), 0, nullptr);
             return true;

@@ -76,12 +76,9 @@ class Context final
     XrAction m_action_teleport = XR_NULL_HANDLE;
     XrAction m_action_haptic = XR_NULL_HANDLE;
     XrAction m_action_pose = XR_NULL_HANDLE;
-    XrPath m_hand_path_left = XR_NULL_PATH;
-    XrPath m_hand_path_right = XR_NULL_PATH;
-    XrSpace m_hand_space_right = XR_NULL_HANDLE;
-    XrSpace m_hand_space_left = XR_NULL_HANDLE;
-    XrPosef m_hand_pose_left = m_identity;
-    XrPosef m_hand_pose_right = m_identity;
+    XrPath m_hands_path[2] = {XR_NULL_PATH, XR_NULL_PATH};
+    XrSpace m_hands_space[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
+    XrPosef m_hands_pose[2] = {m_identity, m_identity};
 #ifdef __ANDROID__
     jobject m_android_context = nullptr;
     JavaVM* m_android_vm = nullptr;
@@ -254,6 +251,12 @@ public:
     [[nodiscard]] bool state_focused() const noexcept
     {
         return m_session_state == XR_SESSION_STATE_FOCUSED;
+    }
+    [[nodiscard]] glm::mat4 hand_pose(const uint32_t hand_index) const noexcept
+    {
+        XrMatrix4x4f xrm;
+        XrMatrix4x4f_CreateFromRigidTransform(&xrm, &m_hands_pose[hand_index]);
+        return glm::gtc::make_mat4(xrm.m);
     }
 
 #ifdef __ANDROID__
@@ -1015,8 +1018,8 @@ public:
     XrActionSet create_action_set(const std::string_view name) const noexcept
     {
         XrActionSetCreateInfo action_set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
-        std::ranges::copy("gameplay", action_set_info.actionSetName);
-        std::ranges::copy("Gameplay", action_set_info.localizedActionSetName);
+        std::ranges::copy(name, action_set_info.actionSetName);
+        std::ranges::copy(name, action_set_info.localizedActionSetName);
         action_set_info.priority = 0;
         XrActionSet action_set = XR_NULL_HANDLE;
         if (const XrResult result = xrCreateActionSet(m_instance, &action_set_info, &action_set);
@@ -1027,7 +1030,7 @@ public:
         }
         return action_set;
     }
-    XrSpace create_action_space(XrAction action, XrPath hand) const noexcept
+    XrSpace create_action_space(XrAction action, const XrPath hand) const noexcept
     {
         const XrActionSpaceCreateInfo info{
             .type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
@@ -1075,19 +1078,15 @@ public:
     }
     bool bind_input() noexcept
     {
-        auto path_hand_left = create_path("/user/hand/left");
-        auto path_hand_right = create_path("/user/hand/right");
 
         m_action_set = create_action_set("gameplay");
         m_action_teleport = create_action("teleport", XR_ACTION_TYPE_BOOLEAN_INPUT);
-        const std::array hand_subaction_paths{
-            path_hand_left,
-            path_hand_right
-        };
-        m_action_haptic = create_action("vibration", XR_ACTION_TYPE_VIBRATION_OUTPUT, hand_subaction_paths);
-        m_action_pose = create_action("pose_left", XR_ACTION_TYPE_POSE_INPUT);
-        m_hand_space_left = create_action_space(m_action_pose, m_hand_path_left);
-        m_hand_space_right = create_action_space(m_action_pose, m_hand_path_right);
+        m_hands_path[0] = create_path("/user/hand/left");
+        m_hands_path[1] = create_path("/user/hand/right");
+        m_action_haptic = create_action("vibration", XR_ACTION_TYPE_VIBRATION_OUTPUT, m_hands_path);
+        m_action_pose = create_action("pose_left", XR_ACTION_TYPE_POSE_INPUT, m_hands_path);
+        m_hands_space[0] = create_action_space(m_action_pose, m_hands_path[0]);
+        m_hands_space[1] = create_action_space(m_action_pose, m_hands_path[1]);
 
         const std::array bindings{
             XrActionSuggestedBinding{m_action_teleport, create_path("/user/hand/right/input/a/click")},
@@ -1148,7 +1147,8 @@ public:
         }
         return state;
     }
-    std::optional<XrPosef> action_state_pose(XrAction action, XrPath hand_path, XrSpace space, XrTime time) const noexcept
+    std::optional<XrPosef> action_state_pose(XrAction action, const XrPath hand_path,
+        XrSpace space, const XrTime time) const noexcept
     {
         XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
         XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
@@ -1178,7 +1178,7 @@ public:
         }
         return std::nullopt;
     }
-    bool apply_haptic_feedback(XrAction action, XrPath hand_path) const noexcept
+    bool apply_haptic_feedback(XrAction action, const XrPath hand_path) const noexcept
     {
         XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
         vibration.amplitude = 0.5;
@@ -1205,16 +1205,17 @@ public:
         if (teleportState && teleportState.value().changedSinceLastSync && teleportState.value().currentState)
         {
             LOGI("FIRE");
-            apply_haptic_feedback(m_action_haptic, m_hand_path_right);
+            apply_haptic_feedback(m_action_haptic, m_hands_path[1]);
         }
         return true;
     }
-    bool sync_pose(XrTime time) noexcept
+    bool sync_pose(const XrTime time) noexcept
     {
-        if (const auto pose = action_state_pose(m_action_pose, m_hand_path_left, m_hand_space_left, time))
-            m_hand_pose_left = pose.value();
-        if (const auto pose = action_state_pose(m_action_pose, m_hand_path_right, m_hand_space_right, time))
-            m_hand_pose_right = pose.value();
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            if (const auto pose = action_state_pose(m_action_pose, m_hands_path[i], m_hands_space[i], time))
+                m_hands_pose[i] = pose.value();
+        }
         return true;
     }
     void handle_state_change(const XrEventDataSessionStateChanged* e) noexcept

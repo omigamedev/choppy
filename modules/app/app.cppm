@@ -32,6 +32,80 @@ import glm;
 
 export namespace ce::app
 {
+class Cube
+{
+    std::shared_ptr<vk::Buffer> m_vertex_buffer;
+    std::shared_ptr<vk::Buffer> m_index_buffer;
+    uint32_t m_index_count = 0;
+
+public:
+    [[nodiscard]] const auto& vertex_buffer() const noexcept { return m_vertex_buffer; }
+    [[nodiscard]] const auto& index_buffer() const noexcept { return m_index_buffer; }
+    [[nodiscard]] uint32_t index_count() const noexcept { return m_index_count; }
+
+    bool create(const std::shared_ptr<vk::Context>& vk) noexcept
+    {
+        // Define the 8 vertices of the cube with unique colors for interpolation
+        constexpr std::array<shaders::SolidFlatShader::VertexInput, 8> vertices = {{
+            // {position},                {color}
+            {{-0.5f, -0.5f,  0.5f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}, // 0: Front-Bottom-Left,  Red
+            {{ 0.5f, -0.5f,  0.5f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f}}, // 1: Front-Bottom-Right, Green
+            {{ 0.5f,  0.5f,  0.5f, 1.0f}, {0.0f, 0.0f, 1.0f, 1.0f}}, // 2: Front-Top-Right,    Blue
+            {{-0.5f,  0.5f,  0.5f, 1.0f}, {1.0f, 1.0f, 0.0f, 1.0f}}, // 3: Front-Top-Left,     Yellow
+            {{-0.5f, -0.5f, -0.5f, 1.0f}, {1.0f, 0.0f, 1.0f, 1.0f}}, // 4: Back-Bottom-Left,   Magenta
+            {{ 0.5f, -0.5f, -0.5f, 1.0f}, {0.0f, 1.0f, 1.0f, 1.0f}}, // 5: Back-Bottom-Right,  Cyan
+            {{ 0.5f,  0.5f, -0.5f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}}, // 6: Back-Top-Right,     White
+            {{-0.5f,  0.5f, -0.5f, 1.0f}, {0.5f, 0.5f, 0.5f, 1.0f}}, // 7: Back-Top-Left,      Gray
+        }};
+
+        // Define the 36 indices for the 12 triangles of the cube
+        constexpr std::array<uint32_t, 36> indices = {
+            // Front face (+Z)
+            0, 1, 2,   2, 3, 0,
+            // Back face (-Z)
+            4, 7, 6,   6, 5, 4,
+            // Top face (+Y)
+            3, 2, 6,   6, 7, 3,
+            // Bottom face (-Y)
+            4, 5, 1,   1, 0, 4,
+            // Right face (+X)
+            1, 5, 6,   6, 2, 1,
+            // Left face (-X)
+            4, 0, 3,   3, 7, 4,
+        };
+        m_index_count = static_cast<uint32_t>(indices.size());
+
+        // Create and upload vertex buffer
+        m_vertex_buffer = std::make_shared<vk::Buffer>(vk, "CubeVertexBuffer");
+        if (!m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+            !m_vertex_buffer->create_staging(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput)))
+        {
+            LOGE("Failed to create cube vertex buffer");
+            return false;
+        }
+
+        // Create and upload index buffer
+        m_index_buffer = std::make_shared<vk::Buffer>(vk, "CubeIndexBuffer");
+        if (!m_index_buffer->create(indices.size() * sizeof(uint32_t),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT) ||
+            !m_index_buffer->create_staging(indices.size() * sizeof(uint32_t)))
+        {
+            LOGE("Failed to create cube index buffer");
+            return false;
+        }
+
+        // Upload data to GPU and destroy staging buffers
+        vk->exec_immediate("create_cube", [this, &vertices, &indices](VkCommandBuffer cmd){
+            m_vertex_buffer->update_cmd(cmd, vertices);
+            m_index_buffer->update_cmd(cmd, indices);
+        });
+        m_vertex_buffer->destroy_staging();
+        m_index_buffer->destroy_staging();
+
+        return true;
+    }
+};
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
@@ -41,6 +115,7 @@ class AppBase final
     std::vector<shaders::SolidFlatShader::VertexInput> vertices;
     shaders::SolidFlatShader::PerFrameConstants uniform{};
 	siv::PerlinNoise perlin{ std::random_device{} };
+    std::shared_ptr<Cube> m_cube;
 public:
     ~AppBase() = default;
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
@@ -49,9 +124,9 @@ public:
     static std::vector<shaders::SolidFlatShader::VertexInput> build_triangle() noexcept
     {
         return std::vector<shaders::SolidFlatShader::VertexInput>{
-            {.position = {-0.5f, -0.5f, 0.5f, 1.f}, .color = {1, 0, 0, 1}},
-            {.position = {-0.5f,  0.5f, 0.5f, 1.f}, .color = {0, 1, 0, 1}},
-            {.position = { 0.5f, -0.5f, 0.5f, 1.f}, .color = {0, 0, 1, 1}},
+            {.position = {-0.5f, -0.5f, 0.0f, 1.f}, .color = {1, 0, 0, 1}},
+            {.position = {-0.5f,  0.5f, 0.0f, 1.f}, .color = {0, 1, 0, 1}},
+            {.position = { 0.5f, -0.5f, 0.0f, 1.f}, .color = {0, 0, 1, 1}},
         };
     }
     [[nodiscard]] std::vector<shaders::SolidFlatShader::VertexInput> build_floor(
@@ -64,7 +139,7 @@ public:
         {
             for (int j = 0; j < cols; ++j)
             {
-                constexpr float p = 0.05f;
+                constexpr float p = 0;//0.05f;
                 constexpr float height = 1.5f;
                 const float A = static_cast<float>(perlin.octave2D(i * p, j * p, 4) * height);
                 const float B = static_cast<float>(perlin.octave2D(i * p, (j+1) * p, 4) * height);
@@ -85,12 +160,17 @@ public:
         m_xr->bind_input();
         solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
         solid_flat->create(m_xr->renderpass());
-        vertices = build_floor(500, 500, 0.1f);
+
+        // Create the cube object
+        m_cube = std::make_shared<Cube>();
+        m_cube->create(m_vk); // This handles creating and uploading the cube's data
+
+        vertices = build_floor(50, 50, 0.1f);
         m_vertex_buffer = std::make_shared<vk::Buffer>(m_vk, "VertexBuffer");
         m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         m_vertex_buffer->create_staging(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput));
-        solid_flat->uniform()->create_staging(sizeof(shaders::SolidFlatShader::PerFrameConstants));
+        solid_flat->uniform()->create_staging(sizeof(shaders::SolidFlatShader::PerFrameConstants) * 3);
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             m_vertex_buffer->update_cmd<shaders::SolidFlatShader::VertexInput>(cmd, vertices);
             for (VkImage img : m_xr->swapchain_depth_images())
@@ -119,7 +199,17 @@ public:
         static float time = 0;
         time += dt;
 
-        solid_flat->uniform()->update_cmd<shaders::SolidFlatShader::PerFrameConstants>(cmd, uniform);
+        std::array<shaders::SolidFlatShader::PerFrameConstants, 3> uniforms{};
+        const glm::mat4 terrain = glm::gtx::translate(glm::vec3{0, -1, 0});
+        uniforms[0].WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * terrain);
+        uniforms[0].WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * terrain);
+        const glm::mat4 hand_left = m_xr->hand_pose(0) * glm::gtx::scale(glm::vec3(.1f));
+        uniforms[1].WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * hand_left);
+        uniforms[1].WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * hand_left);
+        const glm::mat4 hand_right = m_xr->hand_pose(1) * glm::gtx::scale(glm::vec3(.1f));
+        uniforms[2].WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * hand_right);
+        uniforms[2].WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * hand_right);
+        solid_flat->uniform()->update_cmd<shaders::SolidFlatShader::PerFrameConstants>(cmd, uniforms);
         // const std::array rgb{
         //     fabsf(sinf(time * 5.9f)),
         //     fabsf(sinf(time * 1.9f)),
@@ -159,14 +249,32 @@ public:
         vkCmdSetScissorWithCount(cmd, 1, &scissor);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, solid_flat->pipeline());
-        const std::array vertex_buffers{m_vertex_buffer->buffer()};
-        constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
-        vkCmdBindVertexBuffers(cmd, 0,
-            vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
-        const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(0);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
-        vkCmdDraw(cmd, vertices.size(), 1, 0, 0);
+
+        {
+            const std::array vertex_buffers{m_vertex_buffer->buffer()};
+            constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
+            vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
+            const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(0);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
+            vkCmdDraw(cmd, vertices.size(), 1, 0, 0);
+        }
+
+        // Bind the cube's vertex and index buffers
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            const std::array vertex_buffers{m_cube->vertex_buffer()->buffer()};
+            constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
+            vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
+            vkCmdBindIndexBuffer(cmd, m_cube->index_buffer()->buffer(), 0, VK_INDEX_TYPE_UINT32);
+
+            const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(1 + i);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
+
+            // Draw the cube using its indices
+            vkCmdDrawIndexed(cmd, m_cube->index_count(), 1, 0, 0, 0);
+        }
 
         // End rendering
 
@@ -184,9 +292,6 @@ public:
             }
             m_xr->present([this, dt](const xr::FrameContext& frame){
                 m_xr->sync_pose(frame.display_time);
-                const glm::mat4 camera = glm::gtx::translate(glm::vec3{0, -1, 0});
-                uniform.WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * camera);
-                uniform.WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * camera);
                 m_vk->exec("render_eye", [this, frame, dt](VkCommandBuffer cmd){
                     render(frame, dt, cmd);
                 });
