@@ -3,7 +3,8 @@
 PixelInput VSMain(VertexInput input, uint ViewIndex : SV_ViewID)
 {
     PixelInput output;
-    output.position = mul(input.position, WorldViewProjection[ViewIndex]);
+    const float4x4 WorldViewProjection = mul(ObjectTransform, ViewProjection[ViewIndex]);
+    output.position = mul(input.position, WorldViewProjection);
     output.color = input.color;
     return output;
 }

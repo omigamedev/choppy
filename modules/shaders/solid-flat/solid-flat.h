@@ -1,9 +1,14 @@
 #pragma once
 #include "../hlsl_common.h"
 
-cbuffer PerFrameConstants REGISTER(b0)
+[[vk::binding(0)]] cbuffer PerFrameConstants REGISTER(b0)
 {
-    float4x4 WorldViewProjection[2];
+    float4x4 ViewProjection[2];
+};
+
+[[vk::binding(1)]] cbuffer PerObjectBuffer REGISTER(b1)
+{
+    float4x4 ObjectTransform;
 };
 
 struct VertexInput

@@ -170,7 +170,8 @@ public:
         m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         m_vertex_buffer->create_staging(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput));
-        solid_flat->uniform()->create_staging(sizeof(shaders::SolidFlatShader::PerFrameConstants) * 3);
+        solid_flat->uniform_frame()->create_staging(sizeof(shaders::SolidFlatShader::PerFrameConstants));
+        solid_flat->uniform_object()->create_staging(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * 3);
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             m_vertex_buffer->update_cmd<shaders::SolidFlatShader::VertexInput>(cmd, vertices);
             for (VkImage img : m_xr->swapchain_depth_images())
@@ -199,22 +200,26 @@ public:
         static float time = 0;
         time += dt;
 
-        std::array<shaders::SolidFlatShader::PerFrameConstants, 3> uniforms{};
-        const glm::mat4 terrain = glm::gtx::translate(glm::vec3{0, -1, 0});
-        uniforms[0].WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * terrain);
-        uniforms[0].WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * terrain);
-        const glm::mat4 hand_left = m_xr->hand_pose(0) * glm::gtx::scale(glm::vec3(.1f));
-        uniforms[1].WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * hand_left);
-        uniforms[1].WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * hand_left);
-        const glm::mat4 hand_right = m_xr->hand_pose(1) * glm::gtx::scale(glm::vec3(.1f));
-        uniforms[2].WorldViewProjection[0] = glm::transpose(frame.projection[0] * frame.view[0] * hand_right);
-        uniforms[2].WorldViewProjection[1] = glm::transpose(frame.projection[1] * frame.view[1] * hand_right);
-        solid_flat->uniform()->update_cmd<shaders::SolidFlatShader::PerFrameConstants>(cmd, uniforms);
-        // const std::array rgb{
-        //     fabsf(sinf(time * 5.9f)),
-        //     fabsf(sinf(time * 1.9f)),
-        //     fabsf(sinf(time * 0.9f))
-        // };
+        solid_flat->uniform_frame()->update_cmd(cmd, shaders::SolidFlatShader::PerFrameConstants{
+            .ViewProjection = {
+                glm::transpose(frame.projection[0] * frame.view[0]),
+                glm::transpose(frame.projection[1] * frame.view[1]),
+            }
+        });
+
+        const std::array uniforms_object {
+            shaders::SolidFlatShader::PerObjectBuffer{
+                .ObjectTransform = glm::identity<glm::mat4>(),
+            },
+            shaders::SolidFlatShader::PerObjectBuffer{
+                .ObjectTransform = glm::transpose(m_xr->hand_pose(0) * glm::gtx::scale(glm::vec3(.1f)))
+            },
+            shaders::SolidFlatShader::PerObjectBuffer{
+                .ObjectTransform = glm::transpose(m_xr->hand_pose(1) * glm::gtx::scale(glm::vec3(.1f)))
+            },
+        };
+        solid_flat->uniform_object()->update_cmd(cmd, uniforms_object);
+
         const std::array rgb{.3f, .3f, .3f};
         const std::array clear_value{
             VkClearValue{.color = {rgb[0], rgb[1], rgb[2], 1.f}},

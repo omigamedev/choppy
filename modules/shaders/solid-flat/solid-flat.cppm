@@ -19,12 +19,19 @@ export namespace ce::shaders
     public:
         #include "solid-flat.h"
     private:
-        std::shared_ptr<vk::Buffer> m_uniform;
+        std::shared_ptr<vk::Buffer> m_uniform_frame;
+        std::shared_ptr<vk::Buffer> m_uniform_object;
+        constexpr static uint32_t m_max_instances = 3;
         bool create_uniform(const std::shared_ptr<vk::Context>& vk) noexcept
         {
-            m_uniform = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::Uniform");
-            const VkPhysicalDeviceLimits& limits = vk->physical_device_limits();
-            if (!m_uniform->create(sizeof(PerFrameConstants) * 1024,
+            m_uniform_frame = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::UniformFrame");
+            if (!m_uniform_frame->create(sizeof(PerFrameConstants),
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT))
+            {
+                return false;
+            }
+            m_uniform_object = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::UniformObject");
+            if (!m_uniform_object->create(sizeof(PerObjectBuffer) * m_max_instances,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT))
             {
                 return false;
@@ -37,6 +44,14 @@ export namespace ce::shaders
                 // uniforms (type.PerFrameConstants)
                 VkDescriptorSetLayoutBinding{
                     .binding = 0,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .descriptorCount = 1,
+                    .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                    .pImmutableSamplers = nullptr
+                },
+                // uniforms (type.PerObjectBuffer)
+                VkDescriptorSetLayoutBinding{
+                    .binding = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
                     .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -190,13 +205,13 @@ export namespace ce::shaders
         {
             // Descriptor Pool
             constexpr std::array descr_pool_sizes{
-                VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1024 },
+                VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, m_max_instances * 2 },
                 // VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024 },
                 // VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024 },
             };
             const VkDescriptorPoolCreateInfo descr_pool_info{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                .maxSets = 1024,
+                .maxSets = m_max_instances,
                 .poolSizeCount = static_cast<uint32_t>(descr_pool_sizes.size()),
                 .pPoolSizes = descr_pool_sizes.data()
             };
@@ -208,7 +223,7 @@ export namespace ce::shaders
             vk->debug_name(std::format("{}_descr_pool", m_name), m_descriptor_pool);
 
             // Descriptor Sets
-            m_descr_sets = std::vector(1024, VkDescriptorSet{VK_NULL_HANDLE});
+            m_descr_sets = std::vector(m_max_instances, VkDescriptorSet{VK_NULL_HANDLE});
             const std::vector set_layouts(m_descr_sets.size(), m_set_layout);
             const VkDescriptorSetAllocateInfo set_alloc_info{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -221,26 +236,38 @@ export namespace ce::shaders
             {
                 return false;
             }
-            std::vector<VkDescriptorBufferInfo> Uniforms_descriptor_info(1024);
-            std::vector<VkWriteDescriptorSet> write_descriptor_sets(1024);
-            for (uint32_t i = 0; i < 1024; ++i)
+            std::vector<VkWriteDescriptorSet> writes;
+            const VkDescriptorBufferInfo PerFrameConstants_info{
+                .buffer = m_uniform_frame->buffer(),
+                .offset = 0,
+                .range = VK_WHOLE_SIZE,
+            };
+            std::vector<VkDescriptorBufferInfo> PerObjectBuffer_info(m_max_instances);
+            for (uint32_t i = 0; i < m_max_instances; ++i)
             {
-                Uniforms_descriptor_info[i] = {
-                    .buffer = m_uniform->buffer(),
-                    .offset = sizeof(PerFrameConstants) * i,
-                    .range = sizeof(PerFrameConstants)
+                PerObjectBuffer_info[i] = {
+                    .buffer = m_uniform_object->buffer(),
+                    .offset = sizeof(PerObjectBuffer) * i,
+                    .range = sizeof(PerObjectBuffer)
                 };
-                write_descriptor_sets[i] = {
+                writes.push_back({
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = m_descr_sets[i],
                     .dstBinding = 0,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pBufferInfo = &Uniforms_descriptor_info[i]
-                };
+                    .pBufferInfo = &PerFrameConstants_info
+                });
+                writes.push_back({
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = m_descr_sets[i],
+                    .dstBinding = 1,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pBufferInfo = &PerObjectBuffer_info[i]
+                });
             }
-            vkUpdateDescriptorSets(vk->device(), static_cast<uint32_t>(write_descriptor_sets.size()),
-                write_descriptor_sets.data(), 0, nullptr);
+            vkUpdateDescriptorSets(vk->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
             return true;
         }
     public:
@@ -250,7 +277,8 @@ export namespace ce::shaders
         [[nodiscard]] VkPipeline pipeline() const noexcept { return m_pipeline; }
         [[nodiscard]] VkPipelineLayout layout() const noexcept { return m_layout; }
         [[nodiscard]] VkDescriptorSet descriptor_set(const uint32_t index) const noexcept { return m_descr_sets[index]; }
-        [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform() const noexcept { return m_uniform; }
+        [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform_frame() const noexcept { return m_uniform_frame; }
+        [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform_object() const noexcept { return m_uniform_object; }
         bool create(VkRenderPass renderpass) noexcept
         {
             const auto vk = m_vk.lock();
