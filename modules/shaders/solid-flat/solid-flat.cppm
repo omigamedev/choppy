@@ -85,7 +85,8 @@ export namespace ce::shaders
             vk->debug_name(std::format("{}-PipelineLayout", m_name), m_set_layout);
             return true;
         }
-        bool create_pipeline(const std::shared_ptr<vk::Context>& vk, VkRenderPass renderpass) noexcept
+        bool create_pipeline(const std::shared_ptr<vk::Context>& vk, VkRenderPass renderpass,
+            const VkSampleCountFlagBits sample_count) noexcept
         {
             // Pipeline
             const std::array stages{
@@ -146,9 +147,9 @@ export namespace ce::shaders
                 .frontFace = VK_FRONT_FACE_CLOCKWISE,
                 .lineWidth = 1,
             };
-            constexpr VkPipelineMultisampleStateCreateInfo multisample{
+            const VkPipelineMultisampleStateCreateInfo multisample{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-                .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+                .rasterizationSamples = sample_count,
                 .sampleShadingEnable = false
             };
             constexpr VkPipelineDepthStencilStateCreateInfo depth{
@@ -279,11 +280,11 @@ export namespace ce::shaders
         [[nodiscard]] VkDescriptorSet descriptor_set(const uint32_t index) const noexcept { return m_descr_sets[index]; }
         [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform_frame() const noexcept { return m_uniform_frame; }
         [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform_object() const noexcept { return m_uniform_object; }
-        bool create(VkRenderPass renderpass) noexcept
+        bool create(VkRenderPass renderpass, VkSampleCountFlagBits sample_count = VK_SAMPLE_COUNT_1_BIT) noexcept
         {
             const auto vk = m_vk.lock();
             if (!load_from_file(vk, "assets/shaders/solid-flat-vs.spv", "assets/shaders/solid-flat-ps.spv") ||
-                !create_uniform(vk) || !create_layout(vk) || !create_pipeline(vk, renderpass) || !create_sets(vk))
+                !create_uniform(vk) || !create_layout(vk) || !create_pipeline(vk, renderpass, sample_count) || !create_sets(vk))
             {
                 return false;
             }

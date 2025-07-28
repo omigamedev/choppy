@@ -25,6 +25,8 @@ module;
 #include <openxr/openxr_platform.h>
 #include <xr_linear.h>
 
+#include "vk_mem_alloc.h"
+
 export module ce.xr;
 import ce.vk.utils;
 import ce.xr.utils;
@@ -48,6 +50,7 @@ struct FrameContext final
 class Context final
 {
     static constexpr XrPosef m_identity = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
+    VmaAllocator m_vma = VK_NULL_HANDLE;
     XrInstance m_instance = XR_NULL_HANDLE;
     XrSystemId m_system = XR_NULL_SYSTEM_ID;
     XrSession m_session = XR_NULL_HANDLE;
@@ -70,7 +73,17 @@ class Context final
     std::vector<XrSwapchainImageVulkanKHR> depth_swapchain_images;
     std::vector<VkImageView> color_swapchain_views;
     std::vector<VkImageView> depth_swapchain_views;
+    VkImage color_msaa_image = VK_NULL_HANDLE;
+    VkImage depth_msaa_image = VK_NULL_HANDLE;
+    VkImageView color_msaa_view = VK_NULL_HANDLE;
+    VkImageView depth_msaa_view = VK_NULL_HANDLE;
+    VmaAllocation color_msaa_allocation = VK_NULL_HANDLE;
+    VmaAllocation depth_msaa_allocation = VK_NULL_HANDLE;
+    VmaAllocationInfo color_msaa_allocation_info = {};
+    VmaAllocationInfo depth_msaa_allocation_info = {};
     std::vector<XrViewConfigurationView> view_configs;
+    bool has_msaa_single = false;
+    bool has_swapchain_create_info = false;
     // Input bindings
     XrActionSet m_action_set = XR_NULL_HANDLE;
     XrAction m_action_teleport = XR_NULL_HANDLE;
@@ -226,6 +239,10 @@ public:
     [[nodiscard]] VkRenderPass renderpass() const noexcept { return m_renderpass; }
     [[nodiscard]] VkFramebuffer framebuffer() const noexcept { return m_framebuffer; }
     [[nodiscard]] VkExtent2D framebuffer_size() const noexcept { return m_framebuffer_size; }
+    [[nodiscard]] VkSampleCountFlagBits sample_count() const noexcept
+    {
+        return has_msaa_single ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT;
+    }
     [[nodiscard]] VkViewport viewport() const noexcept
     {
         return VkViewport{0, 0,
@@ -286,31 +303,35 @@ public:
 #endif
     bool create() noexcept
     {
-        const std::vector<XrExtensionProperties> xr_instance_extentions = []{
+        const std::vector<std::string> xr_instance_extentions = []{
             uint32_t count = 0;
             xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
             std::vector ext_props(count,
                 XrExtensionProperties{.type = XR_TYPE_EXTENSION_PROPERTIES});
             xrEnumerateInstanceExtensionProperties(nullptr, count, &count, ext_props.data());
-            return ext_props;
+            return ext_props
+               | std::views::transform([](const XrExtensionProperties& v)->std::string{ return v.extensionName; })
+               | std::ranges::to<std::vector<std::string>>();
         }();
-        const std::vector<XrApiLayerProperties> xr_instance_layers = [] {
+        const std::vector<std::string> xr_instance_layers = [] {
             uint32_t count = 0;
             xrEnumerateApiLayerProperties(0, &count, nullptr);
             std::vector layers_props(count,
                 XrApiLayerProperties{.type = XR_TYPE_API_LAYER_PROPERTIES});
             xrEnumerateApiLayerProperties(count, &count, layers_props.data());
-            return layers_props;
+            return layers_props
+               | std::views::transform([](const XrApiLayerProperties& v)->std::string{ return v.layerName; })
+               | std::ranges::to<std::vector<std::string>>();
         }();
 
-        // for (const auto& e : xr_instance_extentions)
-        //     LOGI("XR Ext: %s", e.extensionName);
-        // for (const auto& p : xr_instance_layers)
-        //     LOGI("XR Api Layer: %s", p.layerName);
+         for (const auto& e : xr_instance_extentions)
+             LOGI("XR Ext: %s", e.c_str());
+         for (const auto& p : xr_instance_layers)
+             LOGI("XR Api Layer: %s", p.c_str());
 
         // Create Instance
 
-        const std::vector extensions{
+        std::vector extensions{
             XR_EXT_DEBUG_UTILS_EXTENSION_NAME,
             XR_KHR_VULKAN_ENABLE_EXTENSION_NAME,
             XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME,
@@ -319,6 +340,11 @@ public:
             XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
 #endif
         };
+        if (std::ranges::contains(xr_instance_extentions, XR_META_VULKAN_SWAPCHAIN_CREATE_INFO_EXTENSION_NAME))
+        {
+            extensions.push_back(XR_META_VULKAN_SWAPCHAIN_CREATE_INFO_EXTENSION_NAME);
+            has_swapchain_create_info = true;
+        }
         const XrInstanceCreateInfo instance_info{
             .type = XR_TYPE_INSTANCE_CREATE_INFO,
             .next = nullptr,
@@ -573,6 +599,7 @@ public:
             VK_EXT_DEBUG_MARKER_EXTENSION_NAME,
             VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
             VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME,
+            VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME,
         };
         for (const char* e : vk_device_optional_extensions)
         {
@@ -595,8 +622,12 @@ public:
             .pQueuePriorities = queue_priority.data()
         };
         // Features
+        VkPhysicalDeviceMultisampledRenderToSingleSampledFeaturesEXT multisampled_feature{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_FEATURES_EXT,
+        };
         VkPhysicalDeviceBufferDeviceAddressFeatures bda_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+            .pNext = &multisampled_feature,
         };
         VkPhysicalDevicePipelineCreationCacheControlFeatures pipeline_creation_cache_control_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES,
@@ -644,6 +675,7 @@ public:
             LOGE("Failed to find a multiview feature");
             return false;
         }
+        has_msaa_single = multisampled_feature.multisampledRenderToSingleSampled;
         // disable not needed features
         robustness_feature.robustBufferAccess2 = false;
         robustness_feature.robustImageAccess2 = false;
@@ -679,6 +711,22 @@ public:
             return false;
         }
         volkLoadDevice(m_device);
+
+        // Init VMA
+        VmaVulkanFunctions vulkanFunctions = {};
+        vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+        vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+        VmaAllocatorCreateInfo allocatorCreateInfo = {};
+        allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+        allocatorCreateInfo.physicalDevice = m_physical_device;
+        allocatorCreateInfo.device = m_device;
+        allocatorCreateInfo.instance = m_vk_instance;
+        allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
+        if (vmaCreateAllocator(&allocatorCreateInfo, &m_vma) != VK_SUCCESS)
+        {
+            LOGE("vmaCreateAllocator failed");
+            return false;
+        }
 
         return true;
     }
@@ -788,8 +836,13 @@ public:
 
         // Color swapchain
 
+        constexpr XrVulkanSwapchainCreateInfoMETA color_swapchain_info_meta{
+            .type = XR_TYPE_VULKAN_SWAPCHAIN_CREATE_INFO_META,
+            .additionalCreateFlags = VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT
+        };
         const XrSwapchainCreateInfo color_swapchain_info{
             .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+            .next = has_swapchain_create_info ? &color_swapchain_info_meta : nullptr,
             .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
             .format = color_format,
             .sampleCount = view_configs[0].recommendedSwapchainSampleCount,
@@ -813,25 +866,39 @@ public:
                 reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
             return images;
         }();
-
-        if (vkSetDebugUtilsObjectNameEXT)
+        for (uint32_t i = 0; i < color_swapchain_images.size(); ++i)
         {
-            for (const auto& color_swapchain : color_swapchain_images)
-            {
-                const VkDebugUtilsObjectNameInfoEXT name_info = {
-                    .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
-                    .objectType = VK_OBJECT_TYPE_IMAGE,
-                    .objectHandle = reinterpret_cast<uint64_t>(color_swapchain.image),
-                    .pObjectName = "swapchain_color"
-                };
-                vkSetDebugUtilsObjectNameEXT(m_device, &name_info);
-            }
+            debug_name(std::format("swapchain_color[{}]", i), color_swapchain_images[i].image);
         }
+
+        const VkImageCreateInfo color_msaa_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = color_format,
+            .extent = VkExtent3D(m_framebuffer_size.width, m_framebuffer_size.height, 1),
+            .mipLevels = 1,
+            .arrayLayers = static_cast<uint32_t>(view_configs.size()),
+            .samples = VK_SAMPLE_COUNT_4_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo color_msaa_memory_info{
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        if (const VkResult result = vmaCreateImage(m_vma, &color_msaa_info, &color_msaa_memory_info,
+            &color_msaa_image, &color_msaa_allocation, &color_msaa_allocation_info); result != VK_SUCCESS)
+        {
+            LOGE("vmaCreateImage failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("color_msaa_image", color_msaa_image);
 
         // Depth swapchain
 
         const XrSwapchainCreateInfo depth_swapchain_info{
             .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+            .next = has_swapchain_create_info ? &color_swapchain_info_meta : nullptr,
             .usageFlags = XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
             .format = depth_format,
             .sampleCount = view_configs[0].recommendedSwapchainSampleCount,
@@ -855,6 +922,29 @@ public:
                 reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
             return images;
         }();
+
+        const VkImageCreateInfo depth_msaa_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = depth_format,
+            .extent = VkExtent3D(m_framebuffer_size.width, m_framebuffer_size.height, 1),
+            .mipLevels = 1,
+            .arrayLayers = static_cast<uint32_t>(view_configs.size()),
+            .samples = VK_SAMPLE_COUNT_4_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo depth_msaa_memory_info{
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        if (const VkResult result = vmaCreateImage(m_vma, &depth_msaa_info, &depth_msaa_memory_info,
+            &depth_msaa_image, &depth_msaa_allocation, &depth_msaa_allocation_info); result != VK_SUCCESS)
+        {
+            LOGE("vmaCreateImage failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("depth_msaa_image", depth_msaa_image);
 
         // Views
 
@@ -907,6 +997,52 @@ public:
             debug_name(std::format("swapchain_depth_view[{}]", i), depth_swapchain_views[i]);
         }
 
+        // MSAA Views
+
+        // Color
+        const VkImageViewCreateInfo color_msaa_view_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = color_msaa_image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+            .format = color_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 2
+            }
+        };
+        if (const VkResult result = vkCreateImageView(m_device, &color_msaa_view_info, nullptr, &color_msaa_view);
+            result != VK_SUCCESS)
+        {
+            LOGE("vkCreateImageView failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("color_msaa_view", color_msaa_view);
+
+        // Depth
+        const VkImageViewCreateInfo depth_msaa_view_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = depth_msaa_image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+            .format = depth_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 2
+            }
+        };
+        if (const VkResult result = vkCreateImageView(m_device, &depth_msaa_view_info, nullptr, &depth_msaa_view);
+            result != VK_SUCCESS)
+        {
+            LOGE("vkCreateImageView failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("depth_msaa_view", depth_msaa_view);
+
         // Renderpass
 
         const std::array renderpass_attachments{
@@ -943,9 +1079,22 @@ public:
             .attachment = 1,
             .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
         };
+        const VkSubpassDescriptionDepthStencilResolve multisampled_depth_esolve{
+            .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE,
+            .depthResolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
+            .stencilResolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
+            //.pDepthStencilResolveAttachment = &renderpass_sub_depth
+        };
+        const VkMultisampledRenderToSingleSampledInfoEXT multisampled{
+            .sType = VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT,
+            .pNext = &multisampled_depth_esolve,
+            .multisampledRenderToSingleSampledEnable = true,
+            .rasterizationSamples = VK_SAMPLE_COUNT_4_BIT
+        };
         const std::array renderpass_sub{
             VkSubpassDescription2{
                 .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2,
+                .pNext = has_msaa_single ? &multisampled : nullptr,
                 .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                 .viewMask = 0b11, // enable multiview rendering
                 .colorAttachmentCount = 1,
@@ -972,6 +1121,7 @@ public:
 
         constexpr VkImageUsageFlags xr_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        // constexpr VkImageUsageFlags xr_usage{};
         const std::vector attachment_images_info{
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,

@@ -165,7 +165,7 @@ public:
 
         m_xr->bind_input();
         solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
-        solid_flat->create(m_xr->renderpass());
+        solid_flat->create(m_xr->renderpass(), m_xr->sample_count());
 
         // Create the cube object
         m_cube = std::make_shared<Cube>();
