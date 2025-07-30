@@ -106,6 +106,44 @@ public:
         return true;
     }
 };
+class Chunk final
+{
+    using Shader = shaders::SolidFlatShader;
+    std::shared_ptr<vk::Buffer> m_vertex_buffer;
+    std::shared_ptr<vk::Buffer> m_index_buffer;
+    uint32_t m_index_count = 0;
+    uint32_t m_size = 0;
+    uint32_t m_height = 0;
+public:
+    [[nodiscard]] const auto& vertex_buffer() const noexcept { return m_vertex_buffer; }
+    [[nodiscard]] const auto& index_buffer() const noexcept { return m_index_buffer; }
+    [[nodiscard]] uint32_t index_count() const noexcept { return m_index_count; }
+    Chunk(const uint32_t size, const uint32_t height) noexcept
+        : m_size(size), m_height(height) {}
+    bool create(const std::shared_ptr<vk::Context>& vk) noexcept
+    {
+        std::vector<uint32_t> indices;
+        std::vector<Shader::VertexInput> vertices;
+
+        const float normalizer = 1.f / static_cast<float>(m_size);
+        for (uint32_t h = 0; h < m_height; ++h)
+        {
+            for (uint32_t x = 0; x < m_size; ++x)
+            {
+                for (uint32_t y = 0; y < m_size; ++y)
+                {
+                    const float nx = x * normalizer;
+                    const float ny = y * normalizer;
+                    const float nz = h * normalizer;
+                    vertices.push_back(Shader::VertexInput{});
+                }
+            }
+        }
+
+        m_index_count = static_cast<uint32_t>(indices.size());
+        return true;
+    }
+};
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
@@ -142,7 +180,7 @@ public:
         {
             for (int j = 0; j < cols; ++j)
             {
-                constexpr float p = 0;//0.05f;
+                constexpr float p = 0.05f;
                 constexpr float height = 1.5f;
                 const float A = static_cast<float>(perlin.octave2D(i * p, j * p, 4) * height);
                 const float B = static_cast<float>(perlin.octave2D(i * p, (j+1) * p, 4) * height);
@@ -171,7 +209,7 @@ public:
         m_cube = std::make_shared<Cube>();
         m_cube->create(m_vk); // This handles creating and uploading the cube's data
 
-        vertices = build_floor(50, 50, 0.1f);
+        vertices = build_floor(500, 500, 0.1f);
         m_vertex_buffer = std::make_shared<vk::Buffer>(m_vk, "VertexBuffer");
         m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -305,18 +343,17 @@ public:
             vkResetFences(m_vk->device(), 1, &m_present_fences[m_present_index]);
             vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
 
-            constexpr VkCommandBufferBeginInfo cmd_begin_info{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            };
-            vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
-
             m_xr->present([this, dt](const xr::FrameContext& frame){
                 m_xr->sync_pose(frame.display_time);
+                constexpr VkCommandBufferBeginInfo cmd_begin_info{
+                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                };
+                vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
                 render(frame, dt, m_present_cmd[m_present_index]);
+                vkEndCommandBuffer(m_present_cmd[m_present_index]);
+                m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index]);
             });
 
-            vkEndCommandBuffer(m_present_cmd[m_present_index]);
-            m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index]);
             m_present_index = (m_present_index + 1) % m_xr->swapchain_count();
         }
         else

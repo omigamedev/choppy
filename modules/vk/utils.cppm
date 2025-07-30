@@ -63,9 +63,9 @@ constexpr VkObjectType get_type(T obj) noexcept
     else if constexpr (std::is_same_v<T, VkPerformanceConfigurationINTEL>) return VK_OBJECT_TYPE_PERFORMANCE_CONFIGURATION_INTEL;
     else if constexpr (std::is_same_v<T, VkDeferredOperationKHR>) return VK_OBJECT_TYPE_DEFERRED_OPERATION_KHR;
     else if constexpr (std::is_same_v<T, VkIndirectCommandsLayoutNV>) return VK_OBJECT_TYPE_INDIRECT_COMMANDS_LAYOUT_NV;
-    else if constexpr (std::is_same_v<T, VkCudaModuleNV>) return VK_OBJECT_TYPE_CUDA_MODULE_NV;
-    else if constexpr (std::is_same_v<T, VkCudaFunctionNV>) return VK_OBJECT_TYPE_CUDA_FUNCTION_NV;
-    //else if constexpr (std::is_same_v<T, VkBUFFERCOLLECTIONFUCHSIA>) return VK_OBJECT_TYPE_BUFFER_COLLECTION_FUCHSIA;
+    // else if constexpr (std::is_same_v<T, VkCudaModuleNVX>) return VK_OBJECT_TYPE_CUDA_MODULE_NVX;
+    // else if constexpr (std::is_same_v<T, VkCudaFunctionNVX>) return VK_OBJECT_TYPE_CUDA_FUNCTION_NVX;
+    // else if constexpr (std::is_same_v<T, VkBUFFERCOLLECTIONFUCHSIA>) return VK_OBJECT_TYPE_BUFFER_COLLECTION_FUCHSIA;
     else if constexpr (std::is_same_v<T, VkMicromapEXT>) return VK_OBJECT_TYPE_MICROMAP_EXT;
     else if constexpr (std::is_same_v<T, VkOpticalFlowSessionNV>) return VK_OBJECT_TYPE_OPTICAL_FLOW_SESSION_NV;
     else if constexpr (std::is_same_v<T, VkShaderEXT>) return VK_OBJECT_TYPE_SHADER_EXT;

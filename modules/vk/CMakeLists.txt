@@ -5,7 +5,7 @@ else()
 FetchContent_Declare(
     VulkanHeaders
     GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-    GIT_TAG v1.4.309)
+    GIT_TAG v1.4.321)
 FetchContent_MakeAvailable(VulkanHeaders)
 find_package(Vulkan REQUIRED)
 endif()
@@ -13,7 +13,7 @@ endif()
 FetchContent_Declare(
     Volk
     GIT_REPOSITORY https://github.com/zeux/volk.git
-    GIT_TAG vulkan-sdk-1.4.309)
+    GIT_TAG vulkan-sdk-1.4.321)
 if (WIN32)
     set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
 elseif()

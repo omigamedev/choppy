@@ -1,7 +1,7 @@
 include(FetchContent)
 FetchContent_Declare(openxr
     GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
-    GIT_TAG release-1.1.47)
+    GIT_TAG release-1.1.50)
 FetchContent_MakeAvailable(openxr)
 
 add_library(xr OBJECT)

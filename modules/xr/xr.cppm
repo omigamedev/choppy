@@ -49,13 +49,15 @@ struct FrameContext final
 };
 class Context final
 {
+    // openxr
     static constexpr XrPosef m_identity = {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
-    VmaAllocator m_vma = VK_NULL_HANDLE;
     XrInstance m_instance = XR_NULL_HANDLE;
     XrSystemId m_system = XR_NULL_SYSTEM_ID;
     XrSession m_session = XR_NULL_HANDLE;
     XrSessionState m_session_state = XR_SESSION_STATE_UNKNOWN;
     XrSpace m_space = XR_NULL_HANDLE;
+    // vulkan
+    VmaAllocator m_vma = VK_NULL_HANDLE;
     VkInstance m_vk_instance = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
@@ -65,6 +67,7 @@ class Context final
     VkViewport m_viewport{};
     const uint32_t m_queue_index = 0;
     uint32_t m_queue_family_index = VK_QUEUE_FAMILY_IGNORED;
+    // swapchain resources
     XrSwapchain color_swapchain = XR_NULL_HANDLE;
     XrSwapchain depth_swapchain = XR_NULL_HANDLE;
     VkFormat depth_format = VK_FORMAT_UNDEFINED;
@@ -220,9 +223,30 @@ class Context final
         static XrFunction<PFN_xrGetVulkanDeviceExtensionsKHR> fn{m_instance, "xrGetVulkanDeviceExtensionsKHR"};
         return fn.ptr(m_instance, m_system, bufferCapacityInput, bufferCountOutput, buffer);
     }
+    XRAPI_ATTR XrResult XRAPI_CALL xrPerfSettingsSetPerformanceLevelEXT(
+        XrPerfSettingsDomainEXT                     domain,
+        XrPerfSettingsLevelEXT                      level)
+    {
+        static XrFunction<PFN_xrPerfSettingsSetPerformanceLevelEXT> fn{m_instance, "xrPerfSettingsSetPerformanceLevelEXT"};
+        return fn.ptr(m_session, domain, level);
+    }
+    XRAPI_ATTR XrResult XRAPI_CALL xrEnumerateDisplayRefreshRatesFB(
+        uint32_t                                    displayRefreshRateCapacityInput,
+        uint32_t*                                   displayRefreshRateCountOutput,
+        float*                                      displayRefreshRates)
+    {
+        static XrFunction<PFN_xrEnumerateDisplayRefreshRatesFB> fn{m_instance, "xrEnumerateDisplayRefreshRatesFB"};
+        return fn.ptr(m_session, displayRefreshRateCapacityInput, displayRefreshRateCountOutput, displayRefreshRates);
+    }
+    XRAPI_ATTR XrResult XRAPI_CALL xrRequestDisplayRefreshRateFB(
+        float                                       displayRefreshRate)
+    {
+        static XrFunction<PFN_xrRequestDisplayRefreshRateFB> fn{m_instance, "xrRequestDisplayRefreshRateFB"};
+        return fn.ptr(m_session, displayRefreshRate);
+    }
 
     XRAPI_ATTR static XrResult XRAPI_CALL xrInitializeLoaderKHR(
-            const XrLoaderInitInfoBaseHeaderKHR*        loaderInitInfo)
+        const XrLoaderInitInfoBaseHeaderKHR*        loaderInitInfo)
     {
         static XrFunction<PFN_xrInitializeLoaderKHR> fn{XR_NULL_HANDLE, "xrInitializeLoaderKHR"};
         return fn.ptr(loaderInitInfo);
@@ -675,7 +699,6 @@ public:
             LOGE("Failed to find a multiview feature");
             return false;
         }
-        has_msaa_single = multisampled_feature.multisampledRenderToSingleSampled;
         // disable not needed features
         robustness_feature.robustBufferAccess2 = false;
         robustness_feature.robustImageAccess2 = false;
@@ -683,6 +706,7 @@ public:
         multiview_feature.multiviewTessellationShader = false;
         bda_feature.bufferDeviceAddressCaptureReplay = false; // enable for debugging BDA
         bda_feature.bufferDeviceAddressMultiDevice = false;
+        has_msaa_single = multisampled_feature.multisampledRenderToSingleSampled;
         // enable supported features
         const VkPhysicalDeviceFeatures2 enabled_features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
@@ -751,6 +775,19 @@ public:
             LOGE("xrCreateSession failed: %s", to_string(result));
             return false;
         }
+
+        xrPerfSettingsSetPerformanceLevelEXT(XR_PERF_SETTINGS_DOMAIN_CPU_EXT,
+            XR_PERF_SETTINGS_LEVEL_POWER_SAVINGS_EXT);
+        xrPerfSettingsSetPerformanceLevelEXT(XR_PERF_SETTINGS_DOMAIN_GPU_EXT,
+            XR_PERF_SETTINGS_LEVEL_POWER_SAVINGS_EXT);
+
+        uint32_t count = 0;
+        xrEnumerateDisplayRefreshRatesFB(0, &count, nullptr);
+        std::vector<float> refresh_rates(count);
+        xrEnumerateDisplayRefreshRatesFB(count, &count, refresh_rates.data());
+        std::sort(refresh_rates.begin(), refresh_rates.end(), std::greater<>());
+        xrRequestDisplayRefreshRateFB(refresh_rates[0]);
+
         constexpr XrReferenceSpaceCreateInfo space_info{
             .type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
             .referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL,
