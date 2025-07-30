@@ -39,8 +39,10 @@ struct FrameContext final
     VkExtent2D size;
     VkImage color_image;
     VkImage depth_image;
+    VkImage resolve_color_image;
     VkImageView color_view;
     VkImageView depth_view;
+    VkImageView resolve_color_view;
     VkFramebuffer framebuffer;
     VkRenderPass renderpass;
     XrTime display_time;
@@ -265,7 +267,7 @@ public:
     [[nodiscard]] VkExtent2D framebuffer_size() const noexcept { return m_framebuffer_size; }
     [[nodiscard]] VkSampleCountFlagBits sample_count() const noexcept
     {
-        return has_msaa_single ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT;
+        return VK_SAMPLE_COUNT_4_BIT;
     }
     [[nodiscard]] VkViewport viewport() const noexcept
     {
@@ -776,6 +778,8 @@ public:
             return false;
         }
 
+
+#ifdef __ANDROID__
         xrPerfSettingsSetPerformanceLevelEXT(XR_PERF_SETTINGS_DOMAIN_CPU_EXT,
             XR_PERF_SETTINGS_LEVEL_POWER_SAVINGS_EXT);
         xrPerfSettingsSetPerformanceLevelEXT(XR_PERF_SETTINGS_DOMAIN_GPU_EXT,
@@ -787,6 +791,7 @@ public:
         xrEnumerateDisplayRefreshRatesFB(count, &count, refresh_rates.data());
         std::sort(refresh_rates.begin(), refresh_rates.end(), std::greater<>());
         xrRequestDisplayRefreshRateFB(refresh_rates[0]);
+#endif
 
         constexpr XrReferenceSpaceCreateInfo space_info{
             .type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
@@ -826,6 +831,257 @@ public:
                 return format;
         }
         return VK_FORMAT_UNDEFINED;
+    }
+    bool create_msaa_images() noexcept
+    {
+        // Color
+        const VkImageCreateInfo color_msaa_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = color_format,
+            .extent = VkExtent3D(m_framebuffer_size.width, m_framebuffer_size.height, 1),
+            .mipLevels = 1,
+            .arrayLayers = static_cast<uint32_t>(view_configs.size()),
+            .samples = VK_SAMPLE_COUNT_4_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo color_msaa_memory_info{
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        if (const VkResult result = vmaCreateImage(m_vma, &color_msaa_info, &color_msaa_memory_info,
+            &color_msaa_image, &color_msaa_allocation, &color_msaa_allocation_info); result != VK_SUCCESS)
+        {
+            LOGE("vmaCreateImage failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("color_msaa_image", color_msaa_image);
+
+        // Depth
+        const VkImageCreateInfo depth_msaa_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = depth_format,
+            .extent = VkExtent3D(m_framebuffer_size.width, m_framebuffer_size.height, 1),
+            .mipLevels = 1,
+            .arrayLayers = static_cast<uint32_t>(view_configs.size()),
+            .samples = VK_SAMPLE_COUNT_4_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo depth_msaa_memory_info{
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        if (const VkResult result = vmaCreateImage(m_vma, &depth_msaa_info, &depth_msaa_memory_info,
+            &depth_msaa_image, &depth_msaa_allocation, &depth_msaa_allocation_info); result != VK_SUCCESS)
+        {
+            LOGE("vmaCreateImage failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("depth_msaa_image", depth_msaa_image);
+
+        // MSAA Views
+
+        // Color
+        const VkImageViewCreateInfo color_msaa_view_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = color_msaa_image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+            .format = color_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 2
+            }
+        };
+        if (const VkResult result = vkCreateImageView(m_device, &color_msaa_view_info, nullptr, &color_msaa_view);
+            result != VK_SUCCESS)
+        {
+            LOGE("vkCreateImageView failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("color_msaa_view", color_msaa_view);
+
+        // Depth
+        const VkImageViewCreateInfo depth_msaa_view_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = depth_msaa_image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+            .format = depth_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 2
+            }
+        };
+        if (const VkResult result = vkCreateImageView(m_device, &depth_msaa_view_info, nullptr, &depth_msaa_view);
+            result != VK_SUCCESS)
+        {
+            LOGE("vkCreateImageView failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("depth_msaa_view", depth_msaa_view);
+        return true;
+    }
+    bool create_renderpass_msaa_single() noexcept
+    {
+        const std::array renderpass_attachments{
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = color_format,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            },
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = depth_format,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+            },
+        };
+        constexpr VkAttachmentReference2 renderpass_sub_color{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 0,
+            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        };
+        constexpr VkAttachmentReference2 renderpass_sub_depth{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 1,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        };
+        const VkSubpassDescriptionDepthStencilResolve multisampled_depth_esolve{
+            .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE,
+            .depthResolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
+            .stencilResolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
+            //.pDepthStencilResolveAttachment = &renderpass_sub_depth
+        };
+        const VkMultisampledRenderToSingleSampledInfoEXT multisampled{
+            .sType = VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT,
+            .pNext = &multisampled_depth_esolve,
+            .multisampledRenderToSingleSampledEnable = true,
+            .rasterizationSamples = VK_SAMPLE_COUNT_4_BIT
+        };
+        const std::array renderpass_sub{
+            VkSubpassDescription2{
+                .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2,
+                .pNext = has_msaa_single ? &multisampled : nullptr,
+                .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+                .viewMask = 0b11, // enable multiview rendering
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &renderpass_sub_color,
+                .pDepthStencilAttachment = &renderpass_sub_depth
+            },
+        };
+        const VkRenderPassCreateInfo2 renderpass_info{
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2,
+            .attachmentCount = static_cast<uint32_t>(renderpass_attachments.size()),
+            .pAttachments = renderpass_attachments.data(),
+            .subpassCount = static_cast<uint32_t>(renderpass_sub.size()),
+            .pSubpasses = renderpass_sub.data()
+        };
+        if (const VkResult result = vkCreateRenderPass2(m_device, &renderpass_info, nullptr, &m_renderpass);
+            result != VK_SUCCESS)
+        {
+            LOGE("vkCreateRenderPass failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("ce_renderpass", m_renderpass);
+        return true;
+    }
+    bool create_renderpass_msaa() noexcept
+    {
+        const std::array renderpass_attachments{
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = color_format,
+                .samples = VK_SAMPLE_COUNT_4_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            },
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = depth_format,
+                .samples = VK_SAMPLE_COUNT_4_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+            },
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = color_format,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            },
+        };
+        constexpr VkAttachmentReference2 renderpass_sub_color{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 0,
+            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        };
+        constexpr VkAttachmentReference2 renderpass_sub_depth{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 1,
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        };
+        constexpr VkAttachmentReference2 renderpass_sub_resolve{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 2,
+            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        };
+        const std::array renderpass_sub{
+            VkSubpassDescription2{
+                .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2,
+                .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+                .viewMask = 0b11, // enable multiview rendering
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &renderpass_sub_color,
+                .pResolveAttachments = &renderpass_sub_resolve,
+                .pDepthStencilAttachment = &renderpass_sub_depth,
+            },
+        };
+        const VkRenderPassCreateInfo2 renderpass_info{
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2,
+            .attachmentCount = static_cast<uint32_t>(renderpass_attachments.size()),
+            .pAttachments = renderpass_attachments.data(),
+            .subpassCount = static_cast<uint32_t>(renderpass_sub.size()),
+            .pSubpasses = renderpass_sub.data()
+        };
+        if (const VkResult result = vkCreateRenderPass2(m_device, &renderpass_info, nullptr, &m_renderpass);
+            result != VK_SUCCESS)
+        {
+            LOGE("vkCreateRenderPass failed: %s", to_string(result));
+            return false;
+        }
+        debug_name("ce_renderpass", m_renderpass);
+        return true;
     }
     bool create_swapchain() noexcept
     {
@@ -908,29 +1164,6 @@ public:
             debug_name(std::format("swapchain_color[{}]", i), color_swapchain_images[i].image);
         }
 
-        const VkImageCreateInfo color_msaa_info{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = color_format,
-            .extent = VkExtent3D(m_framebuffer_size.width, m_framebuffer_size.height, 1),
-            .mipLevels = 1,
-            .arrayLayers = static_cast<uint32_t>(view_configs.size()),
-            .samples = VK_SAMPLE_COUNT_4_BIT,
-            .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        };
-        VmaAllocationCreateInfo color_msaa_memory_info{
-            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        };
-        if (const VkResult result = vmaCreateImage(m_vma, &color_msaa_info, &color_msaa_memory_info,
-            &color_msaa_image, &color_msaa_allocation, &color_msaa_allocation_info); result != VK_SUCCESS)
-        {
-            LOGE("vmaCreateImage failed: %s", to_string(result));
-            return false;
-        }
-        debug_name("color_msaa_image", color_msaa_image);
-
         // Depth swapchain
 
         const XrSwapchainCreateInfo depth_swapchain_info{
@@ -959,29 +1192,6 @@ public:
                 reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
             return images;
         }();
-
-        const VkImageCreateInfo depth_msaa_info{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = depth_format,
-            .extent = VkExtent3D(m_framebuffer_size.width, m_framebuffer_size.height, 1),
-            .mipLevels = 1,
-            .arrayLayers = static_cast<uint32_t>(view_configs.size()),
-            .samples = VK_SAMPLE_COUNT_4_BIT,
-            .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        };
-        VmaAllocationCreateInfo depth_msaa_memory_info{
-            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        };
-        if (const VkResult result = vmaCreateImage(m_vma, &depth_msaa_info, &depth_msaa_memory_info,
-            &depth_msaa_image, &depth_msaa_allocation, &depth_msaa_allocation_info); result != VK_SUCCESS)
-        {
-            LOGE("vmaCreateImage failed: %s", to_string(result));
-            return false;
-        }
-        debug_name("depth_msaa_image", depth_msaa_image);
 
         // Views
 
@@ -1034,132 +1244,36 @@ public:
             debug_name(std::format("swapchain_depth_view[{}]", i), depth_swapchain_views[i]);
         }
 
-        // MSAA Views
-
-        // Color
-        const VkImageViewCreateInfo color_msaa_view_info{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .image = color_msaa_image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-            .format = color_format,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 2
-            }
-        };
-        if (const VkResult result = vkCreateImageView(m_device, &color_msaa_view_info, nullptr, &color_msaa_view);
-            result != VK_SUCCESS)
+        if (!has_msaa_single)
         {
-            LOGE("vkCreateImageView failed: %s", to_string(result));
-            return false;
+            create_msaa_images();
         }
-        debug_name("color_msaa_view", color_msaa_view);
-
-        // Depth
-        const VkImageViewCreateInfo depth_msaa_view_info{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .image = depth_msaa_image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-            .format = depth_format,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 2
-            }
-        };
-        if (const VkResult result = vkCreateImageView(m_device, &depth_msaa_view_info, nullptr, &depth_msaa_view);
-            result != VK_SUCCESS)
-        {
-            LOGE("vkCreateImageView failed: %s", to_string(result));
-            return false;
-        }
-        debug_name("depth_msaa_view", depth_msaa_view);
 
         // Renderpass
 
-        const std::array renderpass_attachments{
-            VkAttachmentDescription2{
-                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
-                .format = color_format,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-            },
-            VkAttachmentDescription2{
-                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
-                .format = depth_format,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-            },
-        };
-        constexpr VkAttachmentReference2 renderpass_sub_color{
-            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
-            .attachment = 0,
-            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-        };
-        constexpr VkAttachmentReference2 renderpass_sub_depth{
-            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
-            .attachment = 1,
-            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-        };
-        const VkSubpassDescriptionDepthStencilResolve multisampled_depth_esolve{
-            .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE,
-            .depthResolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
-            .stencilResolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT,
-            //.pDepthStencilResolveAttachment = &renderpass_sub_depth
-        };
-        const VkMultisampledRenderToSingleSampledInfoEXT multisampled{
-            .sType = VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT,
-            .pNext = &multisampled_depth_esolve,
-            .multisampledRenderToSingleSampledEnable = true,
-            .rasterizationSamples = VK_SAMPLE_COUNT_4_BIT
-        };
-        const std::array renderpass_sub{
-            VkSubpassDescription2{
-                .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2,
-                .pNext = has_msaa_single ? &multisampled : nullptr,
-                .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-                .viewMask = 0b11, // enable multiview rendering
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &renderpass_sub_color,
-                .pDepthStencilAttachment = &renderpass_sub_depth
-            },
-        };
-        const VkRenderPassCreateInfo2 renderpass_info{
-            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2,
-            .attachmentCount = static_cast<uint32_t>(renderpass_attachments.size()),
-            .pAttachments = renderpass_attachments.data(),
-            .subpassCount = static_cast<uint32_t>(renderpass_sub.size()),
-            .pSubpasses = renderpass_sub.data()
-        };
-        if (const VkResult result = vkCreateRenderPass2(m_device, &renderpass_info, nullptr, &m_renderpass);
-            result != VK_SUCCESS)
+        if (has_msaa_single)
         {
-            LOGE("vkCreateRenderPass failed: %s", to_string(result));
-            return false;
+            if (!create_renderpass_msaa_single())
+            {
+                LOGE("create_renderpass_msaa_single failed");
+                return false;
+            }
         }
-        debug_name("ce_renderpass", m_renderpass);
+        else
+        {
+            if (!create_renderpass_msaa())
+            {
+                LOGE("create_renderpass_msaa failed");
+                return false;
+            }
+        }
 
         // Framebuffer
 
-        constexpr VkImageUsageFlags xr_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        const VkImageUsageFlags xr_usage = !has_msaa_single ? VkImageUsageFlags{} : VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+            | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         // constexpr VkImageUsageFlags xr_usage{};
-        const std::vector attachment_images_info{
+        std::vector attachment_images_info{
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
                 .usage = xr_usage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -1179,6 +1293,18 @@ public:
                 .pViewFormats = &depth_format,
             }
         };
+        if (!has_msaa_single)
+        {
+            attachment_images_info.push_back({
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
+                .usage = xr_usage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                .width = m_framebuffer_size.width,
+                .height = m_framebuffer_size.height,
+                .layerCount = 2,
+                .viewFormatCount = 1,
+                .pViewFormats = &color_format,
+            });
+        }
         const VkFramebufferAttachmentsCreateInfo attachments_info {
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENTS_CREATE_INFO,
             .attachmentImageInfoCount = static_cast<uint32_t>(attachment_images_info.size()),
@@ -1497,10 +1623,12 @@ public:
         {
             FrameContext frame{
                 .size = m_framebuffer_size,
-                .color_image = color_swapchain_images[acquired_index].image,
-                .depth_image = depth_swapchain_images[acquired_index].image,
-                .color_view = color_swapchain_views[acquired_index],
-                .depth_view = depth_swapchain_views[acquired_index],
+                .color_image = has_msaa_single ? color_swapchain_images[acquired_index].image : color_msaa_image,
+                .depth_image = has_msaa_single ? depth_swapchain_images[acquired_index].image : depth_msaa_image,
+                .resolve_color_image = has_msaa_single ? VK_NULL_HANDLE : color_swapchain_images[acquired_index].image,
+                .color_view = has_msaa_single ? color_swapchain_views[acquired_index] : color_msaa_view,
+                .depth_view = has_msaa_single ? depth_swapchain_views[acquired_index] : depth_msaa_view,
+                .resolve_color_view = has_msaa_single ? VK_NULL_HANDLE : color_swapchain_views[acquired_index],
                 .framebuffer = m_framebuffer,
                 .renderpass = m_renderpass,
                 .display_time = frame_state.predictedDisplayTime,

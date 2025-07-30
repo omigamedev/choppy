@@ -269,7 +269,7 @@ public:
             VkClearValue{.color = {rgb[0], rgb[1], rgb[2], 1.f}},
             VkClearValue{.depthStencil = {1.f, 0u}}
         };
-        const std::array renderpass_views{frame.color_view, frame.depth_view};
+        const std::array renderpass_views{frame.color_view, frame.depth_view, frame.resolve_color_view};
         const VkRenderPassAttachmentBeginInfo renderpass_attachment{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO,
             .attachmentCount = static_cast<uint32_t>(renderpass_views.size()),
