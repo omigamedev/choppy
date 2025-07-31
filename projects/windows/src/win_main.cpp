@@ -32,15 +32,20 @@ public:
                 xr->physical_device(),
                 xr->queue_family_index());
             std::println("Start XR session");
-            if (!xr->start_session())
+            if (!xr->create_session())
             {
-                std::println("Failed to start session");
+                std::println("Failed to create session");
                 return false;
             }
             std::println("Create XR swapchain");
             if (!xr->create_swapchain())
             {
                 std::println("Failed to initialize swapchain");
+                return false;
+            }
+            if (!xr->begin_session())
+            {
+                std::println("Failed to begin session");
                 return false;
             }
             std::println("XR created succesfully");

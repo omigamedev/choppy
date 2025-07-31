@@ -60,12 +60,12 @@ public:
         }
         return true;
     }
-    bool start_session()
+    bool create_session()
     {
         auto& xr = app.xr();
         auto& vk = app.vk();
-        LOGI("Starting session");
-        if (!xr->start_session())
+        LOGI("Creating session");
+        if (!xr->create_session())
         {
             LOGE("Failed to start session");
             return false;
@@ -76,13 +76,31 @@ public:
             LOGE("Failed to create swapchain");
             return false;
         }
-        // vk: pick a format for color and depth
-        // vk: create the swapchain renderpass
-        // xr: enumerate views
-        // for each view
-        //     vk: create the swapchain image views
-        session_started = true;
         app.init();
+        return true;
+    }
+    bool begin_session()
+    {
+        auto& xr = app.xr();
+        LOGI("Begin session");
+        if (!xr->begin_session())
+        {
+            LOGE("Failed to begin session");
+            return false;
+        }
+        session_started = true;
+        return true;
+    }
+    bool end_session()
+    {
+        auto& xr = app.xr();
+        LOGI("End session");
+        if (!xr->end_session())
+        {
+            LOGE("Failed to begin session");
+            return false;
+        }
+        session_started = false;
         return true;
     }
     void main_loop()
@@ -118,11 +136,15 @@ void handle_cmd(android_app *pApp, int32_t cmd)
             LOGI("APP_CMD_INIT_WINDOW");
             if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
             {
-                context->start_session();
+                context->begin_session();
             }
             break;
         case APP_CMD_TERM_WINDOW:
             LOGI("APP_CMD_TERM_WINDOW");
+            if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
+            {
+                context->end_session();
+            }
             break;
         default:
             break;
@@ -220,6 +242,11 @@ void android_main(android_app *pApp)
 {
     AndroidContext context{pApp};
     if (!context.create())
+    {
+        GameActivity_finish(pApp->activity);
+        return;
+    }
+    if (!context.create_session())
     {
         GameActivity_finish(pApp->activity);
         return;

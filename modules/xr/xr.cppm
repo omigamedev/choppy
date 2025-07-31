@@ -111,6 +111,8 @@ class Context final
     }
     void wait_state(const XrSessionState wait_state) const noexcept
     {
+        if (wait_state == m_session_state)
+            return;
         XrEventDataBuffer event_data{ .type = XR_TYPE_EVENT_DATA_BUFFER };
         XrResult r{};
         while (true)
@@ -756,8 +758,9 @@ public:
 
         return true;
     }
-    bool start_session()
+    bool create_session() noexcept
     {
+
         const XrGraphicsBindingVulkanKHR binding{
             .type = XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR,
             .instance = m_vk_instance,
@@ -777,7 +780,6 @@ public:
             LOGE("xrCreateSession failed: %s", to_string(result));
             return false;
         }
-
 
 #ifdef __ANDROID__
         xrPerfSettingsSetPerformanceLevelEXT(XR_PERF_SETTINGS_DOMAIN_CPU_EXT,
@@ -807,6 +809,10 @@ public:
             LOGE("xrCreateReferenceSpace failed: %s", to_string(result));
             return false;
         }
+        return true;
+    }
+    bool begin_session() const noexcept
+    {
         wait_state(XR_SESSION_STATE_READY);
         constexpr XrSessionBeginInfo begin_info{
             .type = XR_TYPE_SESSION_BEGIN_INFO,
@@ -816,6 +822,17 @@ public:
             !XR_SUCCEEDED(result))
         {
             LOGE("xrBeginSession failed: %s", to_string(result));
+            return false;
+        }
+        return true;
+    }
+    bool end_session() const noexcept
+    {
+        wait_state(XR_SESSION_STATE_STOPPING);
+        if (const XrResult result = xrEndSession(m_session);
+            !XR_SUCCEEDED(result))
+        {
+            LOGE("xrEndSession failed: %s", to_string(result));
             return false;
         }
         return true;
