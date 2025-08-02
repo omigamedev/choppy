@@ -218,23 +218,7 @@ public:
         solid_flat->uniform_object()->create_staging(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * 3);
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             m_vertex_buffer->update_cmd<shaders::SolidFlatShader::VertexInput>(cmd, vertices);
-            for (VkImage img : m_xr->swapchain_depth_images())
-            {
-                constexpr VkImageSubresourceRange subresource_range = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 2};
-                const VkImageMemoryBarrier barrier{
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .srcAccessMask = 0,
-                    .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
-                        | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                    .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                    .image = img,
-                    .subresourceRange = subresource_range
-                };
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                    0, 0, nullptr, 0, nullptr, 1, &barrier);
-            }
+            m_xr->init_reources(cmd);
         });
         //solid_flat->uniform()->destroy_staging();
         m_vertex_buffer->destroy_staging();

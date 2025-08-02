@@ -7,6 +7,7 @@ module;
 #include <functional>
 #include <string_view>
 #include <span>
+#include <ranges>
 
 #include <volk.h>
 #include <vk_mem_alloc.h>
@@ -24,7 +25,14 @@ module;
 
 export module ce.vk;
 import ce.vk.utils;
+import ce.platform;
 import ce.platform.globals;
+
+#ifdef _WIN32
+import ce.platform.win32;
+#elifdef __ANDROID__
+import ce.platform.android;
+#endif
 
 export namespace ce::vk
 {
@@ -33,6 +41,7 @@ class Context final
     VkInstance m_instance = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
     VkQueue m_queue = VK_NULL_HANDLE;
+    VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkCommandPool m_cmd_pool = VK_NULL_HANDLE;
     VkCommandPool m_cmd_pool_imm = VK_NULL_HANDLE;
@@ -124,7 +133,7 @@ public:
         }
         return true;
     }
-    bool create() noexcept
+    bool create(const std::shared_ptr<platform::Window>& window) noexcept
     {
         volkInitialize();
         std::uint32_t vk_version = 0;
@@ -167,7 +176,64 @@ public:
         volkLoadInstance(m_instance);
 
         // Find Physical Device
+#ifdef _WIN32
+        auto& win32 = platform::GetPlatform<platform::Win32>();
+        auto win32_window = std::static_pointer_cast<platform::Win32Window>(window);
+        const VkWin32SurfaceCreateInfoKHR surface_info{
+            .sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
+            .hinstance = win32.hinstance(),
+            .hwnd = win32_window->hwnd(),
+        };
+        if (const VkResult result = vkCreateWin32SurfaceKHR(m_instance, &surface_info, nullptr, &m_surface);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create Vulkan surface: %s", utils::to_string(result));
+            return false;
+        }
+#else
+        LOGE("Android windows not implemented, yet :)");
+        return false;
+#endif
+
         // TODO: find a suitable device
+        const std::vector<VkPhysicalDevice> physical_devices = [this]{
+            uint32_t count = 0;
+            vkEnumeratePhysicalDevices(m_instance, &count, nullptr);
+            std::vector<VkPhysicalDevice> devices(count);
+            vkEnumeratePhysicalDevices(m_instance, &count, devices.data());
+            return devices;
+        }();
+
+        for (auto& physical_device : physical_devices)
+        {
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(physical_device, &properties);
+            const auto queue_family_properties = [physical_device]{
+                uint32_t count = 0;
+                vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, nullptr);
+                std::vector<VkQueueFamilyProperties> queue_families(count);
+                vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, queue_families.data());
+                return queue_families
+                    | std::views::filter([](const auto& p){ return p.queueFlags & VK_QUEUE_GRAPHICS_BIT; })
+                    | std::ranges::to<std::vector>();
+            }();
+            for (size_t i = 0; i < queue_family_properties.size(); ++i)
+            {
+                VkBool32 supports_surface = false;
+                if (const VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(
+                    physical_device, i, m_surface, &supports_surface); result != VK_SUCCESS)
+                {
+                    LOGE("Failed to get Vulkan surface support: %s", utils::to_string(result));
+                    return false;
+                }
+                if (supports_surface)
+                {
+                    m_queue_family_index = i;
+                    m_physical_device = physical_device;
+                }
+            }
+        }
+
         debug_name("ce_physical_device", m_physical_device);
         VkPhysicalDeviceProperties2 physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         vkGetPhysicalDeviceProperties2(m_physical_device, &physical_device_properties);

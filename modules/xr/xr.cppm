@@ -1287,13 +1287,13 @@ public:
 
         // Framebuffer
 
-        const VkImageUsageFlags xr_usage = !has_msaa_single ? VkImageUsageFlags{} : VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+        const VkImageUsageFlags xr_usage = has_msaa_single ? VkImageUsageFlags{} : VK_IMAGE_USAGE_TRANSFER_SRC_BIT
             | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
         // constexpr VkImageUsageFlags xr_usage{};
         std::vector attachment_images_info{
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
-                .usage = xr_usage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                 .width = m_framebuffer_size.width,
                 .height = m_framebuffer_size.height,
                 .layerCount = 2,
@@ -1302,7 +1302,7 @@ public:
             },
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
-                .usage = xr_usage | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                 .width = m_framebuffer_size.width,
                 .height = m_framebuffer_size.height,
                 .layerCount = 2,
@@ -1345,6 +1345,52 @@ public:
         }
         debug_name("ce_framebuffer", m_framebuffer);
         return true;
+    }
+    void init_reources(VkCommandBuffer cmd) const noexcept
+    {
+        for (VkImage img : swapchain_depth_images())
+        {
+            constexpr VkImageSubresourceRange subresource_range = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 2};
+            const VkImageMemoryBarrier barrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                    | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                .image = img,
+                .subresourceRange = subresource_range
+            };
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &barrier);
+        }
+        if (!has_msaa_single)
+        {
+            const std::array barriers{
+                VkImageMemoryBarrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .srcAccessMask = 0,
+                    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    .image = color_msaa_image,
+                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2}
+                },
+                VkImageMemoryBarrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .srcAccessMask = 0,
+                    .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                        | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    .image = depth_msaa_image,
+                    .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 2}
+                },
+            };
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                0, 0, nullptr, 0, nullptr, static_cast<uint32_t>(barriers.size()), barriers.data());
+        }
     }
     [[nodiscard]] XrActionSet create_action_set(const std::string_view name) const noexcept
     {

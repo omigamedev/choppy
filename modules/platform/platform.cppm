@@ -11,11 +11,18 @@ export namespace ce::platform
 class Window
 {
 public:
+    virtual ~Window() = default;
+    virtual bool create() noexcept = 0;
 };
 class Platform
 {
 public:
     virtual ~Platform() = default;
+
+    [[nodiscard]] virtual std::shared_ptr<Window> create_window() const noexcept
+    {
+        return nullptr;
+    }
 
     [[nodiscard]] virtual std::optional<std::vector<uint8_t>> read_file(const std::string& path) const noexcept
     {

@@ -4,6 +4,7 @@ project("choppy_engine")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_definitions(-DUNICODE -D_UNICODE)
 
 set(MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../modules)
 add_subdirectory(${MODULES_DIR}/app modules/app)

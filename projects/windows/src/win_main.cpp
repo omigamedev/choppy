@@ -8,15 +8,21 @@
 import ce.app;
 import ce.xr;
 import ce.vk;
+import ce.platform;
+import ce.platform.globals;
+import ce.platform.win32;
 
 class WindowsContext
 {
     ce::app::AppBase app;
     HWND m_wnd = nullptr;
     bool initialized = false;
-    bool create_window()
+    std::shared_ptr<ce::platform::Win32Window> m_window;
+    bool create_window() noexcept
     {
-        //WNDCLASS wc
+        const auto& win32 = ce::platform::GetPlatform<ce::platform::Win32>();
+        m_window = std::static_pointer_cast<ce::platform::Win32Window>(win32.create_window());
+        return m_window->create();
     }
 public:
     bool create()
@@ -50,7 +56,7 @@ public:
             }
             std::println("XR created succesfully");
         }
-        else if (vk->create())
+        else if (!create_window() || !vk->create(m_window))
         {
             std::println("Failed to initialize OpenXR, using Vulkan");
         }
