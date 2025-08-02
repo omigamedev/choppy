@@ -50,27 +50,8 @@ class Context final
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
     const uint32_t m_queue_index = 0;
     VmaAllocator m_vma = VK_NULL_HANDLE;
-public:
-    [[nodiscard]] VkInstance instance() const noexcept { return m_instance; }
-    [[nodiscard]] VkDevice device() const noexcept { return m_device; }
-    [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
-    [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
-    [[nodiscard]] VmaAllocator vma() const noexcept { return m_vma; }
-    [[nodiscard]] const VkPhysicalDeviceLimits& physical_device_limits() const noexcept
+    bool create_vulkan_objects() noexcept
     {
-        return m_physical_device_limits;
-    }
-    bool create_from(VkInstance instance, VkDevice device,
-        VkPhysicalDevice physical_device, uint32_t queue_family_index) noexcept
-    {
-        m_instance = instance;
-        m_device = device;
-        debug_name("ce_instance", m_instance);
-        debug_name("ce_device", m_device);
-        m_physical_device = physical_device;
-        debug_name("ce_physical_device", m_physical_device);
-        m_queue_family_index = queue_family_index;
-
         VkPhysicalDeviceProperties2 physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         vkGetPhysicalDeviceProperties2(m_physical_device, &physical_device_properties);
         m_physical_device_limits = physical_device_properties.properties.limits;
@@ -132,6 +113,28 @@ public:
             return false;
         }
         return true;
+    }
+public:
+    [[nodiscard]] VkInstance instance() const noexcept { return m_instance; }
+    [[nodiscard]] VkDevice device() const noexcept { return m_device; }
+    [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
+    [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
+    [[nodiscard]] VmaAllocator vma() const noexcept { return m_vma; }
+    [[nodiscard]] const VkPhysicalDeviceLimits& physical_device_limits() const noexcept
+    {
+        return m_physical_device_limits;
+    }
+    bool create_from(VkInstance instance, VkDevice device,
+        VkPhysicalDevice physical_device, uint32_t queue_family_index) noexcept
+    {
+        m_instance = instance;
+        m_device = device;
+        debug_name("ce_instance", m_instance);
+        debug_name("ce_device", m_device);
+        m_physical_device = physical_device;
+        debug_name("ce_physical_device", m_physical_device);
+        m_queue_family_index = queue_family_index;
+        return create_vulkan_objects();
     }
     bool create(const std::shared_ptr<platform::Window>& window) noexcept
     {
@@ -201,7 +204,16 @@ public:
             vkEnumeratePhysicalDevices(m_instance, &count, nullptr);
             std::vector<VkPhysicalDevice> devices(count);
             vkEnumeratePhysicalDevices(m_instance, &count, devices.data());
-            return devices;
+            auto discrete_devices = devices
+                | std::views::filter([](const VkPhysicalDevice& device)
+                {
+                    VkPhysicalDeviceProperties properties{};
+                    vkGetPhysicalDeviceProperties(device, &properties);
+                    return properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+                });
+            if (!discrete_devices.empty())
+                return discrete_devices | std::ranges::to<std::vector>();
+            return devices | std::ranges::to<std::vector>();
         }();
 
         for (auto& physical_device : physical_devices)
@@ -214,9 +226,13 @@ public:
                 std::vector<VkQueueFamilyProperties> queue_families(count);
                 vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, queue_families.data());
                 return queue_families
-                    | std::views::filter([](const auto& p){ return p.queueFlags & VK_QUEUE_GRAPHICS_BIT; })
+                    | std::views::filter([](const VkQueueFamilyProperties& p)
+                    {
+                        return p.queueFlags & VK_QUEUE_GRAPHICS_BIT;
+                    })
                     | std::ranges::to<std::vector>();
             }();
+            bool found_queue_family = false;
             for (size_t i = 0; i < queue_family_properties.size(); ++i)
             {
                 VkBool32 supports_surface = false;
@@ -230,7 +246,14 @@ public:
                 {
                     m_queue_family_index = i;
                     m_physical_device = physical_device;
+                    found_queue_family = true;
+                    break;
                 }
+            }
+            if (found_queue_family)
+            {
+                LOGI("Found device: %s and queue family index %d", properties.deviceName, m_queue_family_index);
+                break;
             }
         }
 
@@ -241,29 +264,6 @@ public:
 
         // Create Device
 
-        const std::vector<VkQueueFamilyProperties2> queue_props = [this]{
-            uint32_t count = 0;
-            vkGetPhysicalDeviceQueueFamilyProperties2(m_physical_device, &count, nullptr);
-            std::vector<VkQueueFamilyProperties2> props(count, {.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
-            vkGetPhysicalDeviceQueueFamilyProperties2(m_physical_device, &count, props.data());
-            return props;
-        }();
-        for (int i = 0; i < queue_props.size(); i++)
-        {
-            const VkQueueFlags queue_flags = queue_props[i].queueFamilyProperties.queueFlags;
-            const bool has_graphics = queue_flags & VK_QUEUE_GRAPHICS_BIT;
-            const bool has_compute = queue_flags & VK_QUEUE_COMPUTE_BIT;
-            if (has_graphics && has_compute)
-            {
-                m_queue_family_index = i;
-                break;
-            }
-        }
-        if (m_queue_family_index == std::numeric_limits<uint32_t>::max())
-        {
-            LOGE("Failed to find a suitable queue family");
-            return false;
-        }
         constexpr std::array queue_priority{1.f};
         const VkDeviceQueueCreateInfo queue_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -284,37 +284,10 @@ public:
         debug_name("ce_device", m_device);
         volkLoadDevice(m_device);
 
-        const VkDeviceQueueInfo2 get_queue_info{
-            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2,
-            .queueFamilyIndex = m_queue_family_index,
-            .queueIndex = m_queue_index
-        };
-        vkGetDeviceQueue2(m_device, &get_queue_info, &m_queue);
-        const VkCommandPoolCreateInfo pool_info{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-            .queueFamilyIndex = m_queue_family_index
-        };
-        if (VkResult result = vkCreateCommandPool(m_device, &pool_info, nullptr, &m_cmd_pool_imm); result != VK_SUCCESS)
-        {
-            LOGE("Failed to create command pool");
-            return false;
-        }
-        debug_name("ce_command_pool_imm", m_cmd_pool_imm);
-        // Init VMA
-        VmaVulkanFunctions vulkanFunctions = {};
-        vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-        vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
-        VmaAllocatorCreateInfo allocatorCreateInfo = {};
-        allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_3;
-        allocatorCreateInfo.physicalDevice = m_physical_device;
-        allocatorCreateInfo.device = m_device;
-        allocatorCreateInfo.instance = m_instance;
-        allocatorCreateInfo.pVulkanFunctions = &vulkanFunctions;
-        if (vmaCreateAllocator(&allocatorCreateInfo, &m_vma) != VK_SUCCESS)
-        {
-            LOGE("vmaCreateAllocator failed");
-            return false;
-        }
+        return create_vulkan_objects();
+    }
+    bool create_swapchain() noexcept
+    {
         return true;
     }
     [[nodiscard]] VkCommandBuffer create_command_buffer(const std::string& name) const noexcept

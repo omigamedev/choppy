@@ -56,9 +56,14 @@ public:
             }
             std::println("XR created succesfully");
         }
-        else if (!create_window() || !vk->create(m_window))
+        else if (create_window() && vk->create(m_window))
         {
             std::println("Failed to initialize OpenXR, using Vulkan");
+            if (!vk->create_swapchain())
+            {
+                std::println("Failed to create swapchain");
+                return false;
+            }
         }
         else
         {
