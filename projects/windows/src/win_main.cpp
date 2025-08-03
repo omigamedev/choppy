@@ -21,14 +21,15 @@ class WindowsContext
     bool create_window() noexcept
     {
         const auto& win32 = ce::platform::GetPlatform<ce::platform::Win32>();
-        m_window = std::static_pointer_cast<ce::platform::Win32Window>(win32.create_window());
-        return m_window->create();
+        m_window = std::static_pointer_cast<ce::platform::Win32Window>(win32.new_window());
+        return m_window->create(512, 512);
     }
 public:
     bool create()
     {
         const auto& xr = app.xr() = std::make_shared<ce::xr::Context>();
         const auto& vk = app.vk() = std::make_shared<ce::vk::Context>();
+        bool xr_mode = false;
         if (xr->create())
         {
             std::println("OpenXR initialized");
@@ -55,6 +56,7 @@ public:
                 return false;
             }
             std::println("XR created succesfully");
+            xr_mode = true;
         }
         else if (create_window() && vk->create(m_window))
         {
@@ -64,13 +66,24 @@ public:
                 std::println("Failed to create swapchain");
                 return false;
             }
+            if (!vk->create_renderpass())
+            {
+                std::println("Failed to create renderpass");
+                return false;
+            }
+            if (!vk->create_framebuffer())
+            {
+                std::println("Failed to create framebuffer");
+                return false;
+            }
+            xr_mode = false;
         }
         else
         {
             std::println("Failed to initialize Vulkan and OpenXR");
             return false;
         }
-        app.init();
+        app.init(xr_mode);
         initialized = true;
         return true;
     }

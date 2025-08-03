@@ -27,6 +27,7 @@ import ce.platform;
 import ce.platform.globals;
 import ce.xr;
 import ce.vk;
+import ce.vk.utils;
 import ce.shaders.solidflat;
 import glm;
 
@@ -156,7 +157,11 @@ class AppBase final
     std::shared_ptr<Cube> m_cube;
     std::vector<VkCommandBuffer> m_present_cmd;
     std::vector<VkFence> m_present_fences;
+    VkRenderPass m_renderpass = VK_NULL_HANDLE;
+    VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
     uint32_t m_present_index = 0;
+    uint32_t m_swapchain_count = 0;
+    bool xrmode = false;
 public:
     ~AppBase() = default;
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
@@ -196,14 +201,28 @@ public:
         }
         return v;
     }
-    void init() noexcept
+    void init(bool xr_mode) noexcept
     {
-        m_present_cmd = m_vk->create_command_buffers("eye_frame", m_xr->swapchain_count());
-        m_present_fences = m_vk->create_fences("eye_fence", m_xr->swapchain_count(), VK_FENCE_CREATE_SIGNALED_BIT);
+        xrmode = xr_mode;
 
-        m_xr->bind_input();
+        if (xrmode)
+        {
+            m_swapchain_count = m_xr->swapchain_count();
+            m_renderpass = m_xr->renderpass();
+            m_sample_count = m_xr->sample_count();
+            m_xr->bind_input();
+        }
+        else
+        {
+            m_swapchain_count = m_vk->swapchain_count();
+            m_renderpass = m_vk->renderpass();
+            m_sample_count = m_vk->samples_count();
+        }
         solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
-        solid_flat->create(m_xr->renderpass(), m_xr->sample_count());
+        solid_flat->create(m_renderpass, m_sample_count);
+
+        m_present_cmd = m_vk->create_command_buffers("eye_frame", m_swapchain_count);
+        m_present_fences = m_vk->create_fences("present_fence", m_swapchain_count, VK_FENCE_CREATE_SIGNALED_BIT);
 
         // Create the cube object
         m_cube = std::make_shared<Cube>();
@@ -218,12 +237,19 @@ public:
         solid_flat->uniform_object()->create_staging(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * 3);
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             m_vertex_buffer->update_cmd<shaders::SolidFlatShader::VertexInput>(cmd, vertices);
-            m_xr->init_reources(cmd);
+            if (xrmode)
+            {
+                m_xr->init_resources(cmd);
+            }
+            else
+            {
+                m_vk->init_resources(cmd);
+            }
         });
         //solid_flat->uniform()->destroy_staging();
         m_vertex_buffer->destroy_staging();
     }
-    void render(const xr::FrameContext& frame, const float dt, VkCommandBuffer cmd) const noexcept
+    void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) const noexcept
     {
         static float time = 0;
         time += dt;
@@ -276,10 +302,20 @@ public:
 
         // Begin rendering
 
-        const VkViewport viewport = m_xr->viewport();
-        vkCmdSetViewportWithCount(cmd, 1, &viewport);
-        const VkRect2D scissor = m_xr->scissor();
-        vkCmdSetScissorWithCount(cmd, 1, &scissor);
+        if (xrmode)
+        {
+            const VkViewport viewport = m_xr->viewport();
+            vkCmdSetViewportWithCount(cmd, 1, &viewport);
+            const VkRect2D scissor = m_xr->scissor();
+            vkCmdSetScissorWithCount(cmd, 1, &scissor);
+        }
+        else
+        {
+            const VkViewport viewport = m_vk->viewport();
+            vkCmdSetViewportWithCount(cmd, 1, &viewport);
+            const VkRect2D scissor = m_vk->scissor();
+            vkCmdSetScissorWithCount(cmd, 1, &scissor);
+        }
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, solid_flat->pipeline());
 
@@ -314,7 +350,7 @@ public:
         constexpr VkSubpassEndInfo subpass_end_info{.sType = VK_STRUCTURE_TYPE_SUBPASS_END_INFO};
         vkCmdEndRenderPass2(cmd, &subpass_end_info);
     }
-    void tick(const float dt) noexcept
+    void tick_xrmode(const float dt) noexcept
     {
         m_xr->poll_events();
         if (m_xr->state_active())
@@ -327,7 +363,7 @@ public:
             vkResetFences(m_vk->device(), 1, &m_present_fences[m_present_index]);
             vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
 
-            m_xr->present([this, dt](const xr::FrameContext& frame){
+            m_xr->present([this, dt](const vk::utils::FrameContext& frame){
                 m_xr->sync_pose(frame.display_time);
                 constexpr VkCommandBufferBeginInfo cmd_begin_info{
                     .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -343,7 +379,49 @@ public:
         else
         {
             // Submit empty frames
-            m_xr->present([](const xr::FrameContext& frame){});
+            m_xr->present([](const vk::utils::FrameContext& frame){});
+        }
+    }
+    void tick_windowed(const float dt) noexcept
+    {
+        vkWaitForFences(m_vk->device(), 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
+        vkResetFences(m_vk->device(), 1, &m_present_fences[m_present_index]);
+        m_vk->present([this, dt](const vk::utils::FrameContext& frame, VkSemaphore wait_swapchain, VkSemaphore signal_present)
+        {
+            vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
+            constexpr VkCommandBufferBeginInfo cmd_begin_info{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            };
+            vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
+
+            const VkImageMemoryBarrier barrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+                .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .image = frame.resolve_color_image,
+                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
+            };
+            vkCmdPipelineBarrier(m_present_cmd[m_present_index], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            render(frame, dt, m_present_cmd[m_present_index]);
+            vkEndCommandBuffer(m_present_cmd[m_present_index]);
+            m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index],
+                wait_swapchain, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, signal_present);
+        });
+        m_present_index = (m_present_index + 1) % m_vk->swapchain_count();
+    }
+    void tick(const float dt) noexcept
+    {
+        if (xrmode)
+        {
+            tick_xrmode(dt);
+        }
+        else
+        {
+            tick_windowed(dt);
         }
     }
 };

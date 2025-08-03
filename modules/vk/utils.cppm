@@ -1,14 +1,43 @@
 module;
 #include <string>
 #include <type_traits>
+#include <volk.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_to_string.hpp>
 #include <vulkan/vulkan_core.h>
 
 export module ce.vk.utils;
+import glm;
 
 export namespace ce::vk::utils
 {
+struct FrameContext final
+{
+    VkExtent2D size;
+    VkImage color_image;
+    VkImage depth_image;
+    VkImage resolve_color_image;
+    VkImageView color_view;
+    VkImageView depth_view;
+    VkImageView resolve_color_view;
+    VkFramebuffer framebuffer;
+    VkRenderPass renderpass;
+    int64_t display_time;
+    glm::mat4 view[2];
+    glm::mat4 projection[2];
+};
+[[nodiscard]] VkFormat find_format(const VkPhysicalDevice physical_device,
+const std::span<const VkFormat> formats, const VkFormatFeatureFlags features) noexcept
+{
+    for (const auto format : formats)
+    {
+        VkFormatProperties2 props{.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+        vkGetPhysicalDeviceFormatProperties2(physical_device, format, &props);
+        if (props.formatProperties.optimalTilingFeatures & features)
+            return format;
+    }
+    return VK_FORMAT_UNDEFINED;
+}
 [[nodiscard]] const char* to_string(VkResult r) noexcept
 {
     static char sr[64]{0};

@@ -1,9 +1,9 @@
 #include "solid-flat.h"
 
-PixelInput VSMain(VertexInput input, uint ViewIndex : SV_ViewID)
+PixelInput VSMain(VertexInput input/*, uint ViewIndex : SV_ViewID*/)
 {
     PixelInput output;
-    const float4x4 WorldViewProjection = mul(ObjectTransform, ViewProjection[ViewIndex]);
+    const float4x4 WorldViewProjection = mul(ObjectTransform, ViewProjection[0]);
     output.position = mul(input.position, WorldViewProjection);
     output.color = input.color;
     return output;

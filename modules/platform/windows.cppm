@@ -26,7 +26,7 @@ class Win32Window final : public Window
 {
     HWND m_hWnd = nullptr;
 public:
-    bool create() noexcept override
+    bool create(const uint32_t width, const uint32_t height) noexcept override
     {
         constexpr wchar_t CLASS_NAME[] = L"ChoppyWindowClass";
         const HINSTANCE hInstance = GetModuleHandle(nullptr);
@@ -35,28 +35,30 @@ public:
             .hInstance = hInstance,
             .lpszClassName = CLASS_NAME,
         };
-
         if (!RegisterClass(&wc))
         {
             // TODO: add some proper logging please
             return false;
         }
-
+        RECT rect = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
+        AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
+        int windowWidth = rect.right - rect.left;
+        int windowHeight = rect.bottom - rect.top;
         m_hWnd = CreateWindowEx(
             0,
             CLASS_NAME,
             L"Hello Choppy Engine",
             WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT, CW_USEDEFAULT, 500, 300,
+            CW_USEDEFAULT, CW_USEDEFAULT, windowWidth, windowHeight,
             nullptr, nullptr, hInstance, nullptr
         );
-
         if (!m_hWnd)
         {
             return false;
         }
-
         ShowWindow(m_hWnd, SW_SHOW);
+        m_width = width;
+        m_height = height;
         return true;
     }
     [[nodiscard]] HWND hwnd() const noexcept
@@ -67,7 +69,7 @@ public:
 class Win32 final : public Platform
 {
 public:
-    [[nodiscard]] std::shared_ptr<Window> create_window() const noexcept override
+    [[nodiscard]] std::shared_ptr<Window> new_window() const noexcept override
     {
         return std::make_shared<Win32Window>();
     }

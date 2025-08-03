@@ -27,6 +27,7 @@ export module ce.vk;
 import ce.vk.utils;
 import ce.platform;
 import ce.platform.globals;
+import glm;
 
 #ifdef _WIN32
 import ce.platform.win32;
@@ -42,12 +43,32 @@ class Context final
     VkDevice m_device = VK_NULL_HANDLE;
     VkQueue m_queue = VK_NULL_HANDLE;
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
+    VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
+    VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
     VkCommandPool m_cmd_pool = VK_NULL_HANDLE;
     VkCommandPool m_cmd_pool_imm = VK_NULL_HANDLE;
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
     VkPhysicalDeviceLimits m_physical_device_limits = {};
+
+    std::vector<VkImage> m_color_swapchain_images;
+    std::vector<VkImageView> m_color_swapchain_views;
+    VkImage m_color_image = VK_NULL_HANDLE;
+    VkImageView m_color_view = VK_NULL_HANDLE;
+    VkImage m_depth_image = VK_NULL_HANDLE;
+    VkImageView m_depth_view = VK_NULL_HANDLE;
+    VmaAllocation m_color_allocation = VK_NULL_HANDLE;
+    VmaAllocation m_depth_allocation = VK_NULL_HANDLE;
+    VmaAllocationInfo m_color_allocation_info = {};
+    VmaAllocationInfo m_depth_allocation_info = {};
+    std::vector<VkSemaphore> m_wait_swapchain;
+    std::vector<VkSemaphore> m_wait_render;
+    uint32_t m_semaphore_index = 0;
+
+    std::shared_ptr<platform::Window> m_window;
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
+    VkFormat m_color_format = VK_FORMAT_UNDEFINED;
+    VkFormat m_depth_format = VK_FORMAT_UNDEFINED;
     const uint32_t m_queue_index = 0;
     VmaAllocator m_vma = VK_NULL_HANDLE;
     bool create_vulkan_objects() noexcept
@@ -120,9 +141,29 @@ public:
     [[nodiscard]] uint32_t queue_index() const noexcept { return m_queue_index; }
     [[nodiscard]] uint32_t queue_family_index() const noexcept { return m_queue_family_index; }
     [[nodiscard]] VmaAllocator vma() const noexcept { return m_vma; }
+    [[nodiscard]] VkQueue queue() const noexcept { return m_queue; }
+    [[nodiscard]] VkRenderPass renderpass() const noexcept { return m_renderpass; }
+    [[nodiscard]] VkSwapchainKHR swapchain() const noexcept { return m_swapchain; }
+    [[nodiscard]] VkSampleCountFlagBits samples_count() const noexcept { return VK_SAMPLE_COUNT_4_BIT; }
+    [[nodiscard]] uint32_t swapchain_count() const noexcept
+    {
+        return static_cast<uint32_t>(m_color_swapchain_images.size());
+    }
     [[nodiscard]] const VkPhysicalDeviceLimits& physical_device_limits() const noexcept
     {
         return m_physical_device_limits;
+    }
+    [[nodiscard]] VkViewport viewport() const noexcept
+    {
+        const auto [width, height] = m_window->size();
+        return VkViewport{0, 0,
+            static_cast<float>(width),
+            static_cast<float>(height), 0, 1};
+    }
+    [[nodiscard]] VkRect2D scissor() const noexcept
+    {
+        const auto [width, height] = m_window->size();
+        return VkRect2D{0, 0, width, height};
     }
     bool create_from(VkInstance instance, VkDevice device,
         VkPhysicalDevice physical_device, uint32_t queue_family_index) noexcept
@@ -151,10 +192,19 @@ public:
             .applicationVersion = 0,
             .apiVersion = vk_version
         };
+        const std::vector<std::string> vk_instance_available_extensions = [this]{
+            uint32_t count = 0;
+            vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+            std::vector<VkExtensionProperties> ext(count);
+            vkEnumerateInstanceExtensionProperties(nullptr, &count, ext.data());
+            return ext
+               | std::views::transform([](const VkExtensionProperties& v)->std::string{ return v.extensionName; })
+               | std::ranges::to<std::vector<std::string>>();
+        }();
         const std::vector<const char*> layers{
-            //"VK_LAYER_KHRONOS_validation"
+            "VK_LAYER_KHRONOS_validation"
         };
-        const std::vector<const char*> extensions{
+        std::vector<const char*> extensions{
             VK_KHR_SURFACE_EXTENSION_NAME,
 #ifdef __ANDROID__
             VK_KHR_ANDROID_SURFACE_EXTENSION_NAME
@@ -162,6 +212,18 @@ public:
             VK_KHR_WIN32_SURFACE_EXTENSION_NAME
 #endif
         };
+        constexpr std::array vk_instance_optional_extensions{
+            VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+            VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
+            VK_EXT_DEBUG_MARKER_EXTENSION_NAME,
+        };
+        for (const auto& e : vk_instance_optional_extensions)
+        {
+            if (std::ranges::contains(vk_instance_available_extensions, e))
+            {
+                extensions.push_back(e);
+            }
+        }
         const auto instance_info = VkInstanceCreateInfo{
             .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pApplicationInfo = &app_info,
@@ -175,7 +237,6 @@ public:
             LOGE("Failed to create Vulkan instance: %s", utils::to_string(result));
             return false;
         }
-        debug_name("ce_instance", m_instance);
         volkLoadInstance(m_instance);
 
         // Find Physical Device
@@ -257,13 +318,90 @@ public:
             }
         }
 
-        debug_name("ce_physical_device", m_physical_device);
         VkPhysicalDeviceProperties2 physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         vkGetPhysicalDeviceProperties2(m_physical_device, &physical_device_properties);
         LOGI("Vulkan device: %s", physical_device_properties.properties.deviceName);
+        const auto device_extensions = [this] {
+            uint32_t count = 0;
+            vkEnumerateDeviceExtensionProperties(m_physical_device, nullptr, &count, nullptr);
+            std::vector props(count, VkExtensionProperties{});
+            vkEnumerateDeviceExtensionProperties(m_physical_device, nullptr, &count, props.data());
+            return props
+               | std::views::transform([](const VkExtensionProperties& v)->std::string{ return v.extensionName; })
+               | std::ranges::to<std::vector<std::string>>();
+        }();
 
         // Create Device
-
+        std::vector vk_device_extensions{
+            VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
+            VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+            VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME,
+            VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
+            VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+            VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        };
+        constexpr std::array vk_device_optional_extensions{
+            VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+            VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+            VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME,
+            VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME,
+        };
+        for (const char* e : vk_device_optional_extensions)
+        {
+            if (std::ranges::contains(device_extensions, e))
+            {
+                vk_device_extensions.push_back(e);
+                LOGI("VK Optional Ext: %s", e);
+            }
+        }
+        // Features
+        VkPhysicalDeviceBufferDeviceAddressFeatures bda_feature{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+        };
+        VkPhysicalDeviceRobustness2FeaturesEXT robustness_feature{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+            .pNext = &bda_feature,
+        };
+        VkPhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT,
+            .pNext = &robustness_feature,
+        };
+        VkPhysicalDeviceImagelessFramebufferFeatures imageless_feature{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
+            .pNext = &dynamic_state_features,
+        };
+        VkPhysicalDeviceFeatures2 supported_physical_device_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &imageless_feature,
+        };
+        vkGetPhysicalDeviceFeatures2(m_physical_device, &supported_physical_device_features);
+        // check required features
+        if (!dynamic_state_features.extendedDynamicState)
+        {
+            LOGE("Failed to find a dynamic state features");
+            return false;
+        }
+        if (!imageless_feature.imagelessFramebuffer)
+        {
+            LOGE("Failed to find a imageless framebuffer feature");
+            return false;
+        }
+        if (!robustness_feature.nullDescriptor)
+        {
+            LOGE("Failed to find a null descriptor robustness feature");
+            return false;
+        }
+        // disable not needed features
+        robustness_feature.robustBufferAccess2 = false;
+        robustness_feature.robustImageAccess2 = false;
+        bda_feature.bufferDeviceAddressCaptureReplay = false; // enable for debugging BDA
+        bda_feature.bufferDeviceAddressMultiDevice = false;
+        // enable supported features
+        const VkPhysicalDeviceFeatures2 enabled_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &imageless_feature,
+        };
         constexpr std::array queue_priority{1.f};
         const VkDeviceQueueCreateInfo queue_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -273,21 +411,195 @@ public:
         };
         const VkDeviceCreateInfo device_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .pNext = &enabled_features,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queue_info,
+            .enabledExtensionCount = static_cast<uint32_t>(vk_device_extensions.size()),
+            .ppEnabledExtensionNames = vk_device_extensions.data(),
         };
-        if (VkResult result = vkCreateDevice(m_physical_device, &device_info, nullptr, &m_device); result != VK_SUCCESS)
+        if (VkResult result = vkCreateDevice(m_physical_device, &device_info, nullptr, &m_device);
+            result != VK_SUCCESS)
         {
             LOGE("Failed to create Vulkan device: %s", utils::to_string(result));
             return false;
         }
-        debug_name("ce_device", m_device);
         volkLoadDevice(m_device);
+        debug_name("ce_device", m_device);
+        debug_name("ce_instance", m_instance);
+        debug_name("ce_physical_device", m_physical_device);
+        m_window = window;
 
         return create_vulkan_objects();
     }
     bool create_swapchain() noexcept
     {
+        constexpr std::array desired_color_formats{
+            VK_FORMAT_R8G8B8A8_SRGB,
+            VK_FORMAT_B8G8R8A8_SRGB,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_FORMAT_B8G8R8A8_UNORM,
+        };
+        constexpr std::array desired_depth_formats{
+            VK_FORMAT_D32_SFLOAT,
+            VK_FORMAT_D16_UNORM,
+        };
+        m_depth_format = utils::find_format(m_physical_device, desired_depth_formats,
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+        m_color_format = utils::find_format(m_physical_device, desired_color_formats,
+            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
+        const auto [width, height] = m_window->size();
+        const VkSwapchainCreateInfoKHR create_info{
+            .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .surface = m_surface,
+            .minImageCount = 3,
+            .imageFormat = m_color_format,
+            .imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+            .imageExtent = VkExtent2D{width, height},
+            .imageArrayLayers = 1,
+            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+            .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .presentMode = VK_PRESENT_MODE_FIFO_KHR,
+            .clipped = true,
+            .oldSwapchain = VK_NULL_HANDLE,
+        };
+        if (const VkResult result = vkCreateSwapchainKHR(m_device, &create_info, nullptr, &m_swapchain);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create Vulkan swapchain: %s", utils::to_string(result));
+            return false;
+        }
+        m_color_swapchain_images = [this]{
+            uint32_t count = 0;
+            vkGetSwapchainImagesKHR(m_device, m_swapchain, &count, nullptr);
+            std::vector<VkImage> images(count);
+            vkGetSwapchainImagesKHR(m_device, m_swapchain, &count, images.data());
+            return images;
+        }();
+        m_color_swapchain_views.reserve(m_color_swapchain_images.size());
+        for (VkImage image : m_color_swapchain_images)
+        {
+            debug_name("color_swapchain", image);
+            VkImageView& view = m_color_swapchain_views.emplace_back();
+            // Color
+            const VkImageViewCreateInfo color_create_info{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+				.image = image,
+				.viewType = VK_IMAGE_VIEW_TYPE_2D,
+				.format = m_color_format,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1
+                }
+            };
+            if (const VkResult result = vkCreateImageView(m_device, &color_create_info, nullptr, &view);
+                result != VK_SUCCESS)
+            {
+                LOGE("Failed to create Vulkan image view: %s", utils::to_string(result));
+                return false;
+            }
+            debug_name("color_swapchain_view", view);
+        }
+        // Multisampled color image
+        VkImageCreateInfo color_image_create_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = m_color_format,
+            .extent = VkExtent3D{width, height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = samples_count(),
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo color_memory_info{
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        if (const VkResult result = vmaCreateImage(m_vma, &color_image_create_info, &color_memory_info,
+            &m_color_image, &m_color_allocation, &m_color_allocation_info); result != VK_SUCCESS)
+        {
+            LOGE("vmaCreateImage failed: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("color_msaa_image", m_color_image);
+        const VkImageViewCreateInfo color_view_create_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = m_color_image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = m_color_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        if (const VkResult result = vkCreateImageView(m_device, &color_view_create_info, nullptr, &m_color_view);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create Vulkan image view: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("color_msaa_view", m_color_view);
+        // Multisampled depth image
+        VkImageCreateInfo depth_image_create_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = m_depth_format,
+            .extent = VkExtent3D{width, height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = samples_count(),
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo depth_memory_info{
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        if (const VkResult result = vmaCreateImage(m_vma, &depth_image_create_info, &depth_memory_info,
+            &m_depth_image, &m_depth_allocation, &m_depth_allocation_info); result != VK_SUCCESS)
+        {
+            LOGE("vmaCreateImage failed: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("depth_msaa_image", m_depth_image);
+        const VkImageViewCreateInfo depth_view_create_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = m_depth_image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = m_depth_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        if (const VkResult result = vkCreateImageView(m_device, &depth_view_create_info, nullptr, &m_depth_view);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create Vulkan image view: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("depth_msaa_view", m_depth_view);
+        for (size_t i = 0; i < m_color_swapchain_images.size(); ++i)
+        {
+            constexpr VkSemaphoreCreateInfo semaphore_create_info{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            };
+            vkCreateSemaphore(m_device, &semaphore_create_info, nullptr, &m_wait_render.emplace_back());
+            debug_name(std::format("render_sem[{}]", i), m_wait_render.back());
+            vkCreateSemaphore(m_device, &semaphore_create_info, nullptr, &m_wait_swapchain.emplace_back());
+            debug_name(std::format("swapchain_sem[{}]", i), m_wait_swapchain.back());
+        }
         return true;
     }
     [[nodiscard]] VkCommandBuffer create_command_buffer(const std::string& name) const noexcept
@@ -409,14 +721,24 @@ public:
         vkFreeCommandBuffers(m_device, m_cmd_pool_imm, 1, &cmd);
         vkDestroyFence(m_device, fence, nullptr);
     }
-    void submit(VkCommandBuffer cmd, VkFence fence = VK_NULL_HANDLE) const noexcept
+    void submit(VkCommandBuffer cmd, VkFence fence = VK_NULL_HANDLE, VkSemaphore wait = VK_NULL_HANDLE,
+        VkPipelineStageFlags wait_stage = {}, VkSemaphore signal = VK_NULL_HANDLE) const noexcept
     {
         const VkSubmitInfo submit_info{
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount = wait ? 1u : 0u,
+            .pWaitSemaphores = &wait,
+            .pWaitDstStageMask = &wait_stage,
             .commandBufferCount = 1,
-            .pCommandBuffers = &cmd
+            .pCommandBuffers = &cmd,
+            .signalSemaphoreCount = signal ? 1u : 0u,
+            .pSignalSemaphores = &signal
         };
-        vkQueueSubmit(m_queue, 1, &submit_info, fence);
+        if (const VkResult result = vkQueueSubmit(m_queue, 1, &submit_info, fence);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to submit");
+        }
     }
     void exec(std::string_view name, const std::function<void(VkCommandBuffer cmd)>& fn) const noexcept
     {
@@ -447,12 +769,13 @@ public:
         };
         vkQueueSubmit(m_queue, 1, &submit_info, VK_NULL_HANDLE);
     }
-    bool create_renderpass(const VkFormat color_format, const VkFormat depth_format) noexcept
+    bool create_renderpass() noexcept
     {
         const std::array renderpass_attachments{
-            VkAttachmentDescription{
-                .format = color_format,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = m_color_format,
+                .samples = samples_count(),
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                 .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
@@ -460,48 +783,205 @@ public:
                 .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
             },
-            VkAttachmentDescription{
-                .format = depth_format,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = m_depth_format,
+                .samples = samples_count(),
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
                 .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                 .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .initialLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+                .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+            },
+            VkAttachmentDescription2{
+                .sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2,
+                .format = m_color_format,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
             },
         };
-        constexpr VkAttachmentReference renderpass_sub_color{
+        constexpr VkAttachmentReference2 renderpass_sub_color{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
             .attachment = 0,
             .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         };
-        constexpr VkAttachmentReference renderpass_sub_depth{
+        constexpr VkAttachmentReference2 renderpass_sub_depth{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
             .attachment = 1,
-            .layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL
+            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        };
+        constexpr VkAttachmentReference2 renderpass_sub_resolve{
+            .sType = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2,
+            .attachment = 2,
+            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         };
         const std::array renderpass_sub{
-            VkSubpassDescription{
+            VkSubpassDescription2{
+                .sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2,
                 .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                 .colorAttachmentCount = 1,
                 .pColorAttachments = &renderpass_sub_color,
-                .pDepthStencilAttachment = &renderpass_sub_depth
+                .pResolveAttachments = &renderpass_sub_resolve,
+                .pDepthStencilAttachment = &renderpass_sub_depth,
             },
         };
-        const VkRenderPassCreateInfo renderpass_info{
-            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        const VkRenderPassCreateInfo2 renderpass_info{
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2,
             .attachmentCount = static_cast<uint32_t>(renderpass_attachments.size()),
             .pAttachments = renderpass_attachments.data(),
             .subpassCount = static_cast<uint32_t>(renderpass_sub.size()),
             .pSubpasses = renderpass_sub.data()
         };
-        if (const VkResult result = vkCreateRenderPass(m_device, &renderpass_info, nullptr, &m_renderpass);
+        if (const VkResult result = vkCreateRenderPass2(m_device, &renderpass_info, nullptr, &m_renderpass);
             result != VK_SUCCESS)
         {
-            LOGE("Failed to create renderpass");
+            LOGE("vkCreateRenderPass failed: %s", utils::to_string(result));
             return false;
         }
-        debug_name("ce_renderpass", m_renderpass);
+        debug_name("ce_windowedrenderpass", m_renderpass);
         return true;
+    }
+    bool create_framebuffer() noexcept
+    {
+        const auto [width, height] = m_window->size();
+        const std::array attachment_images_info{
+            VkFramebufferAttachmentImageInfo{
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                .width = width,
+                .height = height,
+                .layerCount = 1,
+                .viewFormatCount = 1,
+                .pViewFormats = &m_color_format,
+            },
+            VkFramebufferAttachmentImageInfo{
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
+                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                .width = width,
+                .height = height,
+                .layerCount = 1,
+                .viewFormatCount = 1,
+                .pViewFormats = &m_depth_format,
+            },
+            VkFramebufferAttachmentImageInfo{
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                .width = width,
+                .height = height,
+                .layerCount = 1,
+                .viewFormatCount = 1,
+                .pViewFormats = &m_color_format,
+            }
+        };
+        const VkFramebufferAttachmentsCreateInfo attachments_info {
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENTS_CREATE_INFO,
+            .attachmentImageInfoCount = static_cast<uint32_t>(attachment_images_info.size()),
+            .pAttachmentImageInfos = attachment_images_info.data(),
+        };
+        const VkFramebufferCreateInfo framebufferInfo{
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .pNext = &attachments_info,                     // Attachments info here
+            .flags = VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT,  // Key flag
+            .renderPass = m_renderpass,
+            .attachmentCount = static_cast<uint32_t>(attachment_images_info.size()),
+            .width = width,
+            .height = height,
+            .layers = 1, // must be one if multiview is used
+        };
+        if (const VkResult result = vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffer);
+            result != VK_SUCCESS)
+        {
+            LOGE("vkCreateFramebuffer failed: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("ce_framebuffer", m_framebuffer);
+        return true;
+    }
+    void init_resources(VkCommandBuffer cmd) const noexcept
+    {
+        std::vector barriers{
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .image = m_color_image,
+                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
+            },
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                    | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                .image = m_depth_image,
+                .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}
+            },
+        };
+        for (auto image : m_color_swapchain_images)
+        {
+            barriers.push_back({
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                .image = image,
+                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
+            });
+        }
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
+            | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, 0, nullptr, 0, nullptr, static_cast<uint32_t>(barriers.size()), barriers.data());
+    }
+    void present(const std::function<void(const utils::FrameContext& frame,
+        VkSemaphore wait_swapchain, VkSemaphore signal_present)>& render_callback) noexcept
+    {
+        uint32_t swapchain_index;
+        if (const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
+            m_wait_swapchain[m_semaphore_index], VK_NULL_HANDLE, &swapchain_index); result != VK_SUCCESS)
+        {
+            LOGE("vkAcquireNextImageKHR failed: %s", utils::to_string(result));
+        }
+        const auto [width, height] = m_window->size();
+        const utils::FrameContext frame{
+            .size = {width, height},
+            .color_image = m_color_image,
+            .depth_image = m_depth_image,
+            .resolve_color_image = m_color_swapchain_images[swapchain_index],
+            .color_view = m_color_view,
+            .depth_view = m_depth_view,
+            .resolve_color_view = m_color_swapchain_views[swapchain_index],
+            .framebuffer = m_framebuffer,
+            .renderpass = m_renderpass,
+            .display_time = 0,
+            .view = {glm::gtx::identity<glm::mat4>()},
+            .projection = {glm::gtx::identity<glm::mat4>()}
+        };
+        render_callback(frame, m_wait_swapchain[m_semaphore_index], m_wait_render[m_semaphore_index]);
+        const VkPresentInfoKHR present_info {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &m_wait_render[m_semaphore_index],
+            .swapchainCount = 1,
+            .pSwapchains = &m_swapchain,
+            .pImageIndices = &swapchain_index,
+        };
+        if (const VkResult result = vkQueuePresentKHR(m_queue, &present_info);
+            result != VK_SUCCESS)
+        {
+            LOGE("vkQueuePresentKHR failed: %s", utils::to_string(result));
+        }
+        m_semaphore_index = (m_semaphore_index + 1) % swapchain_count();
     }
     void debug_name(const std::string& name, auto obj) const noexcept
     {

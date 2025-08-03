@@ -34,21 +34,6 @@ import glm;
 
 export namespace ce::xr
 {
-struct FrameContext final
-{
-    VkExtent2D size;
-    VkImage color_image;
-    VkImage depth_image;
-    VkImage resolve_color_image;
-    VkImageView color_view;
-    VkImageView depth_view;
-    VkImageView resolve_color_view;
-    VkFramebuffer framebuffer;
-    VkRenderPass renderpass;
-    XrTime display_time;
-    glm::mat4 view[2];
-    glm::mat4 projection[2];
-};
 class Context final
 {
     // openxr
@@ -837,18 +822,6 @@ public:
         }
         return true;
     }
-    [[nodiscard]] VkFormat find_format(const std::span<const VkFormat> formats,
-        const VkFormatFeatureFlags features) const noexcept
-    {
-        for (const auto format : formats)
-        {
-            VkFormatProperties2 props{.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
-            vkGetPhysicalDeviceFormatProperties2(m_physical_device, format, &props);
-            if (props.formatProperties.optimalTilingFeatures & features)
-                return format;
-        }
-        return VK_FORMAT_UNDEFINED;
-    }
     bool create_msaa_images() noexcept
     {
         // Color
@@ -1127,9 +1100,9 @@ public:
             VK_FORMAT_D32_SFLOAT,
             VK_FORMAT_D16_UNORM,
         };
-        depth_format = find_format(desired_depth_formats,
+        depth_format = vk::utils::find_format(m_physical_device, desired_depth_formats,
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
-        color_format = find_format(color_formats,
+        color_format = vk::utils::find_format(m_physical_device, color_formats,
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
         view_configs = [this]{
             uint32_t count = 0;
@@ -1346,7 +1319,7 @@ public:
         debug_name("ce_framebuffer", m_framebuffer);
         return true;
     }
-    void init_reources(VkCommandBuffer cmd) const noexcept
+    void init_resources(VkCommandBuffer cmd) const noexcept
     {
         for (VkImage img : swapchain_depth_images())
         {
@@ -1455,7 +1428,6 @@ public:
     }
     bool bind_input() noexcept
     {
-
         m_action_set = create_action_set("gameplay");
         m_action_teleport = create_action("teleport", XR_ACTION_TYPE_BOOLEAN_INPUT);
         m_hands_path[0] = create_path("/user/hand/left");
@@ -1633,7 +1605,7 @@ public:
             event_data.type = XR_TYPE_EVENT_DATA_BUFFER; // Reset for the next poll
         }
     }
-    void present(const std::function<void(const FrameContext& frame)>& render_callback) const noexcept
+    void present(const std::function<void(const vk::utils::FrameContext& frame)>& render_callback) const noexcept
     {
         constexpr XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frame_state{.type = XR_TYPE_FRAME_STATE};
@@ -1684,7 +1656,7 @@ public:
 
         if (frame_state.shouldRender)
         {
-            FrameContext frame{
+            vk::utils::FrameContext frame{
                 .size = m_framebuffer_size,
                 .color_image = has_msaa_single ? color_swapchain_images[acquired_index].image : color_msaa_image,
                 .depth_image = has_msaa_single ? depth_swapchain_images[acquired_index].image : depth_msaa_image,
