@@ -342,6 +342,7 @@ public:
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
         constexpr std::array vk_device_optional_extensions{
+            VK_KHR_MULTIVIEW_EXTENSION_NAME,
             VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
             VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
             VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME,
@@ -363,9 +364,13 @@ public:
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
             .pNext = &bda_feature,
         };
+        VkPhysicalDeviceMultiviewFeatures multiview_feature{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES,
+            .pNext = &robustness_feature,
+        };
         VkPhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state_features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT,
-            .pNext = &robustness_feature,
+            .pNext = &multiview_feature,
         };
         VkPhysicalDeviceImagelessFramebufferFeatures imageless_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
