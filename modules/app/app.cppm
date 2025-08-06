@@ -161,6 +161,14 @@ class AppBase final
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
     uint32_t m_present_index = 0;
     uint32_t m_swapchain_count = 0;
+    glm::ivec2 m_size{0, 0};
+    bool dragging = false;
+    glm::ivec2 drag_start = { 0, 0 };
+    glm::vec2 cam_start = {0, 0};
+    glm::vec2 cam_angles = { 0, 0 };
+    glm::vec3 cam_pos = { 0, 0, 0 };
+    std::array<bool, 256> keys{false};
+    float cam_fov = 90.f;
     bool xrmode = false;
 public:
     ~AppBase() = default;
@@ -221,7 +229,7 @@ public:
         solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
         solid_flat->create(m_renderpass, m_sample_count);
 
-        m_present_cmd = m_vk->create_command_buffers("eye_frame", m_swapchain_count);
+        m_present_cmd = m_vk->create_command_buffers("render_frame", m_swapchain_count);
         m_present_fences = m_vk->create_fences("present_fence", m_swapchain_count, VK_FENCE_CREATE_SIGNALED_BIT);
 
         // Create the cube object
@@ -274,6 +282,7 @@ public:
         };
         solid_flat->uniform_object()->update_cmd(cmd, uniforms_object);
 
+        // Renderpass setup
         const std::array rgb{.3f, .3f, .3f};
         const std::array clear_value{
             VkClearValue{.color = {rgb[0], rgb[1], rgb[2], 1.f}},
@@ -329,20 +338,23 @@ public:
             vkCmdDraw(cmd, vertices.size(), 1, 0, 0);
         }
 
-        // Bind the cube's vertex and index buffers
-        for (uint32_t i = 0; i < 2; ++i)
+        if (xrmode)
         {
-            const std::array vertex_buffers{m_cube->vertex_buffer()->buffer()};
-            constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
-            vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
-            vkCmdBindIndexBuffer(cmd, m_cube->index_buffer()->buffer(), 0, VK_INDEX_TYPE_UINT32);
+            // Bind the cube's vertex and index buffers
+            for (uint32_t i = 0; i < 2; ++i)
+            {
+                const std::array vertex_buffers{m_cube->vertex_buffer()->buffer()};
+                constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
+                vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
+                vkCmdBindIndexBuffer(cmd, m_cube->index_buffer()->buffer(), 0, VK_INDEX_TYPE_UINT32);
 
-            const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(1 + i);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
+                const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(1 + i);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
 
-            // Draw the cube using its indices
-            vkCmdDrawIndexed(cmd, m_cube->index_count(), 1, 0, 0, 0);
+                // Draw the cube using its indices
+                vkCmdDrawIndexed(cmd, m_cube->index_count(), 1, 0, 0, 0);
+            }
         }
 
         // End rendering
@@ -386,7 +398,8 @@ public:
     {
         vkWaitForFences(m_vk->device(), 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
         vkResetFences(m_vk->device(), 1, &m_present_fences[m_present_index]);
-        m_vk->present([this, dt](const vk::utils::FrameContext& frame, VkSemaphore wait_swapchain, VkSemaphore signal_present)
+        m_vk->present([this, dt](const vk::utils::FrameContext& frame,
+            VkSemaphore wait_swapchain, VkSemaphore signal_present)
         {
             vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
             constexpr VkCommandBufferBeginInfo cmd_begin_info{
@@ -406,7 +419,36 @@ public:
             vkCmdPipelineBarrier(m_present_cmd[m_present_index], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-            render(frame, dt, m_present_cmd[m_present_index]);
+            auto frame_fixed = frame;
+
+            const glm::mat4 cam_rot = glm::gtx::eulerAngleXY(cam_angles.y, -cam_angles.x);
+            const float speed = keys[VK_SHIFT] ? .25f : 1.f;
+            if (keys['W'])
+            {
+                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * cam_rot;
+                cam_pos += glm::vec3(forward) * dt * speed;
+            }
+            else if (keys['S'])
+            {
+                const glm::vec4 forward = glm::vec4{0, 0, 1, 1} * cam_rot;
+                cam_pos += glm::vec3(forward) * dt * speed;
+            }
+            else if (keys['A'])
+            {
+                const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * cam_rot;
+                cam_pos += glm::vec3(forward) * dt * speed;
+            }
+            else if (keys['D'])
+            {
+                const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * cam_rot;
+                cam_pos += glm::vec3(forward) * dt * speed;
+            }
+
+            const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
+            frame_fixed.projection[0] = glm::gtc::perspectiveLH(glm::radians(cam_fov), aspect, 0.01f, 100.f);;
+            frame_fixed.view[0] = cam_rot * glm::gtx::translate(cam_pos);
+
+            render(frame_fixed, dt, m_present_cmd[m_present_index]);
             vkEndCommandBuffer(m_present_cmd[m_present_index]);
             m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index],
                 wait_swapchain, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, signal_present);
@@ -423,6 +465,61 @@ public:
         {
             tick_windowed(dt);
         }
+    }
+    void on_resize(const uint32_t width, const uint32_t height) noexcept
+    {
+        LOGI("resize %d %d", width, height);
+        m_size = { width, height };
+    }
+    void on_mouse_wheel(const int32_t x, const int32_t y, const float delta) noexcept
+    {
+        LOGI("mouse wheel %d %d %f", x, y, delta);
+        cam_fov += delta * 10;
+    }
+    void on_mouse_move(const int32_t x, const int32_t y) noexcept
+    {
+        // LOGI("mouse moved %d %d", x, y);
+        if (dragging)
+        {
+            const glm::ivec2 pos{x, y};
+            const glm::ivec2 delta = pos - drag_start;
+            constexpr float multiplier = 1.f;
+            cam_angles = cam_start + glm::radians(glm::vec2(delta) * multiplier);
+        }
+    }
+    void on_mouse_left_down(const int32_t x, const int32_t y) noexcept
+    {
+        // LOGI("mouse left down %d %d", x, y);
+        dragging = true;
+        drag_start = {x, y};
+        cam_start = cam_angles;
+    }
+    void on_mouse_left_up(const int32_t x, const int32_t y) noexcept
+    {
+        // LOGI("mouse left up %d %d", x, y);
+        dragging = false;
+    }
+    void on_mouse_right_down(const int32_t x, const int32_t y) noexcept
+    {
+        // LOGI("mouse right down %d %d", x, y);
+    }
+    void on_mouse_right_up(const int32_t x, const int32_t y) noexcept
+    {
+        // LOGI("mouse right up %d %d", x, y);
+    }
+    void on_key_down(const uint64_t keycode) noexcept
+    {
+        LOGI("keycode %llu", keycode);
+        if (keycode == VK_ESCAPE)
+        {
+            // Please don't kill me like that :(
+            exit(0);
+        }
+        keys[keycode] = true;
+    }
+    void on_key_up(const uint64_t keycode) noexcept
+    {
+        keys[keycode] = false;
     }
 };
 }

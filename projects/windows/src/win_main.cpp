@@ -76,6 +76,42 @@ public:
                 std::println("Failed to create framebuffer");
                 return false;
             }
+            m_window->on_resize = [this](const uint32_t width, const uint32_t height)
+            {
+                app.on_resize(width, height);
+            };
+            m_window->on_mouse_move = [this](const int32_t x, const int32_t y)
+            {
+                app.on_mouse_move(x, y);
+            };
+            m_window->on_mouse_wheel = [this](const int32_t x, const int32_t y, const float delta)
+            {
+                app.on_mouse_wheel(x, y, delta);
+            };
+            m_window->on_mouse_left_down = [this](const int32_t x, const int32_t y)
+            {
+                app.on_mouse_left_down(x, y);
+            };
+            m_window->on_mouse_left_up = [this](const int32_t x, const int32_t y)
+            {
+                app.on_mouse_left_up(x, y);
+            };
+            m_window->on_mouse_right_down = [this](const int32_t x, const int32_t y)
+            {
+                app.on_mouse_right_down(x, y);
+            };
+            m_window->on_mouse_right_up = [this](const int32_t x, const int32_t y)
+            {
+                app.on_mouse_right_up(x, y);
+            };
+            m_window->on_key_down = [this](const uint64_t keycode)
+            {
+                app.on_key_down(keycode);
+            };
+            m_window->on_key_up = [this](const uint64_t keycode)
+            {
+                app.on_key_up(keycode);
+            };
             xr_mode = false;
         }
         else
@@ -84,6 +120,10 @@ public:
             return false;
         }
         app.init(xr_mode);
+        if (!xr_mode)
+        {
+            app.on_resize(m_window->width(), m_window->height());
+        }
         initialized = true;
         return true;
     }

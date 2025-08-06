@@ -8,6 +8,10 @@ export module ce.platform;
 
 export namespace ce::platform
 {
+enum KeyCodes
+{
+    Escape = 27,
+};
 class Window
 {
 protected:

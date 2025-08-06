@@ -76,7 +76,7 @@ public:
             LOGE("Failed to create swapchain");
             return false;
         }
-        app.init();
+        app.init(true);
         return true;
     }
     bool begin_session()
