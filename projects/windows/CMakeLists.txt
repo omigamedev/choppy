@@ -18,6 +18,6 @@ add_subdirectory(${MODULES_DIR}/shaders modules/shaders)
 
 add_executable(ce_windows src/win_main.cpp)
 #target_link_directories(ce_windows PRIVATE $ENV{VULKAN_SDK}/Include
-target_link_libraries(ce_windows PRIVATE app vk xr rtmp platform shaders)
+target_link_libraries(ce_windows PRIVATE app vk xr rtmp platform shaders gameinput)
 target_include_directories(ce_windows PRIVATE "$ENV{WindowsSdkDir}Include/$ENV{WindowsSDKVersion}/cppwinrt")
 #set_target_properties(ce_windows PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")

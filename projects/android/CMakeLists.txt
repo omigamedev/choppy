@@ -15,6 +15,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(game-activity REQUIRED CONFIG)
+find_package(games-controller REQUIRED CONFIG)
 
 set(MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../modules)
 add_subdirectory(${MODULES_DIR}/shaders modules/shaders)
@@ -32,7 +33,9 @@ target_link_libraries(main PRIVATE
 #    mylib_static_cpp
     encoder rtmp app vk platform xr shaders
     android log
-    game-activity::game-activity_static)
+    game-activity::game-activity_static
+    games-controller::paddleboat_static
+)
 target_compile_definitions(main PRIVATE "YT_KEY=\"$ENV{YT_KEY}\"")
 target_link_options(main PRIVATE
     -u Java_com_google_androidgamesdk_GameActivity_initializeNativeCode)

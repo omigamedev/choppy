@@ -4,6 +4,7 @@
 #include <chrono>
 #include <windows.h>
 #include <volk.h>
+#include <GameInput.h>
 
 import ce.app;
 import ce.xr;
@@ -12,17 +13,42 @@ import ce.platform;
 import ce.platform.globals;
 import ce.platform.win32;
 
+std::string hresult_to_string(const HRESULT hr)
+{
+    char* msgBuffer = nullptr;
+    const DWORD size = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        hr,
+        0, // Default language
+        msgBuffer,
+        0,
+        nullptr
+    );
+
+    const std::string message = (size && msgBuffer) ? std::string(msgBuffer) : "Unknown error";
+
+    if (msgBuffer)
+        LocalFree(msgBuffer);
+
+    return message;
+}
+
 class WindowsContext
 {
     ce::app::AppBase app;
     HWND m_wnd = nullptr;
     bool initialized = false;
     std::shared_ptr<ce::platform::Win32Window> m_window;
+    IGameInput* gameInput = nullptr;
+    IGameInputDevice* device = nullptr;
     bool create_window() noexcept
     {
         const auto& win32 = ce::platform::GetPlatform<ce::platform::Win32>();
         m_window = std::static_pointer_cast<ce::platform::Win32Window>(win32.new_window());
-        return m_window->create(512, 512);
+        return m_window->create(1024, 1024);
     }
 public:
     bool create()
@@ -124,6 +150,10 @@ public:
         {
             app.on_resize(m_window->width(), m_window->height());
         }
+        if (const HRESULT result = GameInputCreate(&gameInput); FAILED(result))
+        {
+            std::println("Failed to create GameInput: {}", hresult_to_string(result));
+        }
         initialized = true;
         return true;
     }
@@ -150,10 +180,47 @@ public:
             }
             if (initialized)
             {
+                ce::app::GamepadState gamepad;
+                if (gameInput)
+                {
+                    // Enumerate devices
+                    IGameInputReading* reading = nullptr;
+                    if (const HRESULT result = gameInput->GetCurrentReading(GameInputKindGamepad, nullptr, &reading);
+                        SUCCEEDED(result) && reading)
+                    {
+                        GameInputGamepadState state{};
+                        reading->GetGamepadState(&state);
+                        //printf("Left stick X: %f\n", state.leftThumbstickX);
+                        gamepad = ce::app::GamepadState{
+                            .buttons = {
+                                static_cast<bool>(state.buttons & GameInputGamepadMenu),
+                                static_cast<bool>(state.buttons & GameInputGamepadView),
+                                static_cast<bool>(state.buttons & GameInputGamepadA),
+                                static_cast<bool>(state.buttons & GameInputGamepadB),
+                                static_cast<bool>(state.buttons & GameInputGamepadX),
+                                static_cast<bool>(state.buttons & GameInputGamepadY),
+                                static_cast<bool>(state.buttons & GameInputGamepadDPadUp),
+                                static_cast<bool>(state.buttons & GameInputGamepadDPadDown),
+                                static_cast<bool>(state.buttons & GameInputGamepadDPadLeft),
+                                static_cast<bool>(state.buttons & GameInputGamepadDPadRight),
+                                static_cast<bool>(state.buttons & GameInputGamepadRightShoulder),
+                                static_cast<bool>(state.buttons & GameInputGamepadLeftShoulder),
+                                static_cast<bool>(state.buttons & GameInputGamepadLeftThumbstick),
+                                static_cast<bool>(state.buttons & GameInputGamepadRightThumbstick),
+                            },
+                            .thumbstick_left = {state.leftThumbstickX, state.leftThumbstickY},
+                            .thumbstick_right = {state.rightThumbstickX, state.rightThumbstickY},
+                            .trigger_left = state.leftTrigger,
+                            .trigger_right = state.rightTrigger,
+                        };
+                        reading->Release();
+                    }
+                }
+
                 const auto current_time = std::chrono::high_resolution_clock::now();
                 const float delta_time = std::chrono::duration<float>(current_time - start_time).count();
                 start_time = current_time;
-                app.tick(delta_time);
+                app.tick(delta_time, gamepad);
             }
         }
     }

@@ -5,6 +5,7 @@
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
+#include <paddleboat/paddleboat.h>
 #include <video_encoder.h>
 #include <audio_encoder.h>
 #include <rtmp.h>
@@ -28,9 +29,11 @@ class AndroidContext
     app::AppBase app;
     android_app *pApp;
     bool session_started = false;
+    JNIEnv* m_env{nullptr};
 public:
-    AndroidContext(android_app *pApp) : pApp(pApp) { }
-    bool create()
+    AndroidContext(android_app *pApp) noexcept : pApp(pApp) { }
+    JNIEnv* env() noexcept { return m_env; };
+    bool create() noexcept
     {
         auto& platform = platform::GetPlatform<platform::Android>();
         if (!platform.setup_android(pApp))
@@ -60,7 +63,7 @@ public:
         }
         return true;
     }
-    bool create_session()
+    bool create_session() noexcept
     {
         auto& xr = app.xr();
         auto& vk = app.vk();
@@ -79,7 +82,7 @@ public:
         app.init(true);
         return true;
     }
-    bool begin_session()
+    bool begin_session() noexcept
     {
         auto& xr = app.xr();
         LOGI("Begin session");
@@ -91,7 +94,7 @@ public:
         session_started = true;
         return true;
     }
-    bool end_session()
+    bool end_session() noexcept
     {
         auto& xr = app.xr();
         LOGI("End session");
@@ -103,8 +106,14 @@ public:
         session_started = false;
         return true;
     }
-    void main_loop()
+    void main_loop() noexcept
     {
+        pApp->activity->vm->AttachCurrentThread(&m_env, NULL);
+        if (Paddleboat_init(m_env, pApp->activity->javaGameActivity) != PADDLEBOAT_NO_ERROR)
+        {
+            LOGE("Paddleboat_init failed");
+        }
+
         int events;
         android_poll_source *pSource;
         auto start_time = std::chrono::high_resolution_clock::now();
@@ -118,20 +127,107 @@ public:
                     pSource->process(pApp, pSource);
                 }
             }
+            if (android_input_buffer* inputBuffer = android_app_swap_input_buffers(pApp))
+            {
+                if (inputBuffer->keyEventsCount != 0)
+                {
+                    for (uint64_t i = 0; i < inputBuffer->keyEventsCount; ++i)
+                    {
+                        const GameActivityKeyEvent* keyEvent = &inputBuffer->keyEvents[i];
+                        Paddleboat_processGameActivityKeyInputEvent(keyEvent, sizeof(GameActivityKeyEvent));
+                    }
+                    android_app_clear_key_events(inputBuffer);
+                }
+                if (inputBuffer->motionEventsCount != 0)
+                {
+                    for (uint64_t i = 0; i < inputBuffer->motionEventsCount; ++i)
+                    {
+                        const GameActivityMotionEvent* motionEvent = &inputBuffer->motionEvents[i];
+                        if (!Paddleboat_processGameActivityMotionInputEvent(motionEvent,
+                            sizeof(GameActivityMotionEvent)))
+                        {
+                            // Didn't belong to a game controller, process it ourselves if it is a touch event
+                            // _cook_game_activity_motion_event(motionEvent, _cooked_event_callback);
+                        }
+                    }
+                    android_app_clear_motion_events(inputBuffer);
+                }
+            }
+
             auto current_time = std::chrono::high_resolution_clock::now();
             float delta_time = std::chrono::duration<float>(current_time - start_time).count();
             start_time = current_time;
             if (session_started)
             {
-                app.tick(delta_time);
+                Paddleboat_update(m_env);
+
+                int i = 0;
+                Paddleboat_Controller_Data controllerData;
+                if (Paddleboat_getControllerData(i, &controllerData) == PADDLEBOAT_NO_ERROR)
+                {
+                    // Controller 'i' is connected and data is available
+
+                    // Check specific buttons
+                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_A) {
+                        LOGI("Controller %d: Button A is pressed", i);
+                    }
+                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_B) {
+                        LOGI("Controller %d: Button B is pressed", i);
+                    }
+                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_X) {
+                        LOGI("Controller %d: Button X is pressed", i);
+                    }
+                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_Y) {
+                        LOGI("Controller %d: Button Y is pressed", i);
+                    }
+                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_L1) {
+                        LOGI("Controller %d: Button L1 is pressed", i);
+                    }
+                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_R1) {
+                        LOGI("Controller %d: Button R1 is pressed", i);
+                    }
+                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_DPAD_UP) {
+                        LOGI("Controller %d: D-pad Up is pressed", i);
+                    }
+                    // ... and so on for other buttons like:
+                    // PADDLEBOAT_BUTTON_DPAD_DOWN, PADDLEBOAT_BUTTON_DPAD_LEFT, PADDLEBOAT_BUTTON_DPAD_RIGHT
+                    // PADDLEBOAT_BUTTON_L2, PADDLEBOAT_BUTTON_R2 (these might also have trigger values)
+                    // PADDLEBOAT_BUTTON_THUMBL, PADDLEBOAT_BUTTON_THUMBR
+                    // PADDLEBOAT_BUTTON_START, PADDLEBOAT_BUTTON_SELECT (or BACK)
+                    // PADDLEBOAT_BUTTON_HOME, PADDLEBOAT_BUTTON_TOUCHPAD (if available)
+
+                    // Access analog stick values (joysticks)
+                    // float leftStickX = controllerData.leftStick.stickX;
+                    // float leftStickY = controllerData.leftStick.stickY;
+                    // float rightStickX = controllerData.rightStick.stickX;
+                    // float rightStickY = controllerData.rightStick.stickY;
+
+                    // Access trigger values
+                    // float L2_trigger = controllerData.triggerL2;
+                    // float R2_trigger = controllerData.triggerR2;
+                }
+
+                app.tick(delta_time, {});
             }
         } while(!pApp->destroyRequested);
     }
 };
 
-void handle_cmd(android_app *pApp, int32_t cmd)
+void handle_cmd(android_app *pApp, int32_t cmd) noexcept
 {
     switch (cmd) {
+        case APP_CMD_START:
+            if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
+            {
+                Paddleboat_onStart(context->env());
+            }
+            break;
+        case APP_CMD_STOP:
+            if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
+            {
+                Paddleboat_onStop(context->env());
+            }
+            break;
         case APP_CMD_INIT_WINDOW:
             LOGI("APP_CMD_INIT_WINDOW");
             if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
@@ -151,14 +247,14 @@ void handle_cmd(android_app *pApp, int32_t cmd)
     }
 }
 
-bool motion_event_filter_func(const GameActivityMotionEvent *motionEvent)
+bool motion_event_filter_func(const GameActivityMotionEvent *motionEvent) noexcept
 {
     auto sourceClass = motionEvent->source & AINPUT_SOURCE_CLASS_MASK;
     return (sourceClass == AINPUT_SOURCE_CLASS_POINTER ||
             sourceClass == AINPUT_SOURCE_CLASS_JOYSTICK);
 }
 
-void encoder_loop()
+void encoder_loop() noexcept
 {
     LOGI("Encoder loop started");
     const int width = 1920;
@@ -265,4 +361,6 @@ void android_main(android_app *pApp)
 
     //auto encoder_thread = std::thread(&encoder_loop);
     context.main_loop();
+
+    Paddleboat_destroy(pApp->activity->env);
 }

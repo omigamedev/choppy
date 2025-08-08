@@ -145,6 +145,23 @@ public:
         return true;
     }
 };
+enum class GamepadButton : uint8_t
+{
+    Menu, View,
+    A, B, X, Y,
+    Up, Down, Left, Right,
+    ShoulderLeft, ShoulderRight,
+    ThumbLeft, ThumbRight,
+    EnumCount
+};
+struct GamepadState
+{
+    std::array<bool, static_cast<size_t>(GamepadButton::EnumCount)> buttons{false};
+    float thumbstick_left[2]{};
+    float thumbstick_right[2]{};
+    float trigger_left{0};
+    float trigger_right{0};
+};
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
@@ -362,7 +379,7 @@ public:
         constexpr VkSubpassEndInfo subpass_end_info{.sType = VK_STRUCTURE_TYPE_SUBPASS_END_INFO};
         vkCmdEndRenderPass2(cmd, &subpass_end_info);
     }
-    void tick_xrmode(const float dt) noexcept
+    void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
     {
         m_xr->poll_events();
         if (m_xr->state_active())
@@ -394,11 +411,11 @@ public:
             m_xr->present([](const vk::utils::FrameContext& frame){});
         }
     }
-    void tick_windowed(const float dt) noexcept
+    void tick_windowed(const float dt, const GamepadState& gamepad) noexcept
     {
         vkWaitForFences(m_vk->device(), 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
         vkResetFences(m_vk->device(), 1, &m_present_fences[m_present_index]);
-        m_vk->present([this, dt](const vk::utils::FrameContext& frame,
+        m_vk->present([this, dt, &gamepad](const vk::utils::FrameContext& frame,
             VkSemaphore wait_swapchain, VkSemaphore signal_present)
         {
             vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
@@ -421,27 +438,53 @@ public:
 
             auto frame_fixed = frame;
 
+            constexpr float dead_zone = 0.05;
+            constexpr float steering_speed = 90.f;
+            const glm::vec2 rthumb = glm::gtc::make_vec2(gamepad.thumbstick_right);
+            const glm::vec2 abs_rthumb = glm::abs(rthumb);
+            if (abs_rthumb.x > dead_zone)
+            {
+                cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
+            }
+            if (abs_rthumb.y > dead_zone)
+            {
+                cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
+            }
             const glm::mat4 cam_rot = glm::gtx::eulerAngleXY(cam_angles.y, -cam_angles.x);
+#ifdef _WIN32
             const float speed = keys[VK_SHIFT] ? .25f : 1.f;
+#else
+            const float speed = 1;
+#endif
             if (keys['W'])
             {
                 const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * cam_rot;
                 cam_pos += glm::vec3(forward) * dt * speed;
             }
-            else if (keys['S'])
+            if (keys['S'])
             {
                 const glm::vec4 forward = glm::vec4{0, 0, 1, 1} * cam_rot;
                 cam_pos += glm::vec3(forward) * dt * speed;
             }
-            else if (keys['A'])
+            if (keys['A'])
             {
                 const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * cam_rot;
                 cam_pos += glm::vec3(forward) * dt * speed;
             }
-            else if (keys['D'])
+            if (keys['D'])
             {
                 const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * cam_rot;
                 cam_pos += glm::vec3(forward) * dt * speed;
+            }
+            if (fabs(gamepad.thumbstick_left[0]) > dead_zone)
+            {
+                const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * cam_rot;
+                cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[0];
+            }
+            if (fabs(gamepad.thumbstick_left[1]) > dead_zone)
+            {
+                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * cam_rot;
+                cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1];
             }
 
             const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
@@ -455,15 +498,15 @@ public:
         });
         m_present_index = (m_present_index + 1) % m_vk->swapchain_count();
     }
-    void tick(const float dt) noexcept
+    void tick(const float dt, const GamepadState& gamepad) noexcept
     {
         if (xrmode)
         {
-            tick_xrmode(dt);
+            tick_xrmode(dt, gamepad);
         }
         else
         {
-            tick_windowed(dt);
+            tick_windowed(dt, gamepad);
         }
     }
     void on_resize(const uint32_t width, const uint32_t height) noexcept
@@ -510,11 +553,13 @@ public:
     void on_key_down(const uint64_t keycode) noexcept
     {
         LOGI("keycode %llu", keycode);
+#ifdef _WIN32
         if (keycode == VK_ESCAPE)
         {
             // Please don't kill me like that :(
             exit(0);
         }
+#endif
         keys[keycode] = true;
     }
     void on_key_up(const uint64_t keycode) noexcept
