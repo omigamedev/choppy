@@ -65,6 +65,10 @@ class Context final
     std::vector<VkSemaphore> m_wait_render;
     uint32_t m_semaphore_index = 0;
 
+    uint32_t m_present_index = 0;
+    std::vector<VkCommandBuffer> m_present_cmd;
+    std::vector<VkFence> m_present_fences;
+
     std::shared_ptr<platform::Window> m_window;
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
     VkFormat m_color_format = VK_FORMAT_UNDEFINED;
@@ -605,6 +609,9 @@ public:
             vkCreateSemaphore(m_device, &semaphore_create_info, nullptr, &m_wait_swapchain.emplace_back());
             debug_name(std::format("swapchain_sem[{}]", i), m_wait_swapchain.back());
         }
+
+        m_present_cmd = create_command_buffers("render_frame", swapchain_count());
+        m_present_fences = create_fences("present_fence", swapchain_count(), VK_FENCE_CREATE_SIGNALED_BIT);
         return true;
     }
     [[nodiscard]] VkCommandBuffer create_command_buffer(const std::string& name) const noexcept
@@ -948,9 +955,17 @@ public:
             | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
             0, 0, nullptr, 0, nullptr, static_cast<uint32_t>(barriers.size()), barriers.data());
     }
-    void present(const std::function<void(const utils::FrameContext& frame,
-        VkSemaphore wait_swapchain, VkSemaphore signal_present)>& render_callback) noexcept
+    void present(const std::function<void(const utils::FrameContext& frame)>& render_callback) noexcept
     {
+        vkWaitForFences(m_device, 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
+        vkResetFences(m_device, 1, &m_present_fences[m_present_index]);
+        vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
+
+        constexpr VkCommandBufferBeginInfo cmd_begin_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        };
+        vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
+
         uint32_t swapchain_index;
         if (const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
             m_wait_swapchain[m_semaphore_index], VK_NULL_HANDLE, &swapchain_index); result != VK_SUCCESS)
@@ -959,6 +974,7 @@ public:
         }
         const auto [width, height] = m_window->size();
         const utils::FrameContext frame{
+            .cmd = m_present_cmd[m_present_index],
             .size = {width, height},
             .color_image = m_color_image,
             .depth_image = m_depth_image,
@@ -972,7 +988,13 @@ public:
             .view = {glm::gtx::identity<glm::mat4>()},
             .projection = {glm::gtx::identity<glm::mat4>()}
         };
-        render_callback(frame, m_wait_swapchain[m_semaphore_index], m_wait_render[m_semaphore_index]);
+        render_callback(frame);
+
+        vkEndCommandBuffer(m_present_cmd[m_present_index]);
+        submit(m_present_cmd[m_present_index], m_present_fences[m_present_index],
+            m_wait_swapchain[m_semaphore_index], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            m_wait_render[m_semaphore_index]);
+
         const VkPresentInfoKHR present_info {
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .waitSemaphoreCount = 1,
@@ -987,6 +1009,7 @@ public:
             LOGE("vkQueuePresentKHR failed: %s", utils::to_string(result));
         }
         m_semaphore_index = (m_semaphore_index + 1) % swapchain_count();
+        m_present_index = (m_present_index + 1) % swapchain_count();
     }
     void debug_name(const std::string& name, auto obj) const noexcept
     {

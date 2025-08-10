@@ -65,6 +65,7 @@ public:
                 xr->physical_device(),
                 xr->queue_family_index());
             std::println("Start XR session");
+            xr->create_vulkan_objects(vk);
             if (!xr->create_session())
             {
                 std::println("Failed to create session");

@@ -28,6 +28,7 @@ module;
 #include "vk_mem_alloc.h"
 
 export module ce.xr;
+import ce.vk;
 import ce.vk.utils;
 import ce.xr.utils;
 import glm;
@@ -74,6 +75,12 @@ class Context final
     std::vector<XrViewConfigurationView> view_configs;
     bool has_msaa_single = false;
     bool has_swapchain_create_info = false;
+
+    std::shared_ptr<vk::Context> m_vk;
+    uint32_t m_present_index = 0;
+    std::vector<VkCommandBuffer> m_present_cmd;
+    std::vector<VkFence> m_present_fences;
+
     // Input bindings
     XrActionSet m_action_set = XR_NULL_HANDLE;
     XrAction m_action_teleport = XR_NULL_HANDLE;
@@ -743,6 +750,11 @@ public:
 
         return true;
     }
+    bool create_vulkan_objects(const std::shared_ptr<vk::Context>& vk) noexcept
+    {
+        m_vk = vk;
+        return true;
+    }
     bool create_session() noexcept
     {
 
@@ -1317,6 +1329,11 @@ public:
             return false;
         }
         debug_name("ce_framebuffer", m_framebuffer);
+
+        m_present_cmd = m_vk->create_command_buffers("render_frame", swapchain_count());
+        m_present_fences = m_vk->create_fences("present_fence",
+            swapchain_count(), VK_FENCE_CREATE_SIGNALED_BIT);
+
         return true;
     }
     void init_resources(VkCommandBuffer cmd) const noexcept
@@ -1606,8 +1623,13 @@ public:
             event_data.type = XR_TYPE_EVENT_DATA_BUFFER; // Reset for the next poll
         }
     }
-    void present(const std::function<void(const vk::utils::FrameContext& frame)>& render_callback) const noexcept
+    void present(const std::function<void(const vk::utils::FrameContext& frame)>& render_callback) noexcept
     {
+        vkWaitForFences(m_device, 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
+        vkResetFences(m_device, 1, &m_present_fences[m_present_index]);
+        vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
+
+
         constexpr XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frame_state{.type = XR_TYPE_FRAME_STATE};
         if (const XrResult result = xrWaitFrame(m_session, &wait_info, &frame_state); !XR_SUCCEEDED(result))
@@ -1621,6 +1643,12 @@ public:
             LOGE("xrBeginFrame failed: %s", to_string(result));
             return;
         }
+
+        sync_pose(frame_state.predictedDisplayTime);
+        constexpr VkCommandBufferBeginInfo cmd_begin_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        };
+        vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
 
         std::vector views(view_configs.size(), XrView{.type = XR_TYPE_VIEW});
         XrViewState view_state{.type = XR_TYPE_VIEW_STATE};
@@ -1658,6 +1686,7 @@ public:
         if (frame_state.shouldRender)
         {
             vk::utils::FrameContext frame{
+                .cmd = m_present_cmd[m_present_index],
                 .size = m_framebuffer_size,
                 .color_image = has_msaa_single ? color_swapchain_images[acquired_index].image : color_msaa_image,
                 .depth_image = has_msaa_single ? depth_swapchain_images[acquired_index].image : depth_msaa_image,
@@ -1684,6 +1713,9 @@ public:
 
             render_callback(frame);
         }
+
+        vkEndCommandBuffer(m_present_cmd[m_present_index]);
+        m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index]);
 
         std::vector layer_views(views_count, XrCompositionLayerProjectionView{});
         for (uint32_t i = 0; i < views_count; i++)
@@ -1733,6 +1765,7 @@ public:
             .layers = layers.data()
         };
         xrEndFrame(m_session, &end_info);
+        m_present_index = (m_present_index + 1) % swapchain_count();
     }
 };
 struct Session

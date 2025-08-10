@@ -172,11 +172,8 @@ class AppBase final
     shaders::SolidFlatShader::PerFrameConstants uniform{};
 	siv::PerlinNoise perlin{ std::random_device{} };
     std::shared_ptr<Cube> m_cube;
-    std::vector<VkCommandBuffer> m_present_cmd;
-    std::vector<VkFence> m_present_fences;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
-    uint32_t m_present_index = 0;
     uint32_t m_swapchain_count = 0;
     glm::ivec2 m_size{0, 0};
     bool dragging = false;
@@ -245,9 +242,6 @@ public:
         }
         solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
         solid_flat->create(m_renderpass, m_sample_count);
-
-        m_present_cmd = m_vk->create_command_buffers("render_frame", m_swapchain_count);
-        m_present_fences = m_vk->create_fences("present_fence", m_swapchain_count, VK_FENCE_CREATE_SIGNALED_BIT);
 
         // Create the cube object
         m_cube = std::make_shared<Cube>();
@@ -379,6 +373,62 @@ public:
         constexpr VkSubpassEndInfo subpass_end_info{.sType = VK_STRUCTURE_TYPE_SUBPASS_END_INFO};
         vkCmdEndRenderPass2(cmd, &subpass_end_info);
     }
+    void update_flying_camera_angles(const float dt, const GamepadState& gamepad)
+    {
+        constexpr float dead_zone = 0.05;
+        constexpr float steering_speed = 90.f;
+        const glm::vec2 rthumb = glm::gtc::make_vec2(gamepad.thumbstick_right);
+        const glm::vec2 abs_rthumb = glm::abs(rthumb);
+        if (abs_rthumb.x > dead_zone)
+        {
+            cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
+        }
+        if (abs_rthumb.y > dead_zone)
+        {
+            cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
+        }
+    }
+    glm::mat4 update_flying_camera(const float dt, const GamepadState& gamepad)
+    {
+        constexpr float dead_zone = 0.05;
+        const glm::mat4 cam_rot = glm::gtx::eulerAngleXY(cam_angles.y, -cam_angles.x);
+#ifdef _WIN32
+        const float speed = keys[VK_SHIFT] ? .25f : 1.f;
+#else
+        const float speed = 1;
+#endif
+        if (keys['W'])
+        {
+            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * cam_rot;
+            cam_pos += glm::vec3(forward) * dt * speed;
+        }
+        if (keys['S'])
+        {
+            const glm::vec4 forward = glm::vec4{0, 0, 1, 1} * cam_rot;
+            cam_pos += glm::vec3(forward) * dt * speed;
+        }
+        if (keys['A'])
+        {
+            const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * cam_rot;
+            cam_pos += glm::vec3(forward) * dt * speed;
+        }
+        if (keys['D'])
+        {
+            const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * cam_rot;
+            cam_pos += glm::vec3(forward) * dt * speed;
+        }
+        if (fabs(gamepad.thumbstick_left[0]) > dead_zone)
+        {
+            const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * cam_rot;
+            cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[0];
+        }
+        if (fabs(gamepad.thumbstick_left[1]) > dead_zone)
+        {
+            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * cam_rot;
+            cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1];
+        }
+        return cam_rot;
+    }
     void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
     {
         m_xr->poll_events();
@@ -388,22 +438,17 @@ public:
             {
                 LOGE("Failed to sync input");
             }
-            vkWaitForFences(m_vk->device(), 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
-            vkResetFences(m_vk->device(), 1, &m_present_fences[m_present_index]);
-            vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
 
-            m_xr->present([this, dt](const vk::utils::FrameContext& frame){
-                m_xr->sync_pose(frame.display_time);
-                constexpr VkCommandBufferBeginInfo cmd_begin_info{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                };
-                vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
-                render(frame, dt, m_present_cmd[m_present_index]);
-                vkEndCommandBuffer(m_present_cmd[m_present_index]);
-                m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index]);
+            m_xr->present([this, dt, &gamepad](const vk::utils::FrameContext& frame){
+
+                auto frame_fixed = frame;
+                const auto cam_rot = update_flying_camera(dt, gamepad);
+                frame_fixed.view[0] = frame.view[0] * cam_rot * glm::gtx::translate(cam_pos);
+                frame_fixed.view[1] = frame.view[1] * cam_rot * glm::gtx::translate(cam_pos);
+
+                render(frame_fixed, dt, frame.cmd);
             });
 
-            m_present_index = (m_present_index + 1) % m_xr->swapchain_count();
         }
         else
         {
@@ -413,17 +458,8 @@ public:
     }
     void tick_windowed(const float dt, const GamepadState& gamepad) noexcept
     {
-        vkWaitForFences(m_vk->device(), 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
-        vkResetFences(m_vk->device(), 1, &m_present_fences[m_present_index]);
-        m_vk->present([this, dt, &gamepad](const vk::utils::FrameContext& frame,
-            VkSemaphore wait_swapchain, VkSemaphore signal_present)
+        m_vk->present([this, dt, &gamepad](const vk::utils::FrameContext& frame)
         {
-            vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
-            constexpr VkCommandBufferBeginInfo cmd_begin_info{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            };
-            vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
-
             const VkImageMemoryBarrier barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT,
@@ -433,70 +469,17 @@ public:
                 .image = frame.resolve_color_image,
                 .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
             };
-            vkCmdPipelineBarrier(m_present_cmd[m_present_index], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vkCmdPipelineBarrier(frame.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
             auto frame_fixed = frame;
-
-            constexpr float dead_zone = 0.05;
-            constexpr float steering_speed = 90.f;
-            const glm::vec2 rthumb = glm::gtc::make_vec2(gamepad.thumbstick_right);
-            const glm::vec2 abs_rthumb = glm::abs(rthumb);
-            if (abs_rthumb.x > dead_zone)
-            {
-                cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
-            }
-            if (abs_rthumb.y > dead_zone)
-            {
-                cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
-            }
-            const glm::mat4 cam_rot = glm::gtx::eulerAngleXY(cam_angles.y, -cam_angles.x);
-#ifdef _WIN32
-            const float speed = keys[VK_SHIFT] ? .25f : 1.f;
-#else
-            const float speed = 1;
-#endif
-            if (keys['W'])
-            {
-                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * cam_rot;
-                cam_pos += glm::vec3(forward) * dt * speed;
-            }
-            if (keys['S'])
-            {
-                const glm::vec4 forward = glm::vec4{0, 0, 1, 1} * cam_rot;
-                cam_pos += glm::vec3(forward) * dt * speed;
-            }
-            if (keys['A'])
-            {
-                const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * cam_rot;
-                cam_pos += glm::vec3(forward) * dt * speed;
-            }
-            if (keys['D'])
-            {
-                const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * cam_rot;
-                cam_pos += glm::vec3(forward) * dt * speed;
-            }
-            if (fabs(gamepad.thumbstick_left[0]) > dead_zone)
-            {
-                const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * cam_rot;
-                cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[0];
-            }
-            if (fabs(gamepad.thumbstick_left[1]) > dead_zone)
-            {
-                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * cam_rot;
-                cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1];
-            }
-
+            const auto cam_rot = update_flying_camera(dt, gamepad);
             const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
             frame_fixed.projection[0] = glm::gtc::perspectiveLH(glm::radians(cam_fov), aspect, 0.01f, 100.f);;
             frame_fixed.view[0] = cam_rot * glm::gtx::translate(cam_pos);
 
-            render(frame_fixed, dt, m_present_cmd[m_present_index]);
-            vkEndCommandBuffer(m_present_cmd[m_present_index]);
-            m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index],
-                wait_swapchain, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, signal_present);
+            render(frame_fixed, dt, frame.cmd);
         });
-        m_present_index = (m_present_index + 1) % m_vk->swapchain_count();
     }
     void tick(const float dt, const GamepadState& gamepad) noexcept
     {

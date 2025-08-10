@@ -13,6 +13,7 @@ export namespace ce::vk::utils
 {
 struct FrameContext final
 {
+    VkCommandBuffer cmd;
     VkExtent2D size;
     VkImage color_image;
     VkImage depth_image;

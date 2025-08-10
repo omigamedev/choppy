@@ -55,6 +55,7 @@ public:
                 xr->device(),
                 xr->physical_device(),
                 xr->queue_family_index());
+            xr->create_vulkan_objects(vk);
         }
         else
         {
@@ -106,15 +107,37 @@ public:
         session_started = false;
         return true;
     }
+    static void paddleboatControllerStatusCallback(const int32_t controllerIndex,
+        const Paddleboat_ControllerStatus controllerStatus, void *userData)
+    {
+        LOGI("Controller %d connected: %d", controllerIndex, controllerStatus & PADDLEBOAT_CONTROLLER_JUST_CONNECTED);
+    }
     void main_loop() noexcept
     {
-        pApp->activity->vm->AttachCurrentThread(&m_env, NULL);
+        if (pApp->activity->vm->AttachCurrentThread(&m_env, NULL) != JNI_OK)
+        {
+            LOGE("Failed to attach current thread");
+        }
         if (Paddleboat_init(m_env, pApp->activity->javaGameActivity) != PADDLEBOAT_NO_ERROR)
         {
             LOGE("Paddleboat_init failed");
         }
+        //Paddleboat_setMotionDataPrecision(PADDLEBOAT_MOTION_PRECISION_FLOAT); // Good practice
+        Paddleboat_setControllerStatusCallback(&AndroidContext::paddleboatControllerStatusCallback, nullptr);
+
+        Paddleboat_Controller_Info controllerInfo;
+        if (Paddleboat_getControllerInfo(0, &controllerInfo) == PADDLEBOAT_NO_ERROR)
+        {
+            char name[1024];
+            Paddleboat_getControllerName(0, sizeof(name), name);
+            LOGI("Controller %d Info: Name: %s, Flags=0x%X, DeviceId=%d, VID=0x%X, PID=0x%X",
+                0, name, controllerInfo.controllerFlags, controllerInfo.deviceId,
+                controllerInfo.vendorId, controllerInfo.productId);
+        }
+
 
         int events;
+        uint64_t mActiveAxisIds;
         android_poll_source *pSource;
         auto start_time = std::chrono::high_resolution_clock::now();
         do
@@ -127,14 +150,39 @@ public:
                     pSource->process(pApp, pSource);
                 }
             }
+            // Tell GameActivity about any new axis ids so it reports
+            // their events
+            const uint64_t activeAxisIds = Paddleboat_getActiveAxisMask();
+            uint64_t newAxisIds = activeAxisIds ^ mActiveAxisIds;
+            if (newAxisIds != 0) {
+                mActiveAxisIds = activeAxisIds;
+                int32_t currentAxisId = 0;
+                while(newAxisIds != 0) {
+                    if ((newAxisIds & 1) != 0) {
+                        LOGI("Enable Axis: %d", currentAxisId);
+                        GameActivityPointerAxes_enableAxis(currentAxisId);
+                    }
+                    ++currentAxisId;
+                    newAxisIds >>= 1;
+                }
+            }
+
             if (android_input_buffer* inputBuffer = android_app_swap_input_buffers(pApp))
             {
+                // LOGI("Swapped input buffers. KeyEvents: %lu, MotionEvents: %lu",
+                //     inputBuffer->keyEventsCount, inputBuffer->motionEventsCount);
+
                 if (inputBuffer->keyEventsCount != 0)
                 {
                     for (uint64_t i = 0; i < inputBuffer->keyEventsCount; ++i)
                     {
                         const GameActivityKeyEvent* keyEvent = &inputBuffer->keyEvents[i];
-                        Paddleboat_processGameActivityKeyInputEvent(keyEvent, sizeof(GameActivityKeyEvent));
+                        // LOGI("KeyEvent: deviceId=%d, source=%d, action=%d, keyCode=%d",
+                        //     keyEvent->deviceId, keyEvent->source, keyEvent->action, keyEvent->keyCode);
+                        if (!Paddleboat_processGameActivityKeyInputEvent(keyEvent, sizeof(GameActivityKeyEvent)))
+                        {
+                            LOGE("KeyEvent not processed by Paddleboat");
+                        }
                     }
                     android_app_clear_key_events(inputBuffer);
                 }
@@ -143,11 +191,12 @@ public:
                     for (uint64_t i = 0; i < inputBuffer->motionEventsCount; ++i)
                     {
                         const GameActivityMotionEvent* motionEvent = &inputBuffer->motionEvents[i];
-                        if (!Paddleboat_processGameActivityMotionInputEvent(motionEvent,
-                            sizeof(GameActivityMotionEvent)))
+                        // LOGI("MotionEvent: deviceId=%d, source=%d, action=%d, pointerCount=%d",
+                        //     motionEvent->deviceId, motionEvent->source, motionEvent->action, motionEvent->pointerCount);
+                        if (!Paddleboat_processGameActivityMotionInputEvent(motionEvent, sizeof(GameActivityMotionEvent)))
                         {
-                            // Didn't belong to a game controller, process it ourselves if it is a touch event
-                            // _cook_game_activity_motion_event(motionEvent, _cooked_event_callback);
+                            // Log if Paddleboat didn't handle it
+                            LOGE("MotionEvent not processed by Paddleboat, source: %d", motionEvent->source);
                         }
                     }
                     android_app_clear_motion_events(inputBuffer);
@@ -161,53 +210,42 @@ public:
             {
                 Paddleboat_update(m_env);
 
-                int i = 0;
+                ce::app::GamepadState gamepad;
                 Paddleboat_Controller_Data controllerData;
-                if (Paddleboat_getControllerData(i, &controllerData) == PADDLEBOAT_NO_ERROR)
+                if (Paddleboat_getControllerData(0, &controllerData) == PADDLEBOAT_NO_ERROR)
                 {
-                    // Controller 'i' is connected and data is available
-
-                    // Check specific buttons
-                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_A) {
-                        LOGI("Controller %d: Button A is pressed", i);
+                    // LOGI("Controller %d Data: buttonsDown=0x%X, stickLX=%.2f, stickLY=%.2f",
+                    //     0, controllerData.buttonsDown,
+                    //     controllerData.leftStick.stickX,
+                    //     controllerData.leftStick.stickY);
+                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_A)
+                    {
+                        LOGI("Controller %d: A button pressed", 0);
                     }
-                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_B) {
-                        LOGI("Controller %d: Button B is pressed", i);
-                    }
-                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_X) {
-                        LOGI("Controller %d: Button X is pressed", i);
-                    }
-                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_Y) {
-                        LOGI("Controller %d: Button Y is pressed", i);
-                    }
-                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_L1) {
-                        LOGI("Controller %d: Button L1 is pressed", i);
-                    }
-                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_R1) {
-                        LOGI("Controller %d: Button R1 is pressed", i);
-                    }
-                    if (controllerData.buttonsDown & PADDLEBOAT_BUTTON_DPAD_UP) {
-                        LOGI("Controller %d: D-pad Up is pressed", i);
-                    }
-                    // ... and so on for other buttons like:
-                    // PADDLEBOAT_BUTTON_DPAD_DOWN, PADDLEBOAT_BUTTON_DPAD_LEFT, PADDLEBOAT_BUTTON_DPAD_RIGHT
-                    // PADDLEBOAT_BUTTON_L2, PADDLEBOAT_BUTTON_R2 (these might also have trigger values)
-                    // PADDLEBOAT_BUTTON_THUMBL, PADDLEBOAT_BUTTON_THUMBR
-                    // PADDLEBOAT_BUTTON_START, PADDLEBOAT_BUTTON_SELECT (or BACK)
-                    // PADDLEBOAT_BUTTON_HOME, PADDLEBOAT_BUTTON_TOUCHPAD (if available)
-
-                    // Access analog stick values (joysticks)
-                    // float leftStickX = controllerData.leftStick.stickX;
-                    // float leftStickY = controllerData.leftStick.stickY;
-                    // float rightStickX = controllerData.rightStick.stickX;
-                    // float rightStickY = controllerData.rightStick.stickY;
-
-                    // Access trigger values
-                    // float L2_trigger = controllerData.triggerL2;
-                    // float R2_trigger = controllerData.triggerR2;
+                    gamepad = ce::app::GamepadState{
+                        .buttons = {
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_SYSTEM),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_SELECT),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_A),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_B),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_X),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_Y),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_DPAD_UP),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_DPAD_DOWN),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_DPAD_LEFT),
+                            static_cast<bool>(controllerData.buttonsDown & PADDLEBOAT_BUTTON_DPAD_RIGHT),
+                            //static_cast<bool>(controllerData.buttonsDown & GameInputGamepadRightShoulder),
+                            //static_cast<bool>(controllerData.buttonsDown & GameInputGamepadLeftShoulder),
+                            //static_cast<bool>(controllerData.buttonsDown & GameInputGamepadLeftThumbstick),
+                            //static_cast<bool>(controllerData.buttonsDown & GameInputGamepadRightThumbstick),
+                        },
+                        .thumbstick_left = {controllerData.leftStick.stickX, controllerData.leftStick.stickY},
+                        .thumbstick_right = {controllerData.rightStick.stickX, controllerData.rightStick.stickY},
+                        .trigger_left = controllerData.triggerL1,
+                        .trigger_right = controllerData.triggerR1,
+                    };
                 }
-
-                app.tick(delta_time, {});
+                app.tick(delta_time, gamepad);
             }
         } while(!pApp->destroyRequested);
     }
@@ -220,12 +258,14 @@ void handle_cmd(android_app *pApp, int32_t cmd) noexcept
             if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
             {
                 Paddleboat_onStart(context->env());
+                LOGI("paddleboat started");
             }
             break;
         case APP_CMD_STOP:
             if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
             {
                 Paddleboat_onStop(context->env());
+                LOGI("paddleboat stopped");
             }
             break;
         case APP_CMD_INIT_WINDOW:
