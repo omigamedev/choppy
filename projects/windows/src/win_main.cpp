@@ -105,7 +105,10 @@ public:
             }
             m_window->on_resize = [this](const uint32_t width, const uint32_t height)
             {
-                app.on_resize(width, height);
+                if (width != 0 && height != 0)
+                {
+                    app.on_resize(width, height);
+                }
             };
             m_window->on_mouse_move = [this](const int32_t x, const int32_t y)
             {
@@ -146,6 +149,7 @@ public:
             std::println("Failed to initialize Vulkan and OpenXR");
             return false;
         }
+        xr->bind_input();
         app.init(xr_mode);
         if (!xr_mode)
         {

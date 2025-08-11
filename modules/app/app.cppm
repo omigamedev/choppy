@@ -174,7 +174,6 @@ class AppBase final
     std::shared_ptr<Cube> m_cube;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
-    uint32_t m_swapchain_count = 0;
     glm::ivec2 m_size{0, 0};
     bool dragging = false;
     glm::ivec2 drag_start = { 0, 0 };
@@ -229,14 +228,11 @@ public:
 
         if (xrmode)
         {
-            m_swapchain_count = m_xr->swapchain_count();
             m_renderpass = m_xr->renderpass();
             m_sample_count = m_xr->sample_count();
-            m_xr->bind_input();
         }
         else
         {
-            m_swapchain_count = m_vk->swapchain_count();
             m_renderpass = m_vk->renderpass();
             m_sample_count = m_vk->samples_count();
         }

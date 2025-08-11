@@ -80,6 +80,7 @@ public:
             LOGE("Failed to create swapchain");
             return false;
         }
+        xr->bind_input();
         app.init(true);
         return true;
     }
