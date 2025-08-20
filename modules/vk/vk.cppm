@@ -274,7 +274,7 @@ public:
                 {
                     VkPhysicalDeviceProperties properties{};
                     vkGetPhysicalDeviceProperties(device, &properties);
-                    return properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+                    return properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
                 });
             if (!discrete_devices.empty())
                 return discrete_devices | std::ranges::to<std::vector>();
@@ -338,10 +338,10 @@ public:
         // Create Device
         std::vector vk_device_extensions{
             VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
-            VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+            //VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
             VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME,
             VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
-            VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+            //VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
             VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
@@ -366,7 +366,7 @@ public:
         };
         VkPhysicalDeviceRobustness2FeaturesEXT robustness_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
-            .pNext = &bda_feature,
+            //.pNext = &bda_feature,
         };
         VkPhysicalDeviceMultiviewFeatures multiview_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES,
@@ -986,7 +986,7 @@ public:
             .renderpass = m_renderpass,
             .display_time = 0,
             .view = {glm::gtx::identity<glm::mat4>()},
-            .projection = {glm::gtx::identity<glm::mat4>()}
+            .projection = {glm::gtx::identity<glm::mat4>()},
         };
         render_callback(frame);
 
@@ -1141,6 +1141,11 @@ public:
         const VkBufferCopy copy_info{0, 0, data.size_bytes()};
         vkCmdCopyBuffer(cmd, m_staging_buffer, m_buffer, 1, &copy_info);
         return true;
+    }
+    template<typename T>
+    bool update_cmd(VkCommandBuffer cmd, const std::span<T> data) const noexcept
+    {
+        return update_cmd(cmd, {reinterpret_cast<const uint8_t*>(data.data()), data.size_bytes()}, 0);
     }
     template<typename T>
     bool update_cmd(VkCommandBuffer cmd, const std::span<const T> data) const noexcept

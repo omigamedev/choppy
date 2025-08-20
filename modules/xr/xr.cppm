@@ -1451,7 +1451,7 @@ public:
         m_hands_path[0] = create_path("/user/hand/left");
         m_hands_path[1] = create_path("/user/hand/right");
         m_action_haptic = create_action("vibration", XR_ACTION_TYPE_VIBRATION_OUTPUT, m_hands_path);
-        m_action_pose = create_action("pose_left", XR_ACTION_TYPE_POSE_INPUT, m_hands_path);
+        m_action_pose = create_action("hand_pose", XR_ACTION_TYPE_POSE_INPUT, m_hands_path);
         m_hands_space[0] = create_action_space(m_action_pose, m_hands_path[0]);
         m_hands_space[1] = create_action_space(m_action_pose, m_hands_path[1]);
 
@@ -1459,6 +1459,7 @@ public:
             XrActionSuggestedBinding{m_action_teleport, create_path("/user/hand/right/input/a/click")},
             XrActionSuggestedBinding{m_action_haptic, create_path("/user/hand/right/output/haptic")},
             XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/left/input/aim/pose")},
+            XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/right/input/aim/pose")},
             XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/right/input/aim/pose")},
         };
 
@@ -1578,6 +1579,7 @@ public:
     }
     bool sync_pose(const XrTime time) noexcept
     {
+        // hands
         for (uint32_t i = 0; i < 2; ++i)
         {
             if (const auto pose = action_state_pose(m_action_pose, m_hands_path[i], m_hands_space[i], time))
@@ -1621,6 +1623,36 @@ public:
                 handle_state_change(e);
             }
             event_data.type = XR_TYPE_EVENT_DATA_BUFFER; // Reset for the next poll
+        }
+    }
+    // Create a left-handed projection matrix with Y up, +Z forward
+    inline glm::mat4 CreateProjectionMatrixLH(
+        const XrFovf& fov,
+        float nearZ,
+        float farZ,
+        bool vulkanOrD3D = true) // true = [0..1] depth (Vulkan/D3D), false = [-1..1] depth (GL)
+    {
+        // Convert fov angles to tangents
+        const float tanLeft   = tanf(fov.angleLeft);
+        const float tanRight  = tanf(fov.angleRight);
+        const float tanDown   = tanf(fov.angleDown);
+        const float tanUp     = tanf(fov.angleUp);
+
+        // Convert to frustum bounds at nearZ
+        const float left   = nearZ * tanLeft;
+        const float right  = nearZ * tanRight;
+        const float bottom = nearZ * tanDown;
+        const float top    = nearZ * tanUp;
+
+        if (vulkanOrD3D)
+        {
+            // LH +Z forward, depth 0..1
+            return glm::gtc::frustumLH_ZO(left, right, bottom, top, nearZ, farZ);
+        }
+        else
+        {
+            // LH +Z forward, depth -1..1
+            return glm::gtc::frustumLH_NO(left, right, bottom, top, nearZ, farZ);
         }
     }
     void present(const std::function<void(const vk::utils::FrameContext& frame)>& render_callback) noexcept
@@ -1704,11 +1736,18 @@ public:
                 XrMatrix4x4f projection_matrix;
                 XrMatrix4x4f_CreateProjectionFov(&projection_matrix,
                     GRAPHICS_VULKAN, views[i].fov, 0.1f, 100.f);
-                const glm::mat4 proj = glm::gtc::make_mat4(projection_matrix.m);
+                frame.projection[i] = glm::gtc::make_mat4(projection_matrix.m);
+
+                XrMatrix4x4f viewMatrix;
+                XrMatrix4x4f viewMatrixInv;
+                XrMatrix4x4f_CreateFromRigidTransform(&viewMatrix, &views[i].pose); // Pose to Matrix
+                XrMatrix4x4f_Invert(&viewMatrixInv, &viewMatrix);             // Invert to get View Matrix
+
                 const glm::mat4 cam_t = glm::gtx::translate(glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position)));
                 const glm::quat cam_q = glm::gtc::make_quat(reinterpret_cast<float*>(&views[i].pose.orientation));
-                frame.projection[i] = proj;
-                frame.view[i] = glm::inverse(cam_t * glm::gtc::mat4_cast(cam_q));
+                frame.view[i] = glm::gtc::make_mat4(viewMatrixInv.m);//glm::inverse(cam_t * glm::gtc::mat4_cast(cam_q));
+                frame.view_pos[i] = glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position));
+                frame.view_quat[i] = cam_q;
             }
 
             render_callback(frame);

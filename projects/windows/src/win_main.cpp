@@ -84,6 +84,7 @@ public:
             }
             std::println("XR created succesfully");
             xr_mode = true;
+            xr->bind_input();
         }
         else if (create_window() && vk->create(m_window))
         {
@@ -149,7 +150,6 @@ public:
             std::println("Failed to initialize Vulkan and OpenXR");
             return false;
         }
-        xr->bind_input();
         app.init(xr_mode);
         if (!xr_mode)
         {

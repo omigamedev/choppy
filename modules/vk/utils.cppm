@@ -26,6 +26,10 @@ struct FrameContext final
     int64_t display_time;
     glm::mat4 view[2];
     glm::mat4 projection[2];
+    glm::vec3 view_pos[2];
+    glm::quat view_quat[2];
+    glm::vec3 head_pos;
+    glm::quat head_quat;
 };
 [[nodiscard]] VkFormat find_format(const VkPhysicalDevice physical_device,
 const std::span<const VkFormat> formats, const VkFormatFeatureFlags features) noexcept

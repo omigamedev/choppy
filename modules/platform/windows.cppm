@@ -123,8 +123,11 @@ public:
         const WNDCLASS wc{
             .lpfnWndProc = WindowProc,
             .hInstance = hInstance,
+            .hIcon = LoadIcon(hInstance, IDI_ERROR), // TODO: fix the icon, make it standout
+            .hCursor = LoadCursor(nullptr, IDC_ARROW),
             .lpszClassName = CLASS_NAME,
         };
+
         if (!RegisterClass(&wc))
         {
             // TODO: add some proper logging please

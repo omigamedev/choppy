@@ -18,10 +18,11 @@ export namespace ce::shaders
     {
     public:
         #include "solid-flat.h"
+        [[nodiscard]] static uint32_t constexpr MaxInstance() noexcept { return m_max_instances; };
     private:
         std::shared_ptr<vk::Buffer> m_uniform_frame;
         std::shared_ptr<vk::Buffer> m_uniform_object;
-        constexpr static uint32_t m_max_instances = 3;
+        constexpr static uint32_t m_max_instances = 2048;
         bool create_uniform(const std::shared_ptr<vk::Context>& vk) noexcept
         {
             m_uniform_frame = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::UniformFrame");
@@ -143,7 +144,7 @@ export namespace ce::shaders
             constexpr VkPipelineRasterizationStateCreateInfo rasterization{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
                 .polygonMode = VK_POLYGON_MODE_FILL,
-                .cullMode = VK_CULL_MODE_NONE,
+                .cullMode = VK_CULL_MODE_BACK_BIT,
                 .frontFace = VK_FRONT_FACE_CLOCKWISE,
                 .lineWidth = 1,
             };
@@ -280,7 +281,7 @@ export namespace ce::shaders
         [[nodiscard]] VkDescriptorSet descriptor_set(const uint32_t index) const noexcept { return m_descr_sets[index]; }
         [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform_frame() const noexcept { return m_uniform_frame; }
         [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform_object() const noexcept { return m_uniform_object; }
-        bool create(VkRenderPass renderpass, VkSampleCountFlagBits sample_count = VK_SAMPLE_COUNT_1_BIT) noexcept
+        bool create(VkRenderPass renderpass, const VkSampleCountFlagBits sample_count = VK_SAMPLE_COUNT_1_BIT) noexcept
         {
             const auto vk = m_vk.lock();
             if (!load_from_file(vk, "assets/shaders/solid-flat-vs.spv", "assets/shaders/solid-flat-ps.spv") ||

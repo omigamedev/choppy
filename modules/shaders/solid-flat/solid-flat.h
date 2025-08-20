@@ -6,9 +6,11 @@
     float4x4 ViewProjection[2];
 };
 
-[[vk::binding(1, 0)]] cbuffer PerObjectBuffer REGISTER(b1)
+[[vk::binding(1, 0)]] cbuffer alignas(64) PerObjectBuffer REGISTER(b1)
 {
     float4x4 ObjectTransform;
+    float4 ObjectColor;
+    bool selected;
 };
 
 struct VertexInput
