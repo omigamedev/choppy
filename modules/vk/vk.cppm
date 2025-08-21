@@ -65,6 +65,8 @@ class Context final
     std::vector<VkSemaphore> m_wait_render;
     uint32_t m_semaphore_index = 0;
 
+    bool m_msaa_enabled = true;
+
     uint32_t m_present_index = 0;
     std::vector<VkCommandBuffer> m_present_cmd;
     std::vector<VkFence> m_present_fences;
@@ -148,7 +150,7 @@ public:
     [[nodiscard]] VkQueue queue() const noexcept { return m_queue; }
     [[nodiscard]] VkRenderPass renderpass() const noexcept { return m_renderpass; }
     [[nodiscard]] VkSwapchainKHR swapchain() const noexcept { return m_swapchain; }
-    [[nodiscard]] VkSampleCountFlagBits samples_count() const noexcept { return VK_SAMPLE_COUNT_4_BIT; }
+    [[nodiscard]] VkSampleCountFlagBits samples_count() const noexcept { return m_msaa_enabled ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT; }
     [[nodiscard]] uint32_t swapchain_count() const noexcept
     {
         return static_cast<uint32_t>(m_color_swapchain_images.size());
@@ -958,13 +960,6 @@ public:
     void present(const std::function<void(const utils::FrameContext& frame)>& render_callback) noexcept
     {
         vkWaitForFences(m_device, 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
-        vkResetFences(m_device, 1, &m_present_fences[m_present_index]);
-        vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
-
-        constexpr VkCommandBufferBeginInfo cmd_begin_info{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        };
-        vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
 
         uint32_t swapchain_index;
         if (const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
@@ -972,6 +967,14 @@ public:
         {
             LOGE("vkAcquireNextImageKHR failed: %s", utils::to_string(result));
         }
+
+        vkResetFences(m_device, 1, &m_present_fences[m_present_index]);
+        vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
+        constexpr VkCommandBufferBeginInfo cmd_begin_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        };
+        vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
+
         const auto [width, height] = m_window->size();
         const utils::FrameContext frame{
             .cmd = m_present_cmd[m_present_index],
@@ -984,6 +987,7 @@ public:
             .resolve_color_view = m_color_swapchain_views[swapchain_index],
             .framebuffer = m_framebuffer,
             .renderpass = m_renderpass,
+            .fence = m_present_fences[m_present_index],
             .display_time = 0,
             .view = {glm::gtx::identity<glm::mat4>()},
             .projection = {glm::gtx::identity<glm::mat4>()},
@@ -993,12 +997,12 @@ public:
         vkEndCommandBuffer(m_present_cmd[m_present_index]);
         submit(m_present_cmd[m_present_index], m_present_fences[m_present_index],
             m_wait_swapchain[m_semaphore_index], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            m_wait_render[m_semaphore_index]);
+            m_wait_render[swapchain_index]);
 
         const VkPresentInfoKHR present_info {
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &m_wait_render[m_semaphore_index],
+            .pWaitSemaphores = &m_wait_render[swapchain_index],
             .swapchainCount = 1,
             .pSwapchains = &m_swapchain,
             .pImageIndices = &swapchain_index,
@@ -1041,6 +1045,13 @@ class Buffer
 public:
     Buffer(const std::shared_ptr<Context>& vk, std::string name) noexcept
         : m_vk(vk), m_name(std::move(name)) { }
+    ~Buffer() noexcept
+    {
+        if (m_staging_buffer)
+            destroy_staging();
+        if (m_buffer)
+            destroy();
+    }
     [[nodiscard]] VkBuffer buffer() const noexcept { return m_buffer; }
     bool create(const VkDeviceSize size, const VkBufferUsageFlags usage) noexcept
     {
@@ -1096,6 +1107,22 @@ public:
     {
         return static_cast<T*>(m_staging_allocation_info.pMappedData);
     }
+    void destroy() noexcept
+    {
+        if (!m_buffer)
+        {
+            LOGE("Failed to destroy buffer: already destroyed or never created");
+            return;
+        }
+        if (const auto vk = m_vk.lock())
+        {
+            vmaDestroyBuffer(vk->vma(), m_buffer, m_allocation);
+            m_buffer = VK_NULL_HANDLE;
+            m_allocation = VK_NULL_HANDLE;
+            m_allocation_info = {};
+            m_size = 0;
+        }
+    }
     void destroy_staging() noexcept
     {
         if (!m_staging_buffer)
@@ -1103,12 +1130,14 @@ public:
             LOGE("Failed to destroy staging buffer: already destroyed");
             return;
         }
-        const auto vk = m_vk.lock();
-        vmaDestroyBuffer(vk->vma(), m_staging_buffer, m_staging_allocation);
-        m_staging_buffer = VK_NULL_HANDLE;
-        m_staging_allocation = VK_NULL_HANDLE;
-        m_staging_allocation_info = {};
-        m_staging_size = 0;
+        if (const auto vk = m_vk.lock())
+        {
+            vmaDestroyBuffer(vk->vma(), m_staging_buffer, m_staging_allocation);
+            m_staging_buffer = VK_NULL_HANDLE;
+            m_staging_allocation = VK_NULL_HANDLE;
+            m_staging_allocation_info = {};
+            m_staging_size = 0;
+        }
     }
     bool update_cmd(VkCommandBuffer cmd, const std::span<const uint8_t> data, VkDeviceSize offset = 0) const noexcept
     {

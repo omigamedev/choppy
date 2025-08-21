@@ -23,6 +23,7 @@ struct FrameContext final
     VkImageView resolve_color_view;
     VkFramebuffer framebuffer;
     VkRenderPass renderpass;
+    VkFence fence;
     int64_t display_time;
     glm::mat4 view[2];
     glm::mat4 projection[2];

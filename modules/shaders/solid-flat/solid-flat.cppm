@@ -173,6 +173,7 @@ export namespace ce::shaders
             constexpr std::array dynamic_states{
                 VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT,
                 VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT,
+                // VK_DYNAMIC_STATE_POLYGON_MODE_EXT,
             };
             const VkPipelineDynamicStateCreateInfo dynamics{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,

@@ -35,6 +35,25 @@ import glm;
 
 export namespace ce::xr
 {
+enum class TouchControllerButton : uint8_t
+{
+    Menu, View,
+    A, B, X, Y,
+    Up, Down, Left, Right,
+    ShoulderLeft, ShoulderRight,
+    ThumbLeft, ThumbRight,
+    EnumCount
+};
+struct TouchControllerState final
+{
+    std::array<bool, static_cast<size_t>(TouchControllerButton::EnumCount)> buttons{false};
+    glm::vec2 thumbstick_left{};
+    glm::vec2 thumbstick_right{};
+    float trigger_left{0};
+    float trigger_right{0};
+    float grip_left{0};
+    float grip_right{0};
+};
 class Context final
 {
     // openxr
@@ -84,11 +103,14 @@ class Context final
     // Input bindings
     XrActionSet m_action_set = XR_NULL_HANDLE;
     XrAction m_action_teleport = XR_NULL_HANDLE;
+    XrAction m_action_left_thumb = XR_NULL_HANDLE;
+    XrAction m_action_right_thumb = XR_NULL_HANDLE;
     XrAction m_action_haptic = XR_NULL_HANDLE;
     XrAction m_action_pose = XR_NULL_HANDLE;
     XrPath m_hands_path[2] = {XR_NULL_PATH, XR_NULL_PATH};
     XrSpace m_hands_space[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
     XrPosef m_hands_pose[2] = {m_identity, m_identity};
+    TouchControllerState m_controller{};
 #ifdef __ANDROID__
     jobject m_android_context = nullptr;
     JavaVM* m_android_vm = nullptr;
@@ -299,7 +321,7 @@ public:
         XrMatrix4x4f_CreateFromRigidTransform(&xrm, &m_hands_pose[hand_index]);
         return glm::gtc::make_mat4(xrm.m);
     }
-
+    [[nodiscard]] const TouchControllerState& touch_controllers() const noexcept{ return m_controller; }
 #ifdef __ANDROID__
     bool setup_android(JavaVM* vm, jobject context)
     {
@@ -1448,6 +1470,8 @@ public:
     {
         m_action_set = create_action_set("gameplay");
         m_action_teleport = create_action("teleport", XR_ACTION_TYPE_BOOLEAN_INPUT);
+        m_action_left_thumb = create_action("left_thumb", XR_ACTION_TYPE_VECTOR2F_INPUT);
+        m_action_right_thumb = create_action("right_thumb", XR_ACTION_TYPE_VECTOR2F_INPUT);
         m_hands_path[0] = create_path("/user/hand/left");
         m_hands_path[1] = create_path("/user/hand/right");
         m_action_haptic = create_action("vibration", XR_ACTION_TYPE_VIBRATION_OUTPUT, m_hands_path);
@@ -1457,6 +1481,8 @@ public:
 
         const std::array bindings{
             XrActionSuggestedBinding{m_action_teleport, create_path("/user/hand/right/input/a/click")},
+            XrActionSuggestedBinding{m_action_left_thumb, create_path("/user/hand/left/input/thumbstick")},
+            XrActionSuggestedBinding{m_action_right_thumb, create_path("/user/hand/right/input/thumbstick")},
             XrActionSuggestedBinding{m_action_haptic, create_path("/user/hand/right/output/haptic")},
             XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/left/input/aim/pose")},
             XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/right/input/aim/pose")},
@@ -1511,6 +1537,19 @@ public:
             result != XR_SUCCESS)
         {
             LOGE("xrGetActionStateBoolean failed: %s", to_string(result));
+            return std::nullopt;
+        }
+        return state;
+    }
+    [[nodiscard]] std::optional<XrActionStateVector2f> action_state_vec2(XrAction action) const noexcept
+    {
+        XrActionStateVector2f state{XR_TYPE_ACTION_STATE_VECTOR2F};
+        XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+        info.action = action;
+        if (const XrResult result = xrGetActionStateVector2f(m_session, &info, &state);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrGetActionStateVector2f failed: %s", to_string(result));
             return std::nullopt;
         }
         return state;
@@ -1575,6 +1614,7 @@ public:
             LOGI("FIRE");
             apply_haptic_feedback(m_action_haptic, m_hands_path[1]);
         }
+
         return true;
     }
     bool sync_pose(const XrTime time) noexcept
@@ -1584,6 +1624,22 @@ public:
         {
             if (const auto pose = action_state_pose(m_action_pose, m_hands_path[i], m_hands_space[i], time))
                 m_hands_pose[i] = pose.value();
+        }
+        if (const auto thumb = action_state_vec2(m_action_left_thumb))
+        {
+            if (thumb.value().isActive)
+            {
+                m_controller.thumbstick_left.x = thumb.value().currentState.x;
+                m_controller.thumbstick_left.y = thumb.value().currentState.y;
+            }
+        }
+        if (const auto thumb = action_state_vec2(m_action_right_thumb))
+        {
+            if (thumb.value().isActive)
+            {
+                m_controller.thumbstick_right.x = thumb.value().currentState.x;
+                m_controller.thumbstick_right.y = thumb.value().currentState.y;
+            }
         }
         return true;
     }
@@ -1625,42 +1681,11 @@ public:
             event_data.type = XR_TYPE_EVENT_DATA_BUFFER; // Reset for the next poll
         }
     }
-    // Create a left-handed projection matrix with Y up, +Z forward
-    inline glm::mat4 CreateProjectionMatrixLH(
-        const XrFovf& fov,
-        float nearZ,
-        float farZ,
-        bool vulkanOrD3D = true) // true = [0..1] depth (Vulkan/D3D), false = [-1..1] depth (GL)
-    {
-        // Convert fov angles to tangents
-        const float tanLeft   = tanf(fov.angleLeft);
-        const float tanRight  = tanf(fov.angleRight);
-        const float tanDown   = tanf(fov.angleDown);
-        const float tanUp     = tanf(fov.angleUp);
-
-        // Convert to frustum bounds at nearZ
-        const float left   = nearZ * tanLeft;
-        const float right  = nearZ * tanRight;
-        const float bottom = nearZ * tanDown;
-        const float top    = nearZ * tanUp;
-
-        if (vulkanOrD3D)
-        {
-            // LH +Z forward, depth 0..1
-            return glm::gtc::frustumLH_ZO(left, right, bottom, top, nearZ, farZ);
-        }
-        else
-        {
-            // LH +Z forward, depth -1..1
-            return glm::gtc::frustumLH_NO(left, right, bottom, top, nearZ, farZ);
-        }
-    }
     void present(const std::function<void(const vk::utils::FrameContext& frame)>& render_callback) noexcept
     {
         vkWaitForFences(m_device, 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
         vkResetFences(m_device, 1, &m_present_fences[m_present_index]);
         vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
-
 
         constexpr XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frame_state{.type = XR_TYPE_FRAME_STATE};
@@ -1728,6 +1753,7 @@ public:
                 .resolve_color_view = has_msaa_single ? VK_NULL_HANDLE : color_swapchain_views[acquired_index],
                 .framebuffer = m_framebuffer,
                 .renderpass = m_renderpass,
+                .fence = m_present_fences[m_present_index],
                 .display_time = frame_state.predictedDisplayTime,
             };
 

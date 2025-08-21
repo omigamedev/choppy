@@ -235,10 +235,11 @@ public:
             {
                 for (int32_t x = -1; x < ssz + 1; ++x)
                 {
-                    const glm::ivec3 loc{x, y, z};
+                    const glm::ivec3 loc{x, y, -z};
                     const glm::ivec3 cell = loc + sector * ssz;
                     const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
-                    const float terrain_height = cosf(nc.x * 2.f) * sinf(nc.z * 5.f) * 10.f;
+                    const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * 5.f;
+                    //const float terrain_height = cosf(nc.z * 1.f) * 10.f;
                     const BlockType block = cell.y <= terrain_height ? BlockType::Dirt : BlockType::Air;
                     tmp.emplace_back(block);
                 }
@@ -471,6 +472,7 @@ class AppBase final
     glm::vec3 cam_pos = { 0, 0, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
     std::array<bool, 256> keys{false};
+    std::vector<std::pair<VkFence, std::shared_ptr<vk::Buffer>>> delete_buffers;
     float cam_fov = 90.f;
     bool xrmode = false;
 public:
@@ -573,12 +575,19 @@ public:
         }
         return neighbors;
     }
-    void generate_chunks() noexcept
+    void generate_chunks(const vk::utils::FrameContext& frame) noexcept
     {
+        const glm::vec3 dist = glm::abs(cam_pos - glm::vec3(0.5f) - glm::vec3(cam_sector));
+        if (dist.x > .6 || dist.y > .6 || dist.z > .6)
+        {
+            cam_sector = glm::floor(cam_pos);
+            LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
+        }
+
         const uint32_t neighbors_span = 4;
         const auto neighbors = generate_neighbors(cam_sector, neighbors_span);
         const uint32_t chunk_count = pow(neighbors_span * 2 + 1, 3);
-        const auto generator = FlatGenerator{32, 2};
+        const auto generator = FlatGenerator{8, 2};
         const auto mesher = SimpleMesher<shaders::SolidFlatShader::VertexInput>{};
 
         std::deque<size_t> chunk_indices;
@@ -608,15 +617,16 @@ public:
                 if (chunk.index_count() > 0)
                     break;
             }
-            else if (chunk_indices.size() > 0)
+            else if (!chunk_indices.empty())
             {
-                LOGI("discard old chunk");
                 auto chunk_data = mesher.mesh(generator.generate(sector));
                 const uint32_t chunk_index = chunk_indices.back();
                 chunk_indices.pop_back();
                 const uint32_t set_index = chunk_index;
                 const glm::vec4 color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 auto& chunk = m_chunks[chunk_index];
+                delete_buffers.emplace_back(frame.fence, chunk.vertex_buffer());
+                delete_buffers.emplace_back(frame.fence, chunk.index_buffer());
                 chunk = Chunk{};
                 chunk.create(m_vk, chunk_data, sector, color, set_index + 3);
                 if (chunk.index_count() > 0)
@@ -624,26 +634,8 @@ public:
             }
         }
     }
-    void update_chunks() noexcept
-    {
-        const glm::vec3 dist = glm::abs(cam_pos - glm::vec3(0.5f) - glm::vec3(cam_sector));
-        // LOGI("cam [%f, %f, %f] dist [%f, %f, %f] sector [%d, %d, %d]",
-        //     cam_pos.x, cam_pos.y, cam_pos.z, dist.x, dist.y, dist.z, cam_sector.x, cam_sector.y, cam_sector.z);
-        if (dist.x > .6 || dist.y > .6 || dist.z > .6)
-        {
-            cam_sector = glm::floor(cam_pos);
-            LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
-        }
-        static int countdown = 0;
-        if (countdown == 0)
-        countdown = (countdown + 1) % 100;
-        generate_chunks();
-    }
     void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) const noexcept
     {
-        static float time = 0;
-        time += dt;
-
         solid_flat->uniform_frame()->update_cmd(cmd, shaders::SolidFlatShader::PerFrameConstants{
             .ViewProjection = {
                 glm::transpose(frame.projection[0] * frame.view[0]),
@@ -796,7 +788,7 @@ public:
         constexpr VkSubpassEndInfo subpass_end_info{.sType = VK_STRUCTURE_TYPE_SUBPASS_END_INFO};
         vkCmdEndRenderPass2(cmd, &subpass_end_info);
     }
-    glm::mat4 update_flying_camera_angles(const float dt, const GamepadState& gamepad)
+    glm::mat4 update_flying_camera_angles(const float dt, const GamepadState& gamepad, const xr::TouchControllerState& touch)
     {
         constexpr float dead_zone = 0.05;
         constexpr float steering_speed = 90.f;
@@ -804,15 +796,26 @@ public:
         const glm::vec2 abs_rthumb = glm::abs(rthumb);
         if (abs_rthumb.x > dead_zone)
         {
-            cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
+            cam_angles.x = glm::radians(rthumb.x * dt * steering_speed);
         }
         if (abs_rthumb.y > dead_zone)
         {
-            cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
+            cam_angles.y -= glm::radians(-rthumb.y * dt * steering_speed);
+        }
+
+        const glm::vec2 touch_abs_rthumb = glm::abs(touch.thumbstick_right);
+        if (touch_abs_rthumb.x > dead_zone)
+        {
+            cam_angles.x = glm::radians(touch.thumbstick_right.x * dt * steering_speed);
+        }
+        if (touch_abs_rthumb.y > dead_zone)
+        {
+            cam_angles.y -= glm::radians(-touch.thumbstick_right.y * dt * steering_speed);
         }
         return glm::gtx::eulerAngleYX(-cam_angles.x, -cam_angles.y);
     }
-    void update_flying_camera_pos(const float dt, const GamepadState& gamepad, const glm::mat4& view)
+    void update_flying_camera_pos(const float dt, const GamepadState& gamepad,
+        const xr::TouchControllerState& touch, const glm::mat4& view)
     {
         constexpr float dead_zone = 0.05;
 #ifdef _WIN32
@@ -842,11 +845,11 @@ public:
         }
         if (keys['Q'])
         {
-            cam_pos.y += dt * speed;
+            cam_pos.y -= dt * speed;
         }
         if (keys['E'])
         {
-            cam_pos.y -= dt * speed;
+            cam_pos.y += dt * speed;
         }
         if (fabs(gamepad.thumbstick_left[0]) > dead_zone)
         {
@@ -857,6 +860,16 @@ public:
         {
             const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
             cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1];
+        }
+        if (fabs(touch.thumbstick_left.x) > dead_zone)
+        {
+            const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * view;
+            cam_pos += glm::vec3(forward) * dt * touch.thumbstick_left.x;
+        }
+        if (fabs(touch.thumbstick_left.y) > dead_zone)
+        {
+            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
+            cam_pos += glm::vec3(forward) * dt * touch.thumbstick_left.y;
         }
     }
     void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
@@ -870,15 +883,15 @@ public:
             }
 
             m_xr->present([this, dt, &gamepad](const vk::utils::FrameContext& frame){
-
+                generate_chunks(frame);
                 auto frame_fixed = frame;
-                update_flying_camera_angles(dt, gamepad);
+                update_flying_camera_angles(dt, gamepad, m_xr->touch_controllers());
                 const auto cam_rot = glm::gtx::eulerAngleX(cam_angles.y) * glm::gtx::eulerAngleY(cam_angles.x);
                 const glm::mat4 head_rot = glm::inverse(glm::gtc::mat4_cast(frame.view_quat[0]));
-                update_flying_camera_pos(dt, gamepad, head_rot * cam_rot);
+                update_flying_camera_pos(dt, gamepad, m_xr->touch_controllers(), head_rot * cam_rot);
                 for (uint32_t i = 0; i < 2; i++)
-                    frame_fixed.view[i] = frame.view[i];// * cam_rot * glm::gtx::translate(cam_pos);
-                render(frame, dt, frame.cmd);
+                    frame_fixed.view[i] = frame.view[i] * glm::inverse(cam_rot * glm::gtx::translate(cam_pos));
+                render(frame_fixed, dt, frame.cmd);
             });
 
         }
@@ -892,6 +905,7 @@ public:
     {
         m_vk->present([this, dt, &gamepad](const vk::utils::FrameContext& frame)
         {
+            generate_chunks(frame);
             const VkImageMemoryBarrier barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT,
@@ -905,8 +919,8 @@ public:
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
             auto frame_fixed = frame;
-            const auto cam_rot = update_flying_camera_angles(dt, gamepad);
-            update_flying_camera_pos(dt, gamepad, frame.view[0] * glm::inverse(cam_rot));
+            const auto cam_rot = update_flying_camera_angles(dt, gamepad, {});
+            update_flying_camera_pos(dt, gamepad, {}, frame.view[0] * glm::inverse(cam_rot));
             const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
             frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(glm::radians(cam_fov), aspect, 0.01f, 100.f);
             frame_fixed.projection[0][1][1] *= -1.0f; // flip Y for Vulkan
@@ -917,7 +931,7 @@ public:
     }
     void tick(const float dt, const GamepadState& gamepad) noexcept
     {
-        update_chunks();
+        garbage_collect();
         if (xrmode)
         {
             tick_xrmode(dt, gamepad);
@@ -926,6 +940,14 @@ public:
         {
             tick_windowed(dt, gamepad);
         }
+    }
+    void garbage_collect() noexcept
+    {
+        for (auto& [fence, buffer] : delete_buffers)
+        {
+            vkWaitForFences(m_vk->device(), 1, &fence, VK_TRUE, UINT64_MAX);
+        }
+        delete_buffers.clear();
     }
     void on_resize(const uint32_t width, const uint32_t height) noexcept
     {
