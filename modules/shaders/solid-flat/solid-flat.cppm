@@ -22,7 +22,7 @@ export namespace ce::shaders
     private:
         std::shared_ptr<vk::Buffer> m_uniform_frame;
         std::shared_ptr<vk::Buffer> m_uniform_object;
-        constexpr static uint32_t m_max_instances = 2048;
+        constexpr static uint32_t m_max_instances = 10000;
         bool create_uniform(const std::shared_ptr<vk::Context>& vk) noexcept
         {
             m_uniform_frame = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::UniformFrame");

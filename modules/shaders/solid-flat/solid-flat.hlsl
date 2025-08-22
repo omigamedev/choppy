@@ -12,5 +12,5 @@ PixelInput VSMain(VertexInput input, uint ViewIndex : SV_ViewID)
 
 float4 PSMain(PixelInput input) : SV_TARGET
 {
-    return frac(input.color);
+    return (input.color);
 }

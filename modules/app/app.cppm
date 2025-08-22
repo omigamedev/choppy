@@ -197,6 +197,7 @@ enum class BlockType : uint8_t
 struct Block final
 {
     BlockType type;
+    enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, R = 16, L = 32 } face_mask;
 };
 struct ChunkData final : NoCopy
 {
@@ -256,14 +257,15 @@ public:
                 {
                     const int32_t sz = static_cast<int32_t>(m_size + 2);
                     const auto C = tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 1];
-                    const auto U = tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air;
-                    const auto D = tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air;
-                    const auto F = tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air;
-                    const auto B = tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air;
-                    const auto R = tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air;
-                    const auto L = tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air;
-                    blocks.emplace_back((U || D || F || B || R || L) ? C : BlockType::Air);
-                    //blocks.emplace_back(C);
+                    uint8_t mask = 0;
+                    mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
+                    mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
+                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
+                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;
+                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air) << 4;
+                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air) << 5;
+                    const BlockType type = mask == 0 ? BlockType::Air : C;
+                    blocks.emplace_back(type, static_cast<Block::Mask>(mask));
                 }
             }
         }
@@ -294,6 +296,11 @@ public:
     [[nodiscard]] virtual ChunkMesh<T> mesh(const ChunkData& data) const noexcept = 0;
 };
 
+bool operator&(Block::Mask lhs, Block::Mask rhs)
+{
+    return static_cast<uint8_t>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
+}
+
 template<VertexType T>
 class SimpleMesher final : public ChunkMesher<T>
 {
@@ -301,9 +308,9 @@ public:
     [[nodiscard]] ChunkMesh<T> mesh(const ChunkData& data) const noexcept override
     {
         const uint32_t size = data.size;
-        ChunkMesh<T> m;
-        m.vertices.reserve((size + 1) * (size + 1) * (size + 1));
 
+        std::vector<T> vertices;
+        vertices.reserve(pow(size + 1, 3));
         const float normalizer = 1.f / static_cast<float>(size);
         for (uint32_t y = 0; y < size + 1; ++y)
         {
@@ -314,15 +321,19 @@ public:
                     const float nx = static_cast<float>(x) * normalizer;
                     const float nz = static_cast<float>(z) * normalizer;
                     const float ny = static_cast<float>(y) * normalizer;
-                    m.vertices.push_back({
+                    vertices.push_back({
                         .position = {nx, ny, -nz, 1.0f},
                         .color = {x, y, z, 1.0f},
                     });
                 }
             }
         }
-        m.indices.reserve(size * size * size);
 
+        if (vertices.empty())
+            return {};
+
+        ChunkMesh<T> m;
+        m.vertices.reserve(36 * pow(size, 3));
         for (uint32_t y = 0; y < size; ++y)
         {
             for (uint32_t z = 0; z < size; ++z)
@@ -339,31 +350,75 @@ public:
                     const uint32_t plane_offset = y * plane_size;
                     const uint32_t next_plane_offset = (y + 1) * plane_size;
                     const uint32_t line_offset = z * line_size;
-                    //const uint32_t next_line_offset = (z + 1) * line_size;
 
-                    const uint32_t A = plane_offset + line_offset + x;
-                    const uint32_t B = A + line_size;
-                    const uint32_t C = A + line_size + 1;
-                    const uint32_t D = A + 1;
-                    const uint32_t E = next_plane_offset + line_offset + x;
-                    const uint32_t F = E + line_size;
-                    const uint32_t G = E + line_size + 1;
-                    const uint32_t H = E + 1;
-                    const std::array cube_faces = {
-                        // Front face (+Z)
-                        A, E, H,   A, H, D,
-                        // Back face (-Z)
-                        C, G, F,   C, F, B,
-                        // Top face (+Y)
-                        E, F, H,   H, F, G,
-                        // Bottom face (-Y)
-                        B, A, D,   B, D, C,
-                        // Right face (+X)
-                        D, H, C,   C, H, G,
-                        // Left face (-X)
-                        B, F, E,   B, E, A,
-                    };
-                    m.indices.append_range(cube_faces);
+                    const uint32_t VA = plane_offset + line_offset + x;
+                    const uint32_t VB = VA + line_size;
+                    const uint32_t VC = VA + line_size + 1;
+                    const uint32_t VD = VA + 1;
+                    const uint32_t VE = next_plane_offset + line_offset + x;
+                    const uint32_t VF = VE + line_size;
+                    const uint32_t VG = VE + line_size + 1;
+                    const uint32_t VH = VE + 1;
+
+                    const glm::vec4 CA{0, 0, 0, 1};
+                    const glm::vec4 CB{0, 0, 1, 1};
+                    const glm::vec4 CC{0, 1, 0, 1};
+                    const glm::vec4 CD{1, 0, 0, 1};
+
+                    if (data.blocks[idx].face_mask & Block::Mask::B)
+                    {
+                        m.vertices.emplace_back(vertices[VA].position, CA);
+                        m.vertices.emplace_back(vertices[VE].position, CB);
+                        m.vertices.emplace_back(vertices[VH].position, CC);
+                        m.vertices.emplace_back(vertices[VA].position, CA);
+                        m.vertices.emplace_back(vertices[VH].position, CC);
+                        m.vertices.emplace_back(vertices[VD].position, CD);
+                    }
+                    if (data.blocks[idx].face_mask & Block::Mask::F)
+                    {
+                        m.vertices.emplace_back(vertices[VC].position, CA);
+                        m.vertices.emplace_back(vertices[VG].position, CB);
+                        m.vertices.emplace_back(vertices[VF].position, CC);
+                        m.vertices.emplace_back(vertices[VC].position, CA);
+                        m.vertices.emplace_back(vertices[VF].position, CC);
+                        m.vertices.emplace_back(vertices[VB].position, CD);
+                    }
+                    if (data.blocks[idx].face_mask & Block::Mask::U)
+                    {
+                        m.vertices.emplace_back(vertices[VE].position, CA);
+                        m.vertices.emplace_back(vertices[VF].position, CB);
+                        m.vertices.emplace_back(vertices[VG].position, CC);
+                        m.vertices.emplace_back(vertices[VE].position, CA);
+                        m.vertices.emplace_back(vertices[VG].position, CC);
+                        m.vertices.emplace_back(vertices[VH].position, CD);
+                    }
+                    if (data.blocks[idx].face_mask & Block::Mask::D)
+                    {
+                        m.vertices.emplace_back(vertices[VB].position, CA);
+                        m.vertices.emplace_back(vertices[VA].position, CB);
+                        m.vertices.emplace_back(vertices[VD].position, CC);
+                        m.vertices.emplace_back(vertices[VB].position, CA);
+                        m.vertices.emplace_back(vertices[VD].position, CC);
+                        m.vertices.emplace_back(vertices[VC].position, CD);
+                    }
+                    if (data.blocks[idx].face_mask & Block::Mask::R)
+                    {
+                        m.vertices.emplace_back(vertices[VD].position, CA);
+                        m.vertices.emplace_back(vertices[VH].position, CB);
+                        m.vertices.emplace_back(vertices[VG].position, CC);
+                        m.vertices.emplace_back(vertices[VD].position, CA);
+                        m.vertices.emplace_back(vertices[VG].position, CC);
+                        m.vertices.emplace_back(vertices[VC].position, CD);
+                    }
+                    if (data.blocks[idx].face_mask & Block::Mask::L)
+                    {
+                        m.vertices.emplace_back(vertices[VB].position, CA);
+                        m.vertices.emplace_back(vertices[VF].position, CB);
+                        m.vertices.emplace_back(vertices[VE].position, CC);
+                        m.vertices.emplace_back(vertices[VB].position, CA);
+                        m.vertices.emplace_back(vertices[VE].position, CC);
+                        m.vertices.emplace_back(vertices[VA].position, CD);
+                    }
                 }
             }
         }
@@ -371,23 +426,20 @@ public:
     }
 };
 
-
 class Chunk final : NoCopy
 {
     using Shader = shaders::SolidFlatShader;
     std::shared_ptr<vk::Buffer> m_vertex_buffer;
-    std::shared_ptr<vk::Buffer> m_index_buffer;
     glm::mat4 m_transform{};
     glm::vec4 m_color{};
     glm::ivec3 m_sector{};
-    uint32_t m_index_count = 0;
+    uint32_t m_vertex_count = 0;
     uint32_t m_size = 0;
     uint32_t m_height = 0;
     uint32_t m_descriptor_set_index = 0;
 public:
     [[nodiscard]] const auto& vertex_buffer() const noexcept { return m_vertex_buffer; }
-    [[nodiscard]] const auto& index_buffer() const noexcept { return m_index_buffer; }
-    [[nodiscard]] uint32_t index_count() const noexcept { return m_index_count; }
+    [[nodiscard]] uint32_t vertex_count() const noexcept { return m_vertex_count; }
     [[nodiscard]] const glm::mat4& transform() const noexcept { return m_transform; }
     [[nodiscard]] uint32_t descriptor_set_index() const noexcept { return m_descriptor_set_index; }
     [[nodiscard]] const glm::vec4& color() const noexcept { return m_color; }
@@ -397,11 +449,11 @@ public:
     {
         m_descriptor_set_index = set_index;
         m_transform = glm::gtc::translate(glm::vec3(sector));
-        m_index_count = static_cast<uint32_t>(mesh.indices.size());
+        m_vertex_count = static_cast<uint32_t>(mesh.vertices.size());
         m_color = color;
         m_sector = sector;
 
-        if (m_index_count == 0)
+        if (m_vertex_count == 0)
             return false;
 
         // Create and upload vertex buffer
@@ -414,23 +466,11 @@ public:
             return false;
         }
 
-        // Create and upload index buffer
-        m_index_buffer = std::make_shared<vk::Buffer>(vk, "CubeIndexBuffer");
-        if (!m_index_buffer->create(mesh.indices.size() * sizeof(uint32_t),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT) ||
-            !m_index_buffer->create_staging(mesh.indices.size() * sizeof(uint32_t)))
-        {
-            LOGE("Failed to create cube index buffer");
-            return false;
-        }
-
         // Upload data to GPU and destroy staging buffers
         vk->exec_immediate("create_cube", [this, &mesh](VkCommandBuffer cmd){
             m_vertex_buffer->update_cmd(cmd, std::span(mesh.vertices));
-            m_index_buffer->update_cmd(cmd, std::span(mesh.indices));
         });
         m_vertex_buffer->destroy_staging();
-        m_index_buffer->destroy_staging();
         return true;
     }
 };
@@ -614,7 +654,7 @@ public:
                 const glm::vec4 color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 auto& chunk = m_chunks.emplace_back();
                 chunk.create(m_vk, chunk_data, sector, color, set_index + 3);
-                if (chunk.index_count() > 0)
+                if (chunk.vertex_count() > 0)
                     break;
             }
             else if (!chunk_indices.empty())
@@ -626,10 +666,9 @@ public:
                 const glm::vec4 color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 auto& chunk = m_chunks[chunk_index];
                 delete_buffers.emplace_back(frame.fence, chunk.vertex_buffer());
-                delete_buffers.emplace_back(frame.fence, chunk.index_buffer());
                 chunk = Chunk{};
                 chunk.create(m_vk, chunk_data, sector, color, set_index + 3);
-                if (chunk.index_count() > 0)
+                if (chunk.vertex_count() > 0)
                     break;
             }
         }
@@ -656,7 +695,7 @@ public:
         // };
         if (!m_chunks.empty())
         {
-            std::array<shaders::SolidFlatShader::PerObjectBuffer, shaders::SolidFlatShader::MaxInstance()> uniforms_object{};
+            static std::array<shaders::SolidFlatShader::PerObjectBuffer, shaders::SolidFlatShader::MaxInstance()> uniforms_object{};
             // update grid
             uniforms_object[0].ObjectTransform = glm::identity<glm::mat4>();
             uniforms_object[0].ObjectColor = glm::vec4{1.0f, 0.0f, 0.0f, 1.0f};
@@ -746,20 +785,20 @@ public:
 
         for (const auto& chunk : m_chunks)
         {
-            if (chunk.index_count() == 0)
+            if (chunk.vertex_count() == 0)
                 continue;
 
             const std::array vertex_buffers{chunk.vertex_buffer()->buffer()};
             constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
             vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
-            vkCmdBindIndexBuffer(cmd, chunk.index_buffer()->buffer(), 0, VK_INDEX_TYPE_UINT32);
 
             const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(chunk.descriptor_set_index());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
 
             // Draw the cube using its indices
-            vkCmdDrawIndexed(cmd, chunk.index_count(), 1, 0, 0, 0);
+            // vkCmdDrawIndexed(cmd, chunk.index_count(), 1, 0, 0, 0);
+            vkCmdDraw(cmd, chunk.vertex_count(), 1, 0, 0);
         }
 
         /*
@@ -796,17 +835,17 @@ public:
         const glm::vec2 abs_rthumb = glm::abs(rthumb);
         if (abs_rthumb.x > dead_zone)
         {
-            cam_angles.x = glm::radians(rthumb.x * dt * steering_speed);
+            cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
         }
         if (abs_rthumb.y > dead_zone)
         {
-            cam_angles.y -= glm::radians(-rthumb.y * dt * steering_speed);
+            cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
         }
 
         const glm::vec2 touch_abs_rthumb = glm::abs(touch.thumbstick_right);
         if (touch_abs_rthumb.x > dead_zone)
         {
-            cam_angles.x = glm::radians(touch.thumbstick_right.x * dt * steering_speed);
+            cam_angles.x += glm::radians(touch.thumbstick_right.x * dt * steering_speed);
         }
         if (touch_abs_rthumb.y > dead_zone)
         {
