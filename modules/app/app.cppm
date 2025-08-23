@@ -81,6 +81,7 @@ class AppBase final
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
     glm::ivec2 m_size{0, 0};
     std::vector<std::pair<VkFence, std::shared_ptr<vk::Buffer>>> delete_buffers;
+    std::shared_ptr<vk::Buffer> m_vertex_buffer;
     PlayerState m_player{};
     bool xrmode = false;
 public:
@@ -90,6 +91,10 @@ public:
         if (m_vk && m_vk->device())
         {
             vkDeviceWaitIdle(m_vk->device());
+        }
+        for (auto& c : m_chunks)
+        {
+            m_vertex_buffer->subfree(c.buffer());
         }
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
@@ -115,6 +120,15 @@ public:
         // Create the grid object
         m_grid = std::make_shared<Grid>();
         m_grid->create(m_vk, 0);
+
+        // Create and upload vertex buffer
+        m_vertex_buffer = std::make_shared<vk::Buffer>(m_vk, "CubeVertexBuffer");
+        if (!m_vertex_buffer->create(512 * (1 << 20),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+            !m_vertex_buffer->create_staging(512 * (1 << 20)))
+        {
+            LOGE("Failed to create cube vertex buffer");
+        }
 
         solid_flat->uniform_frame()->create_staging(sizeof(shaders::SolidFlatShader::PerFrameConstants));
         solid_flat->uniform_object()->create_staging(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * shaders::SolidFlatShader::MaxInstance());
@@ -155,7 +169,7 @@ public:
             LOGI("travel to sector [%d, %d, %d]", m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
         }
 
-        constexpr uint32_t neighbors_span = 4;
+        constexpr uint32_t neighbors_span = 7;
         constexpr uint32_t chunk_count = pow(neighbors_span * 2 + 1, 3);
         const auto neighbors = generate_neighbors(m_player.cam_sector, neighbors_span);
         const auto generator = FlatGenerator{8, 2};
@@ -180,13 +194,21 @@ public:
             }
             if (m_chunks.size() < chunk_count)
             {
-                auto chunk_data = mesher.mesh(generator.generate(sector));
+                const auto chunk_data = mesher.mesh(generator.generate(sector));
                 const uint32_t set_index = m_chunks.size();
                 const glm::vec4 color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 auto& chunk = m_chunks.emplace_back();
-                chunk.create(m_vk, chunk_data, sector, color, set_index + 3);
-                if (chunk.vertex_count() > 0)
+                if (!chunk_data.vertices.empty())
+                {
+                    size_t size = chunk_data.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput);
+                    const auto buffer = m_vertex_buffer->suballoc(size);
+                    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(chunk_data.vertices.data());
+                    m_vertex_buffer->update_cmd(frame.cmd, std::span{ptr, size}, buffer.value().offset, buffer.value().offset);
+                    chunk.create(sector, color, set_index + 3, chunk_data.vertices.size(), buffer.value());
+                    LOGI("Generate NEW chunk");
                     break;
+                }
+                chunk.create(sector, color, set_index + 3, 0, {});
             }
             else if (!chunk_indices.empty())
             {
@@ -196,11 +218,19 @@ public:
                 const uint32_t set_index = chunk_index;
                 const glm::vec4 color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 auto& chunk = m_chunks[chunk_index];
-                delete_buffers.emplace_back(frame.fence, chunk.vertex_buffer());
+                m_vertex_buffer->subfree(chunk.buffer());
                 chunk = Chunk{};
-                chunk.create(m_vk, chunk_data, sector, color, set_index + 3);
-                if (chunk.vertex_count() > 0)
+                if (!chunk_data.vertices.empty())
+                {
+                    size_t size = chunk_data.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput);
+                    const auto buffer = m_vertex_buffer->suballoc(size);
+                    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(chunk_data.vertices.data());
+                    m_vertex_buffer->update_cmd(frame.cmd, std::span{ptr, size}, buffer.value().offset, buffer.value().offset);
+                    chunk.create(sector, color, set_index + 3, chunk_data.vertices.size(), buffer.value());
+                    LOGI("Generate REUSE chunk");
                     break;
+                }
+                chunk.create(sector, color, set_index + 3, 0, {});
             }
         }
     }
@@ -319,8 +349,8 @@ public:
             if (chunk.vertex_count() == 0)
                 continue;
 
-            const std::array vertex_buffers{chunk.vertex_buffer()->buffer()};
-            constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
+            const std::array vertex_buffers{m_vertex_buffer->buffer()};
+            const std::array vertex_buffers_offset{chunk.buffer_offset()};
             vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
 
             const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(chunk.descriptor_set_index());
