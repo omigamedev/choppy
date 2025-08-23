@@ -27,4 +27,4 @@ target_link_libraries(app PUBLIC platform xr vk glmcppm shaders perlin)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES app.cppm)
+    FILES app.cppm grid.cppm cube.cppm utils.cppm chunkgen.cppm chunkmesh.cppm)

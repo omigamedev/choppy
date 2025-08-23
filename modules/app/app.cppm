@@ -31,449 +31,15 @@ import ce.xr;
 import ce.vk;
 import ce.vk.utils;
 import ce.shaders.solidflat;
+import ce.app.grid;
+import ce.app.cube;
+import ce.app.utils;
+import ce.app.chunkgen;
+import ce.app.chunkmesh;
 import glm;
 
 export namespace ce::app
 {
-class Grid final
-{
-    std::shared_ptr<vk::Buffer> m_vertex_buffer;
-    std::shared_ptr<vk::Buffer> m_index_buffer;
-    uint32_t m_index_count = 0;
-
-public:
-    [[nodiscard]] const auto& vertex_buffer() const noexcept { return m_vertex_buffer; }
-    [[nodiscard]] const auto& index_buffer() const noexcept { return m_index_buffer; }
-    [[nodiscard]] uint32_t index_count() const noexcept { return m_index_count; }
-
-    bool create(const std::shared_ptr<vk::Context>& vk, uint32_t size) noexcept
-    {
-        // Define the 8 vertices of the cube with unique colors for interpolation
-        constexpr std::array<shaders::SolidFlatShader::VertexInput, 4> vertices = {{
-            {{0, -2, 0, 1}, {0, 0, 0, 1}},
-            {{0, -2, -1, 1}, {0, 0, 1, 1}},
-            {{1, -2, -1, 1}, {1, 0, 1, 1}},
-            {{1, -2, 0, 1}, {1, 0, 0, 1}},
-        }};
-
-        // Define the 36 indices for the 12 triangles of the cube
-        constexpr std::array<uint32_t, 6> indices = {
-            0, 1, 2,
-            0, 2, 3,
-        };
-        m_index_count = static_cast<uint32_t>(indices.size());
-
-        // Create and upload vertex buffer
-        m_vertex_buffer = std::make_shared<vk::Buffer>(vk, "GridVertexBuffer");
-        if (!m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
-            !m_vertex_buffer->create_staging(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput)))
-        {
-            LOGE("Failed to create cube vertex buffer");
-            return false;
-        }
-
-        // Create and upload index buffer
-        m_index_buffer = std::make_shared<vk::Buffer>(vk, "GridIndexBuffer");
-        if (!m_index_buffer->create(indices.size() * sizeof(uint32_t),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT) ||
-            !m_index_buffer->create_staging(indices.size() * sizeof(uint32_t)))
-        {
-            LOGE("Failed to create cube index buffer");
-            return false;
-        }
-
-        // Upload data to GPU and destroy staging buffers
-        vk->exec_immediate("create_grid", [this, &vertices, &indices](VkCommandBuffer cmd){
-            m_vertex_buffer->update_cmd(cmd, vertices);
-            m_index_buffer->update_cmd(cmd, indices);
-        });
-        m_vertex_buffer->destroy_staging();
-        m_index_buffer->destroy_staging();
-
-        return true;
-    }
-};
-
-class Cube final
-{
-    std::shared_ptr<vk::Buffer> m_vertex_buffer;
-    std::shared_ptr<vk::Buffer> m_index_buffer;
-    uint32_t m_index_count = 0;
-
-public:
-    [[nodiscard]] const auto& vertex_buffer() const noexcept { return m_vertex_buffer; }
-    [[nodiscard]] const auto& index_buffer() const noexcept { return m_index_buffer; }
-    [[nodiscard]] uint32_t index_count() const noexcept { return m_index_count; }
-
-    bool create(const std::shared_ptr<vk::Context>& vk) noexcept
-    {
-        // Define the 8 vertices of the cube with unique colors for interpolation
-        constexpr std::array<shaders::SolidFlatShader::VertexInput, 8> vertices = {{
-            // {position},                {color}
-            {{-0.5f, -0.5f,  0.5f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}, // 0: Front-Bottom-Left,  Red
-            {{ 0.5f, -0.5f,  0.5f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f}}, // 1: Front-Bottom-Right, Green
-            {{ 0.5f,  0.5f,  0.5f, 1.0f}, {0.0f, 0.0f, 1.0f, 1.0f}}, // 2: Front-Top-Right,    Blue
-            {{-0.5f,  0.5f,  0.5f, 1.0f}, {1.0f, 1.0f, 0.0f, 1.0f}}, // 3: Front-Top-Left,     Yellow
-            {{-0.5f, -0.5f, -0.5f, 1.0f}, {1.0f, 0.0f, 1.0f, 1.0f}}, // 4: Back-Bottom-Left,   Magenta
-            {{ 0.5f, -0.5f, -0.5f, 1.0f}, {0.0f, 1.0f, 1.0f, 1.0f}}, // 5: Back-Bottom-Right,  Cyan
-            {{ 0.5f,  0.5f, -0.5f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}}, // 6: Back-Top-Right,     White
-            {{-0.5f,  0.5f, -0.5f, 1.0f}, {0.5f, 0.5f, 0.5f, 1.0f}}, // 7: Back-Top-Left,      Gray
-        }};
-
-        // Define the 36 indices for the 12 triangles of the cube
-        constexpr std::array<uint32_t, 36> indices = {
-            // Front face (+Z)
-            0, 1, 2,   2, 3, 0,
-            // Back face (-Z)
-            4, 7, 6,   6, 5, 4,
-            // Top face (+Y)
-            3, 2, 6,   6, 7, 3,
-            // Bottom face (-Y)
-            4, 5, 1,   1, 0, 4,
-            // Right face (+X)
-            1, 5, 6,   6, 2, 1,
-            // Left face (-X)
-            4, 0, 3,   3, 7, 4,
-        };
-        m_index_count = static_cast<uint32_t>(indices.size());
-
-        // Create and upload vertex buffer
-        m_vertex_buffer = std::make_shared<vk::Buffer>(vk, "CubeVertexBuffer");
-        if (!m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
-            !m_vertex_buffer->create_staging(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput)))
-        {
-            LOGE("Failed to create cube vertex buffer");
-            return false;
-        }
-
-        // Create and upload index buffer
-        m_index_buffer = std::make_shared<vk::Buffer>(vk, "CubeIndexBuffer");
-        if (!m_index_buffer->create(indices.size() * sizeof(uint32_t),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT) ||
-            !m_index_buffer->create_staging(indices.size() * sizeof(uint32_t)))
-        {
-            LOGE("Failed to create cube index buffer");
-            return false;
-        }
-
-        // Upload data to GPU and destroy staging buffers
-        vk->exec_immediate("create_cube", [this, &vertices, &indices](VkCommandBuffer cmd){
-            m_vertex_buffer->update_cmd(cmd, vertices);
-            m_index_buffer->update_cmd(cmd, indices);
-        });
-        m_vertex_buffer->destroy_staging();
-        m_index_buffer->destroy_staging();
-
-        return true;
-    }
-};
-
-constexpr int32_t pow(const int32_t base, const uint32_t exp)
-{
-    return (exp == 0) ? 1 :
-           (exp % 2 == 0) ? pow(base * base, exp / 2) :
-                            base * pow(base, exp - 1);
-}
-
-struct NoCopy
-{
-    NoCopy() = default;
-    NoCopy(const NoCopy& other) = delete;
-    NoCopy(NoCopy&& other) noexcept = default;
-    NoCopy& operator=(const NoCopy& other) = delete;
-    NoCopy& operator=(NoCopy&& other) noexcept = default;
-};
-
-// Generators
-enum class BlockType : uint8_t
-{
-    Air,
-    Water,
-    Grass,
-    Dirt,
-};
-struct Block final
-{
-    BlockType type;
-    enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, R = 16, L = 32 } face_mask;
-};
-struct ChunkData final : NoCopy
-{
-    ChunkData(const uint32_t size, const glm::ivec3& sector, const std::vector<Block>&& blocks)
-        : size(size),
-          sector(sector),
-          blocks(blocks)
-    {
-    }
-
-    uint32_t size;
-    glm::ivec3 sector;
-    std::vector<Block> blocks;
-};
-class ChunkGenerator
-{
-public:
-    virtual ~ChunkGenerator() = default;
-    [[nodiscard]] virtual ChunkData generate(glm::ivec3 sector) const noexcept = 0;
-};
-class FlatGenerator final : public ChunkGenerator
-{
-    uint32_t m_size = 0;
-    uint32_t m_ground_height = 0;
-public:
-    explicit FlatGenerator(const uint32_t size, const uint32_t ground_height) noexcept
-        : m_size(size), m_ground_height(ground_height) { }
-    [[nodiscard]] ChunkData generate([[maybe_unused]] const glm::ivec3 sector) const noexcept override
-    {
-        const int32_t ssz = static_cast<int32_t>(m_size);
-        std::vector<BlockType> tmp;
-        tmp.reserve(pow(ssz + 2, 3));
-        for (int32_t y = -1; y < ssz + 1; ++y)
-        {
-            for (int32_t z = -1; z < ssz + 1; ++z)
-            {
-                for (int32_t x = -1; x < ssz + 1; ++x)
-                {
-                    const glm::ivec3 loc{x, y, -z};
-                    const glm::ivec3 cell = loc + sector * ssz;
-                    const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
-                    const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * 5.f;
-                    //const float terrain_height = cosf(nc.z * 1.f) * 10.f;
-                    const BlockType block = cell.y <= terrain_height ? BlockType::Dirt : BlockType::Air;
-                    tmp.emplace_back(block);
-                }
-            }
-        }
-
-        std::vector<Block> blocks;
-        blocks.reserve(pow(ssz, 3));
-        for (uint32_t y = 0; y < m_size; ++y)
-        {
-            for (uint32_t z = 0; z < m_size; ++z)
-            {
-                for (uint32_t x = 0; x < m_size; ++x)
-                {
-                    const int32_t sz = static_cast<int32_t>(m_size + 2);
-                    const auto C = tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 1];
-                    uint8_t mask = 0;
-                    mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
-                    mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
-                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
-                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;
-                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air) << 4;
-                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air) << 5;
-                    const BlockType type = mask == 0 ? BlockType::Air : C;
-                    blocks.emplace_back(type, static_cast<Block::Mask>(mask));
-                }
-            }
-        }
-
-        return ChunkData{m_size, sector, std::move(blocks)};
-    }
-};
-
-// Mesher
-template<typename T>
-concept VertexType = requires(T t)
-{
-    { t.position } -> std::same_as<glm::vec4&>;
-};
-
-template<VertexType T>
-struct ChunkMesh
-{
-    using VertexType = T;
-    std::vector<uint32_t> indices;
-    std::vector<VertexType> vertices;
-};
-template<VertexType T>
-class ChunkMesher
-{
-public:
-    virtual ~ChunkMesher() = default;
-    [[nodiscard]] virtual ChunkMesh<T> mesh(const ChunkData& data) const noexcept = 0;
-};
-
-bool operator&(Block::Mask lhs, Block::Mask rhs)
-{
-    return static_cast<uint8_t>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
-}
-
-template<VertexType T>
-class SimpleMesher final : public ChunkMesher<T>
-{
-public:
-    [[nodiscard]] ChunkMesh<T> mesh(const ChunkData& data) const noexcept override
-    {
-        const uint32_t size = data.size;
-
-        std::vector<T> vertices;
-        vertices.reserve(pow(size + 1, 3));
-        const float normalizer = 1.f / static_cast<float>(size);
-        for (uint32_t y = 0; y < size + 1; ++y)
-        {
-            for (uint32_t z = 0; z < size + 1; ++z)
-            {
-                for (uint32_t x = 0; x < size + 1; ++x)
-                {
-                    const float nx = static_cast<float>(x) * normalizer;
-                    const float nz = static_cast<float>(z) * normalizer;
-                    const float ny = static_cast<float>(y) * normalizer;
-                    vertices.push_back({
-                        .position = {nx, ny, -nz, 1.0f},
-                        .color = {x, y, z, 1.0f},
-                    });
-                }
-            }
-        }
-
-        if (vertices.empty())
-            return {};
-
-        ChunkMesh<T> m;
-        m.vertices.reserve(36 * pow(size, 3));
-        for (uint32_t y = 0; y < size; ++y)
-        {
-            for (uint32_t z = 0; z < size; ++z)
-            {
-                for (uint32_t x = 0; x < size; ++x)
-                {
-                    const uint32_t idx = x + z * size + y * size * size;
-                    if (data.blocks[idx].type != BlockType::Dirt)
-                        continue;
-
-                    const uint32_t line_size = (size + 1);
-                    const uint32_t plane_size = line_size * line_size;
-
-                    const uint32_t plane_offset = y * plane_size;
-                    const uint32_t next_plane_offset = (y + 1) * plane_size;
-                    const uint32_t line_offset = z * line_size;
-
-                    const uint32_t VA = plane_offset + line_offset + x;
-                    const uint32_t VB = VA + line_size;
-                    const uint32_t VC = VA + line_size + 1;
-                    const uint32_t VD = VA + 1;
-                    const uint32_t VE = next_plane_offset + line_offset + x;
-                    const uint32_t VF = VE + line_size;
-                    const uint32_t VG = VE + line_size + 1;
-                    const uint32_t VH = VE + 1;
-
-                    const glm::vec4 CA{0, 0, 0, 1};
-                    const glm::vec4 CB{0, 0, 1, 1};
-                    const glm::vec4 CC{0, 1, 0, 1};
-                    const glm::vec4 CD{1, 0, 0, 1};
-
-                    if (data.blocks[idx].face_mask & Block::Mask::B)
-                    {
-                        m.vertices.emplace_back(vertices[VA].position, CA);
-                        m.vertices.emplace_back(vertices[VE].position, CB);
-                        m.vertices.emplace_back(vertices[VH].position, CC);
-                        m.vertices.emplace_back(vertices[VA].position, CA);
-                        m.vertices.emplace_back(vertices[VH].position, CC);
-                        m.vertices.emplace_back(vertices[VD].position, CD);
-                    }
-                    if (data.blocks[idx].face_mask & Block::Mask::F)
-                    {
-                        m.vertices.emplace_back(vertices[VC].position, CA);
-                        m.vertices.emplace_back(vertices[VG].position, CB);
-                        m.vertices.emplace_back(vertices[VF].position, CC);
-                        m.vertices.emplace_back(vertices[VC].position, CA);
-                        m.vertices.emplace_back(vertices[VF].position, CC);
-                        m.vertices.emplace_back(vertices[VB].position, CD);
-                    }
-                    if (data.blocks[idx].face_mask & Block::Mask::U)
-                    {
-                        m.vertices.emplace_back(vertices[VE].position, CA);
-                        m.vertices.emplace_back(vertices[VF].position, CB);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
-                        m.vertices.emplace_back(vertices[VE].position, CA);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
-                        m.vertices.emplace_back(vertices[VH].position, CD);
-                    }
-                    if (data.blocks[idx].face_mask & Block::Mask::D)
-                    {
-                        m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VA].position, CB);
-                        m.vertices.emplace_back(vertices[VD].position, CC);
-                        m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VD].position, CC);
-                        m.vertices.emplace_back(vertices[VC].position, CD);
-                    }
-                    if (data.blocks[idx].face_mask & Block::Mask::R)
-                    {
-                        m.vertices.emplace_back(vertices[VD].position, CA);
-                        m.vertices.emplace_back(vertices[VH].position, CB);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
-                        m.vertices.emplace_back(vertices[VD].position, CA);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
-                        m.vertices.emplace_back(vertices[VC].position, CD);
-                    }
-                    if (data.blocks[idx].face_mask & Block::Mask::L)
-                    {
-                        m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VF].position, CB);
-                        m.vertices.emplace_back(vertices[VE].position, CC);
-                        m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VE].position, CC);
-                        m.vertices.emplace_back(vertices[VA].position, CD);
-                    }
-                }
-            }
-        }
-        return m;
-    }
-};
-
-class Chunk final : NoCopy
-{
-    using Shader = shaders::SolidFlatShader;
-    std::shared_ptr<vk::Buffer> m_vertex_buffer;
-    glm::mat4 m_transform{};
-    glm::vec4 m_color{};
-    glm::ivec3 m_sector{};
-    uint32_t m_vertex_count = 0;
-    uint32_t m_size = 0;
-    uint32_t m_height = 0;
-    uint32_t m_descriptor_set_index = 0;
-public:
-    [[nodiscard]] const auto& vertex_buffer() const noexcept { return m_vertex_buffer; }
-    [[nodiscard]] uint32_t vertex_count() const noexcept { return m_vertex_count; }
-    [[nodiscard]] const glm::mat4& transform() const noexcept { return m_transform; }
-    [[nodiscard]] uint32_t descriptor_set_index() const noexcept { return m_descriptor_set_index; }
-    [[nodiscard]] const glm::vec4& color() const noexcept { return m_color; }
-    [[nodiscard]] const glm::ivec3& sector() const noexcept { return m_sector; }
-    bool create(const std::shared_ptr<vk::Context>& vk, const ChunkMesh<shaders::SolidFlatShader::VertexInput>& mesh,
-        const glm::ivec3& sector, const glm::vec4& color, uint32_t set_index) noexcept
-    {
-        m_descriptor_set_index = set_index;
-        m_transform = glm::gtc::translate(glm::vec3(sector));
-        m_vertex_count = static_cast<uint32_t>(mesh.vertices.size());
-        m_color = color;
-        m_sector = sector;
-
-        if (m_vertex_count == 0)
-            return false;
-
-        // Create and upload vertex buffer
-        m_vertex_buffer = std::make_shared<vk::Buffer>(vk, "CubeVertexBuffer");
-        if (!m_vertex_buffer->create(mesh.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
-            !m_vertex_buffer->create_staging(mesh.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput)))
-        {
-            LOGE("Failed to create cube vertex buffer");
-            return false;
-        }
-
-        // Upload data to GPU and destroy staging buffers
-        vk->exec_immediate("create_cube", [this, &mesh](VkCommandBuffer cmd){
-            m_vertex_buffer->update_cmd(cmd, std::span(mesh.vertices));
-        });
-        m_vertex_buffer->destroy_staging();
-        return true;
-    }
-};
 enum class GamepadButton : uint8_t
 {
     Menu, View,
@@ -491,13 +57,22 @@ struct GamepadState
     float trigger_left{0};
     float trigger_right{0};
 };
+struct PlayerState
+{
+    bool dragging = false;
+    glm::ivec2 drag_start = { 0, 0 };
+    float cam_fov = 90.f;
+    glm::vec2 cam_start = {0, 0};
+    glm::vec2 cam_angles = { 0, 0 };
+    glm::vec3 cam_pos = { 0, 0, 0 };
+    glm::ivec3 cam_sector = { 0, 0, 0 };
+    std::array<bool, 256> keys{false};
+};
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
     std::shared_ptr<vk::Context> m_vk;
     std::shared_ptr<shaders::SolidFlatShader> solid_flat;
-    std::shared_ptr<vk::Buffer> m_vertex_buffer;
-    std::vector<shaders::SolidFlatShader::VertexInput> vertices;
     shaders::SolidFlatShader::PerFrameConstants uniform{};
 	siv::PerlinNoise perlin{ std::random_device{} };
     std::shared_ptr<Grid> m_grid;
@@ -505,55 +80,21 @@ class AppBase final
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
     glm::ivec2 m_size{0, 0};
-    bool dragging = false;
-    glm::ivec2 drag_start = { 0, 0 };
-    glm::vec2 cam_start = {0, 0};
-    glm::vec2 cam_angles = { 0, 0 };
-    glm::vec3 cam_pos = { 0, 0, 0 };
-    glm::ivec3 cam_sector = { 0, 0, 0 };
-    std::array<bool, 256> keys{false};
     std::vector<std::pair<VkFence, std::shared_ptr<vk::Buffer>>> delete_buffers;
-    float cam_fov = 90.f;
+    PlayerState m_player{};
     bool xrmode = false;
 public:
-    ~AppBase() = default;
+    ~AppBase()
+    {
+        // Wait until all commands are done
+        if (m_vk && m_vk->device())
+        {
+            vkDeviceWaitIdle(m_vk->device());
+        }
+    };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
 
-    static std::vector<shaders::SolidFlatShader::VertexInput> build_triangle() noexcept
-    {
-        return std::vector<shaders::SolidFlatShader::VertexInput>{
-            {.position = {-0.5f, -0.5f, 0.0f, 1.f}, .color = {1, 0, 0, 1}},
-            {.position = {-0.5f,  0.5f, 0.0f, 1.f}, .color = {0, 1, 0, 1}},
-            {.position = { 0.5f, -0.5f, 0.0f, 1.f}, .color = {0, 0, 1, 1}},
-        };
-    }
-    [[nodiscard]] std::vector<shaders::SolidFlatShader::VertexInput> build_floor(
-        const uint32_t cols, const uint32_t rows, const float size) const noexcept
-    {
-        std::vector<shaders::SolidFlatShader::VertexInput> v;
-        const float x_off = -static_cast<float>(rows) / 2 * size;
-        const float z_off = -static_cast<float>(cols) / 2 * size;
-        for (int i = 0; i < rows; ++i)
-        {
-            for (int j = 0; j < cols; ++j)
-            {
-                constexpr float p = 0.05f;
-                constexpr float height = 1.5f;
-                const float A = static_cast<float>(perlin.octave2D(i * p, j * p, 4) * height);
-                const float B = static_cast<float>(perlin.octave2D(i * p, (j+1) * p, 4) * height);
-                const float C = static_cast<float>(perlin.octave2D((i+1) * p, (j+1) * p, 4) * height);
-                const float D = static_cast<float>(perlin.octave2D((i+1) * p, j * p, 4) * height);
-                v.emplace_back(glm::vec4{x_off + i * size, A, z_off +  j * size, 1}, glm::vec4{1, 0, 0, 1});
-                v.emplace_back(glm::vec4{x_off + i * size, B, z_off + (j + 1) * size, 1}, glm::vec4{0, 1, 0, 1});
-                v.emplace_back(glm::vec4{x_off + (i + 1) * size, D, z_off + j * size, 1}, glm::vec4{1, 1, 0, 1});
-                v.emplace_back(glm::vec4{x_off + (i + 1) * size, D, z_off + j * size, 1}, glm::vec4{1, 1, 0, 1});
-                v.emplace_back(glm::vec4{x_off + i * size, B, z_off + (j + 1) * size, 1}, glm::vec4{0, 1, 0, 1});
-                v.emplace_back(glm::vec4{x_off + (i + 1) * size, C, z_off + (j + 1) * size, 1}, glm::vec4{0, 0, 1, 1});
-            }
-        }
-        return v;
-    }
     void init(bool xr_mode) noexcept
     {
         xrmode = xr_mode;
@@ -575,17 +116,9 @@ public:
         m_grid = std::make_shared<Grid>();
         m_grid->create(m_vk, 0);
 
-        //generate_chunks();
-
-        vertices = build_floor(5, 5, 0.1f);
-        m_vertex_buffer = std::make_shared<vk::Buffer>(m_vk, "VertexBuffer");
-        m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-        m_vertex_buffer->create_staging(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput));
         solid_flat->uniform_frame()->create_staging(sizeof(shaders::SolidFlatShader::PerFrameConstants));
         solid_flat->uniform_object()->create_staging(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * shaders::SolidFlatShader::MaxInstance());
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
-            m_vertex_buffer->update_cmd<shaders::SolidFlatShader::VertexInput>(cmd, vertices);
             if (xrmode)
             {
                 m_xr->init_resources(cmd);
@@ -595,8 +128,6 @@ public:
                 m_vk->init_resources(cmd);
             }
         });
-        //solid_flat->uniform()->destroy_staging();
-        m_vertex_buffer->destroy_staging();
     }
     [[nodiscard]] std::vector<glm::ivec3> generate_neighbors(const glm::ivec3 origin, int32_t size) const noexcept
     {
@@ -617,16 +148,16 @@ public:
     }
     void generate_chunks(const vk::utils::FrameContext& frame) noexcept
     {
-        const glm::vec3 dist = glm::abs(cam_pos - glm::vec3(0.5f) - glm::vec3(cam_sector));
+        const glm::vec3 dist = glm::abs(m_player.cam_pos - glm::vec3(0.5f) - glm::vec3(m_player.cam_sector));
         if (dist.x > .6 || dist.y > .6 || dist.z > .6)
         {
-            cam_sector = glm::floor(cam_pos);
-            LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
+            m_player.cam_sector = glm::floor(m_player.cam_pos);
+            LOGI("travel to sector [%d, %d, %d]", m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
         }
 
-        const uint32_t neighbors_span = 4;
-        const auto neighbors = generate_neighbors(cam_sector, neighbors_span);
-        const uint32_t chunk_count = pow(neighbors_span * 2 + 1, 3);
+        constexpr uint32_t neighbors_span = 4;
+        constexpr uint32_t chunk_count = pow(neighbors_span * 2 + 1, 3);
+        const auto neighbors = generate_neighbors(m_player.cam_sector, neighbors_span);
         const auto generator = FlatGenerator{8, 2};
         const auto mesher = SimpleMesher<shaders::SolidFlatShader::VertexInput>{};
 
@@ -706,7 +237,7 @@ public:
                 const size_t i  = chunk.descriptor_set_index();
                 uniforms_object[i].ObjectTransform = glm::transpose(chunk.transform());
                 uniforms_object[i].ObjectColor = chunk.color();
-                uniforms_object[i].selected = (cam_sector == chunk.sector());
+                uniforms_object[i].selected = (m_player.cam_sector == chunk.sector());
             }
             solid_flat->uniform_object()->update_cmd(cmd, std::span(uniforms_object.data(), m_chunks.size() + 3));
         }
@@ -835,80 +366,80 @@ public:
         const glm::vec2 abs_rthumb = glm::abs(rthumb);
         if (abs_rthumb.x > dead_zone)
         {
-            cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
+            m_player.cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
         }
         if (abs_rthumb.y > dead_zone)
         {
-            cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
+            m_player.cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
         }
 
         const glm::vec2 touch_abs_rthumb = glm::abs(touch.thumbstick_right);
         if (touch_abs_rthumb.x > dead_zone)
         {
-            cam_angles.x += glm::radians(touch.thumbstick_right.x * dt * steering_speed);
+            m_player.cam_angles.x += glm::radians(touch.thumbstick_right.x * dt * steering_speed);
         }
         if (touch_abs_rthumb.y > dead_zone)
         {
-            cam_angles.y -= glm::radians(-touch.thumbstick_right.y * dt * steering_speed);
+            m_player.cam_angles.y -= glm::radians(-touch.thumbstick_right.y * dt * steering_speed);
         }
-        return glm::gtx::eulerAngleYX(-cam_angles.x, -cam_angles.y);
+        return glm::gtx::eulerAngleYX(-m_player.cam_angles.x, -m_player.cam_angles.y);
     }
     void update_flying_camera_pos(const float dt, const GamepadState& gamepad,
         const xr::TouchControllerState& touch, const glm::mat4& view)
     {
         constexpr float dead_zone = 0.05;
 #ifdef _WIN32
-        const float speed = keys[VK_SHIFT] ? .25f : 1.f;
+        const float speed = m_player.keys[VK_SHIFT] ? .25f : 1.f;
 #else
         const float speed = 1;
 #endif
-        if (keys['W'])
+        if (m_player.keys['W'])
         {
             const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            cam_pos += glm::vec3(forward) * dt * speed;
+            m_player.cam_pos += glm::vec3(forward) * dt * speed;
         }
-        if (keys['S'])
+        if (m_player.keys['S'])
         {
             const glm::vec4 forward = glm::vec4{0, 0, 1, 1} * view;
-            cam_pos += glm::vec3(forward) * dt * speed;
+            m_player.cam_pos += glm::vec3(forward) * dt * speed;
         }
-        if (keys['A'])
+        if (m_player.keys['A'])
         {
             const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * view;
-            cam_pos += glm::vec3(forward) * dt * speed;
+            m_player.cam_pos += glm::vec3(forward) * dt * speed;
         }
-        if (keys['D'])
+        if (m_player.keys['D'])
         {
             const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * view;
-            cam_pos += glm::vec3(forward) * dt * speed;
+            m_player.cam_pos += glm::vec3(forward) * dt * speed;
         }
-        if (keys['Q'])
+        if (m_player.keys['Q'])
         {
-            cam_pos.y -= dt * speed;
+            m_player.cam_pos.y -= dt * speed;
         }
-        if (keys['E'])
+        if (m_player.keys['E'])
         {
-            cam_pos.y += dt * speed;
+            m_player.cam_pos.y += dt * speed;
         }
         if (fabs(gamepad.thumbstick_left[0]) > dead_zone)
         {
             const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * view;
-            cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[0];
+            m_player.cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[0];
         }
         if (fabs(gamepad.thumbstick_left[1]) > dead_zone)
         {
             const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1];
+            m_player.cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1];
         }
         if (fabs(touch.thumbstick_left.x) > dead_zone)
         {
             const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * view;
-            cam_pos += glm::vec3(forward) * dt * touch.thumbstick_left.x;
+            m_player.cam_pos += glm::vec3(forward) * dt * touch.thumbstick_left.x;
         }
         if (fabs(touch.thumbstick_left.y) > dead_zone)
         {
             const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            cam_pos += glm::vec3(forward) * dt * touch.thumbstick_left.y;
+            m_player.cam_pos += glm::vec3(forward) * dt * touch.thumbstick_left.y;
         }
     }
     void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
@@ -925,11 +456,11 @@ public:
                 generate_chunks(frame);
                 auto frame_fixed = frame;
                 update_flying_camera_angles(dt, gamepad, m_xr->touch_controllers());
-                const auto cam_rot = glm::gtx::eulerAngleX(cam_angles.y) * glm::gtx::eulerAngleY(cam_angles.x);
+                const auto cam_rot = glm::gtx::eulerAngleX(m_player.cam_angles.y) * glm::gtx::eulerAngleY(m_player.cam_angles.x);
                 const glm::mat4 head_rot = glm::inverse(glm::gtc::mat4_cast(frame.view_quat[0]));
                 update_flying_camera_pos(dt, gamepad, m_xr->touch_controllers(), head_rot * cam_rot);
                 for (uint32_t i = 0; i < 2; i++)
-                    frame_fixed.view[i] = frame.view[i] * glm::inverse(cam_rot * glm::gtx::translate(cam_pos));
+                    frame_fixed.view[i] = frame.view[i] * glm::inverse(cam_rot * glm::gtx::translate(m_player.cam_pos));
                 render(frame_fixed, dt, frame.cmd);
             });
 
@@ -961,9 +492,9 @@ public:
             const auto cam_rot = update_flying_camera_angles(dt, gamepad, {});
             update_flying_camera_pos(dt, gamepad, {}, frame.view[0] * glm::inverse(cam_rot));
             const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
-            frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(glm::radians(cam_fov), aspect, 0.01f, 100.f);
+            frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(glm::radians(m_player.cam_fov), aspect, 0.01f, 100.f);
             frame_fixed.projection[0][1][1] *= -1.0f; // flip Y for Vulkan
-            frame_fixed.view[0] = glm::inverse(glm::gtx::translate(cam_pos) * cam_rot);
+            frame_fixed.view[0] = glm::inverse(glm::gtx::translate(m_player.cam_pos) * cam_rot);
 
             render(frame_fixed, dt, frame.cmd);
         });
@@ -996,30 +527,30 @@ public:
     void on_mouse_wheel(const int32_t x, const int32_t y, const float delta) noexcept
     {
         LOGI("mouse wheel %d %d %f", x, y, delta);
-        cam_fov += delta * 10;
+        m_player.cam_fov += delta * 10;
     }
     void on_mouse_move(const int32_t x, const int32_t y) noexcept
     {
         // LOGI("mouse moved %d %d", x, y);
-        if (dragging)
+        if (m_player.dragging)
         {
             const glm::ivec2 pos{x, y};
-            const glm::ivec2 delta = pos - drag_start;
+            const glm::ivec2 delta = pos - m_player.drag_start;
             constexpr float multiplier = .25f;
-            cam_angles = cam_start + glm::radians(glm::vec2(delta) * multiplier);
+            m_player.cam_angles = m_player.cam_start + glm::radians(glm::vec2(delta) * multiplier);
         }
     }
     void on_mouse_left_down(const int32_t x, const int32_t y) noexcept
     {
         // LOGI("mouse left down %d %d", x, y);
-        dragging = true;
-        drag_start = {x, y};
-        cam_start = cam_angles;
+        m_player.dragging = true;
+        m_player.drag_start = {x, y};
+        m_player.cam_start = m_player.cam_angles;
     }
     void on_mouse_left_up(const int32_t x, const int32_t y) noexcept
     {
         // LOGI("mouse left up %d %d", x, y);
-        dragging = false;
+        m_player.dragging = false;
     }
     void on_mouse_right_down(const int32_t x, const int32_t y) noexcept
     {
@@ -1039,11 +570,11 @@ public:
             exit(0);
         }
 #endif
-        keys[keycode] = true;
+        m_player.keys[keycode] = true;
     }
     void on_key_up(const uint64_t keycode) noexcept
     {
-        keys[keycode] = false;
+        m_player.keys[keycode] = false;
     }
 };
 }
