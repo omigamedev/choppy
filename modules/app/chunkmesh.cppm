@@ -185,7 +185,7 @@ public:
 class Chunk final : NoCopy
 {
     using Shader = shaders::SolidFlatShader;
-    std::shared_ptr<vk::Buffer> m_vertex_buffer;
+    vk::BufferSuballocation m_vertex_buffer{};
     glm::mat4 m_transform{};
     glm::vec4 m_color{};
     glm::ivec3 m_sector{};
@@ -194,39 +194,21 @@ class Chunk final : NoCopy
     uint32_t m_height = 0;
     uint32_t m_descriptor_set_index = 0;
 public:
-    [[nodiscard]] const auto& vertex_buffer() const noexcept { return m_vertex_buffer; }
-    [[nodiscard]] uint32_t vertex_count() const noexcept { return m_vertex_count; }
+    [[nodiscard]] uint32_t vertex_count() const { return m_vertex_count; }
+    [[nodiscard]] VkDeviceSize buffer_offset() const noexcept { return m_vertex_buffer.offset; }
+    [[nodiscard]] const vk::BufferSuballocation& buffer() const noexcept { return m_vertex_buffer; }
     [[nodiscard]] const glm::mat4& transform() const noexcept { return m_transform; }
     [[nodiscard]] uint32_t descriptor_set_index() const noexcept { return m_descriptor_set_index; }
     [[nodiscard]] const glm::vec4& color() const noexcept { return m_color; }
     [[nodiscard]] const glm::ivec3& sector() const noexcept { return m_sector; }
-    bool create(const std::shared_ptr<vk::Context>& vk, const ChunkMesh<shaders::SolidFlatShader::VertexInput>& mesh,
-        const glm::ivec3& sector, const glm::vec4& color, uint32_t set_index) noexcept
+    bool create(const glm::ivec3& sector, const glm::vec4& color, uint32_t set_index, uint32_t vertex_count, const vk::BufferSuballocation& buffer) noexcept
     {
         m_descriptor_set_index = set_index;
         m_transform = glm::gtc::translate(glm::vec3(sector));
-        m_vertex_count = static_cast<uint32_t>(mesh.vertices.size());
         m_color = color;
         m_sector = sector;
-
-        if (m_vertex_count == 0)
-            return false;
-
-        // Create and upload vertex buffer
-        m_vertex_buffer = std::make_shared<vk::Buffer>(vk, "CubeVertexBuffer");
-        if (!m_vertex_buffer->create(mesh.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
-            !m_vertex_buffer->create_staging(mesh.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput)))
-        {
-            LOGE("Failed to create cube vertex buffer");
-            return false;
-        }
-
-        // Upload data to GPU and destroy staging buffers
-        vk->exec_immediate("create_cube", [this, &mesh](VkCommandBuffer cmd){
-            m_vertex_buffer->update_cmd(cmd, std::span(mesh.vertices));
-        });
-        m_vertex_buffer->destroy_staging();
+        m_vertex_buffer = buffer;
+        m_vertex_count = vertex_count;
         return true;
     }
 };

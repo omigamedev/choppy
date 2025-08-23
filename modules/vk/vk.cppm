@@ -1030,6 +1030,12 @@ public:
     }
 };
 
+struct BufferSuballocation
+{
+    VmaVirtualAllocation alloc = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+};
+
 class Buffer
 {
     std::weak_ptr<Context> m_vk;
@@ -1042,6 +1048,8 @@ class Buffer
     VkBuffer m_staging_buffer = VK_NULL_HANDLE;
     VmaAllocation m_staging_allocation = VK_NULL_HANDLE;
     VmaAllocationInfo m_staging_allocation_info{};
+    VmaVirtualBlock m_virtual_block = VK_NULL_HANDLE;
+
 public:
     Buffer(const std::shared_ptr<Context>& vk, std::string name) noexcept
         : m_vk(vk), m_name(std::move(name)) { }
@@ -1073,6 +1081,34 @@ public:
         vk->debug_name(m_name, m_buffer);
         m_size = size;
         return true;
+    }
+    [[nodiscard]] std::optional<BufferSuballocation> suballoc(const VkDeviceSize size) noexcept
+    {
+        if (!m_virtual_block)
+        {
+            const VmaVirtualBlockCreateInfo block_info{.size = m_size};
+            if (const VkResult result = vmaCreateVirtualBlock(&block_info, &m_virtual_block);
+                result != VK_SUCCESS)
+            {
+                LOGE("Failed to create virtual block");
+                return std::nullopt;
+            }
+        }
+        const VmaVirtualAllocationCreateInfo alloc_create_info = {.size = size, .alignment = 0x40};
+        VmaVirtualAllocation alloc;
+        VkDeviceSize offset;
+        if (const VkResult result = vmaVirtualAllocate(m_virtual_block, &alloc_create_info, &alloc, &offset);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to allocate virtual block");
+            return std::nullopt;
+        }
+        return BufferSuballocation{alloc, offset};
+    }
+    void subfree(const BufferSuballocation& suballoc) noexcept
+    {
+        if (m_virtual_block)
+            vmaVirtualFree(m_virtual_block, suballoc.alloc);
     }
     bool create_staging(const VkDeviceSize staging_size) noexcept
     {
@@ -1114,6 +1150,10 @@ public:
             LOGE("Failed to destroy buffer: already destroyed or never created");
             return;
         }
+        if (m_virtual_block)
+        {
+            vmaDestroyVirtualBlock(m_virtual_block);
+        }
         if (const auto vk = m_vk.lock())
         {
             vmaDestroyBuffer(vk->vma(), m_buffer, m_allocation);
@@ -1139,7 +1179,7 @@ public:
             m_staging_size = 0;
         }
     }
-    bool update_cmd(VkCommandBuffer cmd, const std::span<const uint8_t> data, VkDeviceSize offset = 0) const noexcept
+    bool update_cmd(VkCommandBuffer cmd, const std::span<const uint8_t> data, VkDeviceSize src_offset, VkDeviceSize offset) const noexcept
     {
         if (!m_staging_buffer)
         {
@@ -1166,25 +1206,25 @@ public:
             LOGE("Failed to update buffer: data+offset out of bounds");
             return false;
         }
-        std::ranges::copy(data, static_cast<uint8_t*>(m_staging_allocation_info.pMappedData));
-        const VkBufferCopy copy_info{0, 0, data.size_bytes()};
+        std::ranges::copy(data, static_cast<uint8_t*>(m_staging_allocation_info.pMappedData) + src_offset);
+        const VkBufferCopy copy_info{src_offset, offset, data.size_bytes()};
         vkCmdCopyBuffer(cmd, m_staging_buffer, m_buffer, 1, &copy_info);
         return true;
     }
     template<typename T>
-    bool update_cmd(VkCommandBuffer cmd, const std::span<T> data) const noexcept
+    bool update_cmd(VkCommandBuffer cmd, const std::span<T> data, VkDeviceSize offset = 0) const noexcept
     {
-        return update_cmd(cmd, {reinterpret_cast<const uint8_t*>(data.data()), data.size_bytes()}, 0);
+        return update_cmd(cmd, {reinterpret_cast<const uint8_t*>(data.data()), data.size_bytes()}, 0, offset);
     }
     template<typename T>
     bool update_cmd(VkCommandBuffer cmd, const std::span<const T> data) const noexcept
     {
-        return update_cmd(cmd, {reinterpret_cast<const uint8_t*>(data.data()), data.size_bytes()}, 0);
+        return update_cmd(cmd, {reinterpret_cast<const uint8_t*>(data.data()), data.size_bytes()}, 0, 0);
     }
     template<typename T>
     bool update_cmd(VkCommandBuffer cmd, const T& data) const noexcept
     {
-        return update_cmd(cmd, std::bit_cast<const std::array<const uint8_t, sizeof(T)>>(data), 0);
+        return update_cmd(cmd, std::bit_cast<const std::array<const uint8_t, sizeof(T)>>(data), 0, 0);
     }
 };
 class ShaderModule
