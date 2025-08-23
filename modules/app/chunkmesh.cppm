@@ -92,7 +92,7 @@ public:
                 for (uint32_t x = 0; x < size; ++x)
                 {
                     const uint32_t idx = x + z * size + y * size * size;
-                    if (data.blocks[idx].type != BlockType::Dirt)
+                    if (data.blocks[idx].type == BlockType::Air)
                         continue;
 
                     const uint32_t line_size = (size + 1);
@@ -111,10 +111,15 @@ public:
                     const uint32_t VG = VE + line_size + 1;
                     const uint32_t VH = VE + 1;
 
-                    const glm::vec4 CA{0, 0, 0, 1};
-                    const glm::vec4 CB{0, 0, 1, 1};
-                    const glm::vec4 CC{0, 1, 0, 1};
-                    const glm::vec4 CD{1, 0, 0, 1};
+                    glm::vec4 CA{0, 0, 0, 1};
+                    glm::vec4 CB{0, 0, 1, 1};
+                    glm::vec4 CC{0, 1, 0, 1};
+                    glm::vec4 CD{1, 0, 0, 1};
+
+                    if (data.blocks[idx].type == BlockType::Water)
+                    {
+                        CA = CB = CC = CD = glm::vec4(0, 0, 1, .5f);
+                    }
 
                     if (data.blocks[idx].face_mask & Block::Mask::B)
                     {

@@ -29,8 +29,8 @@ struct ChunkData final : NoCopy
     {
     }
 
-    uint32_t size;
-    glm::ivec3 sector;
+    uint32_t size{0};
+    glm::ivec3 sector{0};
     std::vector<Block> blocks;
 };
 class ChunkGenerator
@@ -61,8 +61,12 @@ public:
                     const glm::ivec3 cell = loc + sector * ssz;
                     const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
                     const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * 5.f;
-                    //const float terrain_height = cosf(nc.z * 1.f) * 10.f;
-                    const BlockType block = cell.y <= terrain_height ? BlockType::Dirt : BlockType::Air;
+                    BlockType block = BlockType::Air;
+                    if (cell.y < 0)
+                        block = BlockType::Water;
+                    if (cell.y <= terrain_height)
+                        block = BlockType::Dirt;
+                    //const BlockType block = cell.y <= terrain_height ? BlockType::Dirt : BlockType::Air;
                     tmp.emplace_back(block);
                 }
             }
@@ -79,12 +83,24 @@ public:
                     const int32_t sz = static_cast<int32_t>(m_size + 2);
                     const auto C = tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 1];
                     uint8_t mask = 0;
-                    mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
-                    mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
-                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
-                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;
-                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air) << 4;
-                    mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air) << 5;
+                    if (C == BlockType::Water)
+                    {
+                        mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
+                        mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air) << 4;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air) << 5;
+                    }
+                    else
+                    {
+                        mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] != C) << 0;
+                        mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] != C) << 1;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] != C) << 2;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] != C) << 3;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] != C) << 4;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] != C) << 5;
+                    }
                     const BlockType type = mask == 0 ? BlockType::Air : C;
                     blocks.emplace_back(type, static_cast<Block::Mask>(mask));
                 }
