@@ -33,7 +33,7 @@ concept VertexType = requires(T t)
 };
 
 template<VertexType T>
-struct ChunkMesh
+struct ChunkMesh : NoCopy
 {
     using VertexType = T;
     std::vector<uint32_t> indices;

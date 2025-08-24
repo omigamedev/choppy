@@ -1,5 +1,6 @@
 module;
 #include <cstdint>
+#include <cmath>
 #include <vector>
 
 export module ce.app.chunkgen;
@@ -22,16 +23,10 @@ struct Block final
 };
 struct ChunkData final : NoCopy
 {
-    ChunkData(const uint32_t size, const glm::ivec3& sector, const std::vector<Block>&& blocks)
-        : size(size),
-          sector(sector),
-          blocks(blocks)
-    {
-    }
-
     uint32_t size{0};
     glm::ivec3 sector{0};
     std::vector<Block> blocks;
+    bool empty = true;
 };
 class ChunkGenerator
 {
@@ -60,7 +55,7 @@ public:
                     const glm::ivec3 loc{x, y, -z};
                     const glm::ivec3 cell = loc + sector * ssz;
                     const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
-                    const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * 5.f;
+                    const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * static_cast<float>(m_ground_height);
                     BlockType block = BlockType::Air;
                     if (cell.y < 0)
                         block = BlockType::Water;
@@ -72,6 +67,7 @@ public:
             }
         }
 
+        bool full = false;
         std::vector<Block> blocks;
         blocks.reserve(pow(ssz, 3));
         for (uint32_t y = 0; y < m_size; ++y)
@@ -103,11 +99,12 @@ public:
                     }
                     const BlockType type = mask == 0 ? BlockType::Air : C;
                     blocks.emplace_back(type, static_cast<Block::Mask>(mask));
+                    full |= type != BlockType::Air;
                 }
             }
         }
 
-        return ChunkData{m_size, sector, std::move(blocks)};
+        return ChunkData{.size = m_size, .sector = sector, .blocks = std::move(blocks), .empty = !full};
     }
 };
 }

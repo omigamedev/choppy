@@ -5,6 +5,8 @@ module;
 #include <memory>
 #include <concepts>
 #include <deque>
+#include <mutex>
+#include <thread>
 #include <volk.h>
 #include <PerlinNoise.hpp>
 
@@ -68,6 +70,14 @@ struct PlayerState
     glm::ivec3 cam_sector = { 0, 0, 0 };
     std::array<bool, 256> keys{false};
 };
+struct ChunkUpdate : NoCopy
+{
+    ChunkMesh<shaders::SolidFlatShader::VertexInput> data;
+    size_t chunk_index = 0;
+    uint32_t set_index = 0;
+    glm::vec4 color{};
+    glm::ivec3 sector{};
+};
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
@@ -82,6 +92,9 @@ class AppBase final
     glm::ivec2 m_size{0, 0};
     std::vector<std::pair<VkFence, std::shared_ptr<vk::Buffer>>> delete_buffers;
     std::shared_ptr<vk::Buffer> m_vertex_buffer;
+    std::vector<ChunkUpdate> m_chunk_updates;
+    std::mutex m_chunks_mutex;
+    std::thread m_chunks_thread;
     PlayerState m_player{};
     bool xrmode = false;
 public:
@@ -142,10 +155,20 @@ public:
                 m_vk->init_resources(cmd);
             }
         });
+        m_chunks_thread = std::thread(&AppBase::generate_thread, this);
+    }
+    void generate_thread() noexcept
+    {
+        while (true)
+        {
+            generate_chunks();
+        }
     }
     [[nodiscard]] std::vector<glm::ivec3> generate_neighbors(const glm::ivec3 origin, int32_t size) const noexcept
     {
         std::vector<glm::ivec3> neighbors;
+        const uint32_t chunk_count = pow(size * 2 + 1, 3);
+        neighbors.reserve(chunk_count);
         const int32_t side = size;
         for (int32_t y = -side; y < side + 1; ++y)
         {
@@ -160,22 +183,30 @@ public:
         }
         return neighbors;
     }
-    void generate_chunks(const vk::utils::FrameContext& frame) noexcept
+    void generate_chunks() noexcept
     {
+        constexpr uint32_t neighbors_span = 7;
+        constexpr uint32_t chunk_count = pow(neighbors_span * 2 + 1, 3);
+        static std::vector<glm::ivec3> neighbors;
+
         const glm::vec3 dist = glm::abs(m_player.cam_pos - glm::vec3(0.5f) - glm::vec3(m_player.cam_sector));
-        if (dist.x > .6 || dist.y > .6 || dist.z > .6)
+        if (m_chunks.empty() || dist.x > .6 || dist.y > .6 || dist.z > .6)
         {
-            m_player.cam_sector = glm::floor(m_player.cam_pos);
+            glm::ivec3 new_sector = glm::floor(m_player.cam_pos);
+            if (m_chunks.empty() || m_player.cam_sector != new_sector)
+            {
+                neighbors = generate_neighbors(m_player.cam_sector, neighbors_span);
+            }
+            m_player.cam_sector = new_sector;
             LOGI("travel to sector [%d, %d, %d]", m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
         }
 
-        constexpr uint32_t neighbors_span = 7;
-        constexpr uint32_t chunk_count = pow(neighbors_span * 2 + 1, 3);
-        const auto neighbors = generate_neighbors(m_player.cam_sector, neighbors_span);
-        const auto generator = FlatGenerator{8, 2};
+        const auto generator = FlatGenerator{32, 20};
         const auto mesher = SimpleMesher<shaders::SolidFlatShader::VertexInput>{};
 
-        std::deque<size_t> chunk_indices;
+        size_t chunk_indices_offset = 0;
+        std::vector<size_t> chunk_indices;
+        chunk_indices.reserve(chunk_count);
         for (size_t i = 0; i < m_chunks.size(); ++i)
         {
             if (auto it = std::ranges::find(neighbors, m_chunks[i].sector()); it == neighbors.end())
@@ -194,45 +225,83 @@ public:
             }
             if (m_chunks.size() < chunk_count)
             {
-                const auto chunk_data = mesher.mesh(generator.generate(sector));
-                const uint32_t set_index = m_chunks.size();
-                const glm::vec4 color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
-                auto& chunk = m_chunks.emplace_back();
-                if (!chunk_data.vertices.empty())
+                const auto blocks_data = generator.generate(sector);
+                if (blocks_data.empty)
                 {
-                    size_t size = chunk_data.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput);
-                    const auto buffer = m_vertex_buffer->suballoc(size);
-                    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(chunk_data.vertices.data());
-                    m_vertex_buffer->update_cmd(frame.cmd, std::span{ptr, size}, buffer.value().offset, buffer.value().offset);
-                    chunk.create(sector, color, set_index + 3, chunk_data.vertices.size(), buffer.value());
-                    LOGI("Generate NEW chunk");
-                    break;
+                    //LOGI("EMPTY block");
+                    continue;
                 }
-                chunk.create(sector, color, set_index + 3, 0, {});
+
+                auto chunk_data = mesher.mesh(blocks_data);
+                if (chunk_data.vertices.empty())
+                {
+                    // LOGI("EMPTY chunk");
+                    continue;
+                }
+
+                std::lock_guard lock(m_chunks_mutex);
+                auto& chunk = m_chunks.emplace_back();
+                m_chunk_updates.push_back(ChunkUpdate{
+                    .data = std::move(chunk_data),
+                    .chunk_index = m_chunks.size() - 1,
+                    .set_index = static_cast<uint32_t>(m_chunks.size() - 1),
+                    .color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1)),
+                    .sector = sector
+                });
+                //break;
             }
             else if (!chunk_indices.empty())
             {
-                auto chunk_data = mesher.mesh(generator.generate(sector));
-                const uint32_t chunk_index = chunk_indices.back();
-                chunk_indices.pop_back();
-                const uint32_t set_index = chunk_index;
-                const glm::vec4 color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
-                auto& chunk = m_chunks[chunk_index];
-                m_vertex_buffer->subfree(chunk.buffer());
-                chunk = Chunk{};
-                if (!chunk_data.vertices.empty())
+                const auto blocks_data = generator.generate(sector);
+                if (blocks_data.empty)
                 {
-                    size_t size = chunk_data.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput);
-                    const auto buffer = m_vertex_buffer->suballoc(size);
-                    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(chunk_data.vertices.data());
-                    m_vertex_buffer->update_cmd(frame.cmd, std::span{ptr, size}, buffer.value().offset, buffer.value().offset);
-                    chunk.create(sector, color, set_index + 3, chunk_data.vertices.size(), buffer.value());
-                    LOGI("Generate REUSE chunk");
-                    break;
+                    // LOGI("EMPTY block");
+                    continue;
                 }
-                chunk.create(sector, color, set_index + 3, 0, {});
+
+                auto chunk_data = mesher.mesh(blocks_data);
+                if (chunk_data.vertices.empty())
+                {
+                    // LOGI("EMPTY chunk");
+                    continue;
+                }
+
+                const uint32_t chunk_index = chunk_indices[chunk_indices_offset++];
+                std::lock_guard lock(m_chunks_mutex);
+                m_chunk_updates.push_back(ChunkUpdate{
+                    .data = std::move(chunk_data),
+                    .chunk_index = chunk_index,
+                    .set_index = chunk_index,
+                    .color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1)),
+                    .sector = sector
+                });
+                //break;
             }
         }
+    }
+    void update_chunks(const vk::utils::FrameContext& frame) noexcept
+    {
+        std::lock_guard lock(m_chunks_mutex);
+        for (const auto& chunk : m_chunk_updates)
+        {
+            m_vertex_buffer->subfree(m_chunks[chunk.chunk_index].buffer());
+            if (!chunk.data.vertices.empty())
+            {
+                size_t size = chunk.data.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput);
+                const auto buffer = m_vertex_buffer->suballoc(size);
+                const auto* ptr = reinterpret_cast<const uint8_t*>(chunk.data.vertices.data());
+                m_vertex_buffer->update_cmd(frame.cmd, std::span{ptr, size},
+                    buffer.value().offset, buffer.value().offset);
+                m_chunks[chunk.chunk_index].create(chunk.sector,
+                    chunk.color, chunk.set_index + 3, chunk.data.vertices.size(), buffer.value());
+                LOGI("Generate NEW chunk");
+            }
+            else
+            {
+                m_chunks[chunk.chunk_index].create(chunk.sector, chunk.color, chunk.set_index + 3, 0, {});
+            }
+        }
+        m_chunk_updates.clear();
     }
     void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) const noexcept
     {
@@ -483,7 +552,7 @@ public:
             }
 
             m_xr->present([this, dt, &gamepad](const vk::utils::FrameContext& frame){
-                generate_chunks(frame);
+                update_chunks(frame);
                 auto frame_fixed = frame;
                 update_flying_camera_angles(dt, gamepad, m_xr->touch_controllers());
                 const auto cam_rot = glm::gtx::eulerAngleX(m_player.cam_angles.y) * glm::gtx::eulerAngleY(m_player.cam_angles.x);
@@ -505,7 +574,7 @@ public:
     {
         m_vk->present([this, dt, &gamepad](const vk::utils::FrameContext& frame)
         {
-            generate_chunks(frame);
+            update_chunks(frame);
             const VkImageMemoryBarrier barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT,
