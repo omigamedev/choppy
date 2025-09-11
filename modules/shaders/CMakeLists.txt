@@ -75,6 +75,7 @@ foreach(ENTRY_INDEX RANGE ${MAX_INDEX})
     add_custom_command(
         OUTPUT ${SPIRV_OUTPUT} ${REFLECTION_OUTPUT}
         COMMAND ${DXC_EXECUTABLE} -spirv -T ${HLSL_PROFILE}_${HLSL_PROFILE_VERSION}
+            -fspv-target-env=vulkan1.3
             -E ${ENTRY_POINT} $<IF:$<CONFIG:DEBUG>,-Od,-O1> -Zi -Fo ${SPIRV_OUTPUT} ${FILE}
         COMMAND ${SPIRV_REFLECT_EXECUTABLE} ${SPIRV_OUTPUT} > ${REFLECTION_OUTPUT}
         DEPENDS ${SHADER_SOURCES}

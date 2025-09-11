@@ -8,6 +8,7 @@
     #ifdef __clang__
         #pragma clang diagnostic ignored "-Wunknown-attributes"
     #endif
+    #define uint uint32_t
     #define cbuffer struct
     #define SEM(sem)
     #define REGISTER(reg)

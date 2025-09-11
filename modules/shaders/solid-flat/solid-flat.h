@@ -1,16 +1,21 @@
 #pragma once
 #include "../hlsl_common.h"
 
-[[vk::binding(0, 0)]] cbuffer PerFrameConstants REGISTER(b0)
+struct alignas(64) PerFrameConstants
 {
     float4x4 ViewProjection[2];
 };
 
-[[vk::binding(1, 0)]] cbuffer alignas(64) PerObjectBuffer REGISTER(b1)
+struct alignas(16) PerObjectBuffer
 {
     float4x4 ObjectTransform;
     float4 ObjectColor;
     bool selected;
+};
+
+struct PerObjectArgs
+{
+    uint ObjectIndex;
 };
 
 struct VertexInput

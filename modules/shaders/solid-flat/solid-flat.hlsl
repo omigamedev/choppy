@@ -1,9 +1,16 @@
 #include "solid-flat.h"
 
-PixelInput VSMain(VertexInput input, uint ViewIndex : SV_ViewID)
+[[vk::binding(0, 0)]] cbuffer PerFrameConstants { PerFrameConstants Frame; };
+[[vk::binding(0, 1)]] StructuredBuffer<PerObjectBuffer> ObjectsData;
+[[vk::binding(1, 1)]] StructuredBuffer<PerObjectArgs> ObjectIndices;
+
+PixelInput VSMain(VertexInput input,
+    uint ViewIndex : SV_ViewID,
+    [[vk::builtin("DrawIndex")]] uint drawIndex : SV_InstanceID)
 {
     PixelInput output;
-    const float4x4 WorldViewProjection = mul(ObjectTransform, ViewProjection[ViewIndex]);
+    //uint objIndex = ObjectIndices[drawIndex].ObjectIndex;
+    const float4x4 WorldViewProjection = mul(ObjectsData[drawIndex].ObjectTransform, Frame.ViewProjection[ViewIndex]);
     output.position = mul(input.position, WorldViewProjection);
     // output.color = selected ? float4(0, 0, 0, 1) : input.color + ObjectColor;
     output.color = input.color;

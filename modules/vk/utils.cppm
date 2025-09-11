@@ -23,7 +23,8 @@ struct FrameContext final
     VkImageView resolve_color_view;
     VkFramebuffer framebuffer;
     VkRenderPass renderpass;
-    VkFence fence;
+    uint32_t present_index;
+    uint64_t timeline_value;
     int64_t display_time;
     glm::mat4 view[2];
     glm::mat4 projection[2];
@@ -39,6 +40,15 @@ const std::span<const VkFormat> formats, const VkFormatFeatureFlags features) no
     {
         VkFormatProperties2 props{.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
         vkGetPhysicalDeviceFormatProperties2(physical_device, format, &props);
+        // VkPhysicalDeviceImageFormatInfo2 format_info{
+        //     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
+        //     .format = format,
+        //     .type = VK_IMAGE_TYPE_2D,
+        //     .tiling = VK_IMAGE_TILING_OPTIMAL,
+        //     .usage = ,
+        //     .flags =
+        // };
+        // vkGetPhysicalDeviceImageFormatProperties2(physical_device, )
         if (props.formatProperties.optimalTilingFeatures & features)
             return format;
     }

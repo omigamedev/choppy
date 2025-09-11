@@ -4,6 +4,8 @@ module;
 #include <array>
 #include <volk.h>
 
+#include "vk_mem_alloc.h"
+
 #ifdef __ANDROID__
 #include <jni.h>
 #include <android/log.h>
@@ -67,7 +69,7 @@ public:
         // Create and upload vertex buffer
         m_vertex_buffer = std::make_shared<vk::Buffer>(vk, "CubeVertexBuffer");
         if (!m_vertex_buffer->create(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_HOST) ||
             !m_vertex_buffer->create_staging(vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput)))
         {
             LOGE("Failed to create cube vertex buffer");
@@ -77,7 +79,7 @@ public:
         // Create and upload index buffer
         m_index_buffer = std::make_shared<vk::Buffer>(vk, "CubeIndexBuffer");
         if (!m_index_buffer->create(indices.size() * sizeof(uint32_t),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT) ||
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_HOST) ||
             !m_index_buffer->create_staging(indices.size() * sizeof(uint32_t)))
         {
             LOGE("Failed to create cube index buffer");

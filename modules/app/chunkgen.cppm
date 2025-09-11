@@ -56,9 +56,10 @@ public:
                     const glm::ivec3 cell = loc + sector * ssz;
                     const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
                     const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * static_cast<float>(m_ground_height);
+                    //const float terrain_height = cell.z;//static_cast<float>(m_ground_height);
                     BlockType block = BlockType::Air;
-                    if (cell.y < 0)
-                        block = BlockType::Water;
+                     if (cell.y < 0)
+                         block = BlockType::Water;
                     if (cell.y <= terrain_height)
                         block = BlockType::Dirt;
                     //const BlockType block = cell.y <= terrain_height ? BlockType::Dirt : BlockType::Air;
@@ -81,7 +82,7 @@ public:
                     uint8_t mask = 0;
                     if (C == BlockType::Water)
                     {
-                        mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
+                        mask |= 1;//(tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
                         mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
                         mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
                         mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;

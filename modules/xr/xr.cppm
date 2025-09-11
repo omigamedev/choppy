@@ -96,9 +96,12 @@ class Context final
     bool has_swapchain_create_info = false;
 
     std::shared_ptr<vk::Context> m_vk;
+
     uint32_t m_present_index = 0;
     std::vector<VkCommandBuffer> m_present_cmd;
-    std::vector<VkFence> m_present_fences;
+    VkSemaphore m_timeline_semaphore = VK_NULL_HANDLE;
+    uint64_t m_timeline_counter = 0;
+    std::vector<uint64_t> m_timeline_values;
 
     // Input bindings
     XrActionSet m_action_set = XR_NULL_HANDLE;
@@ -634,6 +637,8 @@ public:
             VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
             VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
             VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+            VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
+            // VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
         };
         constexpr std::array vk_device_optional_extensions{
             VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
@@ -679,9 +684,13 @@ public:
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
             .pNext = &pipeline_creation_cache_control_feature,
         };
+        VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
+            .pNext = &robustness_feature,
+        };
         VkPhysicalDeviceMultiviewFeatures multiview_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES,
-            .pNext = &robustness_feature,
+            .pNext = &timeline_features,
         };
         VkPhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state_features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT,
@@ -717,6 +726,11 @@ public:
             LOGE("Failed to find a multiview feature");
             return false;
         }
+        if (!timeline_features.timelineSemaphore)
+        {
+            LOGE("Failed to find a timeline semaphore feature");
+            return false;
+        }
         // disable not needed features
         robustness_feature.robustBufferAccess2 = false;
         robustness_feature.robustImageAccess2 = false;
@@ -726,9 +740,21 @@ public:
         bda_feature.bufferDeviceAddressMultiDevice = false;
         has_msaa_single = multisampled_feature.multisampledRenderToSingleSampled;
         // enable supported features
+        // TODO: these features should be checked, will this collide with multiview_feature?
+        VkPhysicalDeviceVulkan11Features enable_features11{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+            .pNext = &imageless_feature,
+            .multiview = true,
+            .multiviewGeometryShader = false,
+            .multiviewTessellationShader = false,
+            .shaderDrawParameters = true,
+        };
         const VkPhysicalDeviceFeatures2 enabled_features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-            .pNext = &imageless_feature,
+            .pNext = &enable_features11,
+            .features = {
+                .multiDrawIndirect = true
+            }
         };
         const VkDeviceCreateInfo device_info{
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -1353,8 +1379,8 @@ public:
         debug_name("ce_framebuffer", m_framebuffer);
 
         m_present_cmd = m_vk->create_command_buffers("render_frame", swapchain_count());
-        m_present_fences = m_vk->create_fences("present_fence",
-            swapchain_count(), VK_FENCE_CREATE_SIGNALED_BIT);
+        m_timeline_semaphore = m_vk->create_timeline_semaphore();
+        m_timeline_values = std::vector<uint64_t>(swapchain_count(), 0);
 
         return true;
     }
@@ -1681,11 +1707,30 @@ public:
             event_data.type = XR_TYPE_EVENT_DATA_BUFFER; // Reset for the next poll
         }
     }
-    void present(const std::function<void(const vk::utils::FrameContext& frame)>& render_callback) noexcept
+    [[nodiscard]] std::optional<uint64_t> timeline_value() const noexcept
     {
-        vkWaitForFences(m_device, 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
-        vkResetFences(m_device, 1, &m_present_fences[m_present_index]);
+        uint64_t value = 0;
+        if (const VkResult result = vkGetSemaphoreCounterValue(m_device, m_timeline_semaphore, &value);
+            result != VK_SUCCESS)
+        {
+            LOGE("timeline semaphore value failed: %s", vk::utils::to_string(result));
+            return std::nullopt;
+        }
+        return value;
+    }
+    void present(const std::function<void(const vk::utils::FrameContext& frame)>& update_callback,
+        const std::function<void(const vk::utils::FrameContext& frame)>& render_callback) noexcept
+    {
+        const VkSemaphoreWaitInfo timeline_wait_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+            .semaphoreCount = 1,
+            .pSemaphores = &m_timeline_semaphore,
+            .pValues = &m_timeline_values[m_present_index],
+        };
+        vkWaitSemaphores(m_device, &timeline_wait_info, UINT64_MAX);
         vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
+
+        m_timeline_values[m_present_index] = ++m_timeline_counter;
 
         constexpr XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frame_state{.type = XR_TYPE_FRAME_STATE};
@@ -1702,10 +1747,6 @@ public:
         }
 
         sync_pose(frame_state.predictedDisplayTime);
-        constexpr VkCommandBufferBeginInfo cmd_begin_info{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        };
-        vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
 
         std::vector views(view_configs.size(), XrView{.type = XR_TYPE_VIEW});
         XrViewState view_state{.type = XR_TYPE_VIEW_STATE};
@@ -1740,47 +1781,76 @@ public:
             return;
         }
 
-        if (frame_state.shouldRender)
+        vk::utils::FrameContext frame{
+            .cmd = VK_NULL_HANDLE,
+            .size = m_framebuffer_size,
+            .color_image = has_msaa_single ? color_swapchain_images[acquired_index].image : color_msaa_image,
+            .depth_image = has_msaa_single ? depth_swapchain_images[acquired_index].image : depth_msaa_image,
+            .resolve_color_image = has_msaa_single ? VK_NULL_HANDLE : color_swapchain_images[acquired_index].image,
+            .color_view = has_msaa_single ? color_swapchain_views[acquired_index] : color_msaa_view,
+            .depth_view = has_msaa_single ? depth_swapchain_views[acquired_index] : depth_msaa_view,
+            .resolve_color_view = has_msaa_single ? VK_NULL_HANDLE : color_swapchain_views[acquired_index],
+            .framebuffer = m_framebuffer,
+            .renderpass = m_renderpass,
+            .present_index = m_present_index,
+            .timeline_value = m_timeline_counter,
+            .display_time = frame_state.predictedDisplayTime,
+        };
+
+        for (uint32_t i = 0; i < views_count; i++)
         {
-            vk::utils::FrameContext frame{
-                .cmd = m_present_cmd[m_present_index],
-                .size = m_framebuffer_size,
-                .color_image = has_msaa_single ? color_swapchain_images[acquired_index].image : color_msaa_image,
-                .depth_image = has_msaa_single ? depth_swapchain_images[acquired_index].image : depth_msaa_image,
-                .resolve_color_image = has_msaa_single ? VK_NULL_HANDLE : color_swapchain_images[acquired_index].image,
-                .color_view = has_msaa_single ? color_swapchain_views[acquired_index] : color_msaa_view,
-                .depth_view = has_msaa_single ? depth_swapchain_views[acquired_index] : depth_msaa_view,
-                .resolve_color_view = has_msaa_single ? VK_NULL_HANDLE : color_swapchain_views[acquired_index],
-                .framebuffer = m_framebuffer,
-                .renderpass = m_renderpass,
-                .fence = m_present_fences[m_present_index],
-                .display_time = frame_state.predictedDisplayTime,
-            };
+            XrMatrix4x4f projection_matrix;
+            XrMatrix4x4f_CreateProjectionFov(&projection_matrix,
+                GRAPHICS_VULKAN, views[i].fov, 0.1f, 100.f);
+            frame.projection[i] = glm::gtc::make_mat4(projection_matrix.m);
 
-            for (uint32_t i = 0; i < views_count; i++)
-            {
-                XrMatrix4x4f projection_matrix;
-                XrMatrix4x4f_CreateProjectionFov(&projection_matrix,
-                    GRAPHICS_VULKAN, views[i].fov, 0.1f, 100.f);
-                frame.projection[i] = glm::gtc::make_mat4(projection_matrix.m);
+            XrMatrix4x4f viewMatrix;
+            XrMatrix4x4f viewMatrixInv;
+            XrMatrix4x4f_CreateFromRigidTransform(&viewMatrix, &views[i].pose); // Pose to Matrix
+            XrMatrix4x4f_Invert(&viewMatrixInv, &viewMatrix);             // Invert to get View Matrix
 
-                XrMatrix4x4f viewMatrix;
-                XrMatrix4x4f viewMatrixInv;
-                XrMatrix4x4f_CreateFromRigidTransform(&viewMatrix, &views[i].pose); // Pose to Matrix
-                XrMatrix4x4f_Invert(&viewMatrixInv, &viewMatrix);             // Invert to get View Matrix
-
-                const glm::mat4 cam_t = glm::gtx::translate(glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position)));
-                const glm::quat cam_q = glm::gtc::make_quat(reinterpret_cast<float*>(&views[i].pose.orientation));
-                frame.view[i] = glm::gtc::make_mat4(viewMatrixInv.m);//glm::inverse(cam_t * glm::gtc::mat4_cast(cam_q));
-                frame.view_pos[i] = glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position));
-                frame.view_quat[i] = cam_q;
-            }
-
-            render_callback(frame);
+            const glm::mat4 cam_t = glm::gtx::translate(glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position)));
+            const glm::quat cam_q = glm::gtc::make_quat(reinterpret_cast<float*>(&views[i].pose.orientation));
+            frame.view[i] = glm::gtc::make_mat4(viewMatrixInv.m);//glm::inverse(cam_t * glm::gtc::mat4_cast(cam_q));
+            frame.view_pos[i] = glm::gtc::make_vec3(reinterpret_cast<float*>(&views[i].pose.position));
+            frame.view_quat[i] = cam_q;
         }
 
+        if (frame_state.shouldRender)
+        {
+            update_callback(frame);
+        }
+
+        constexpr VkCommandBufferBeginInfo cmd_begin_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        };
+        vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
+        if (frame_state.shouldRender)
+        {
+            frame.cmd = m_present_cmd[m_present_index];
+            render_callback(frame);
+        }
         vkEndCommandBuffer(m_present_cmd[m_present_index]);
-        m_vk->submit(m_present_cmd[m_present_index], m_present_fences[m_present_index]);
+
+        const uint64_t signal_values = m_timeline_values[m_present_index];
+        const VkTimelineSemaphoreSubmitInfo timeline_submit_info{
+            .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+            .signalSemaphoreValueCount = 1,
+            .pSignalSemaphoreValues = &signal_values,
+        };
+        const VkSubmitInfo submit_info{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = &timeline_submit_info,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &m_present_cmd[m_present_index],
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &m_timeline_semaphore,
+        };
+        if (const VkResult result = vkQueueSubmit(m_vk->queue(), 1, &submit_info, VK_NULL_HANDLE);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to submit");
+        }
 
         std::vector layer_views(views_count, XrCompositionLayerProjectionView{});
         for (uint32_t i = 0; i < views_count; i++)

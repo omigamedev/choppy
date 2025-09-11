@@ -5,13 +5,17 @@ module;
 #include <memory>
 #include <concepts>
 #include <deque>
+#include <ranges>
+#include <functional>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <volk.h>
 #include <PerlinNoise.hpp>
+#include <ranges>
 
 #include "vk_mem_alloc.h"
-#include "glm/gtx/compatibility.hpp"
+//#include "glm/gtx/compatibility.hpp"
 // #include "glm/gtx/euler_angles.hpp"
 // #include "glm/gtx/quaternion.hpp"
 
@@ -74,7 +78,6 @@ struct ChunkUpdate : NoCopy
 {
     ChunkMesh<shaders::SolidFlatShader::VertexInput> data;
     size_t chunk_index = 0;
-    uint32_t set_index = 0;
     glm::vec4 color{};
     glm::ivec3 sector{};
 };
@@ -85,30 +88,47 @@ class AppBase final
     std::shared_ptr<shaders::SolidFlatShader> solid_flat;
     shaders::SolidFlatShader::PerFrameConstants uniform{};
 	siv::PerlinNoise perlin{ std::random_device{} };
-    std::shared_ptr<Grid> m_grid;
+    //std::shared_ptr<Grid> m_grid;
     std::vector<Chunk> m_chunks;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
     glm::ivec2 m_size{0, 0};
-    std::vector<std::pair<VkFence, std::shared_ptr<vk::Buffer>>> delete_buffers;
-    std::shared_ptr<vk::Buffer> m_vertex_buffer;
+
+    std::multimap<uint64_t, std::pair<vk::Buffer&, const vk::BufferSuballocation>> m_delete_buffers;
+    std::vector<std::tuple<vk::Buffer&, const vk::BufferSuballocation, VkDeviceSize /*dst_offset*/>> m_copy_buffers;
+    vk::Buffer m_staging_buffer;
+    vk::Buffer m_vertex_buffer;
+    vk::Buffer m_frame_buffer;
+    vk::Buffer m_object_buffer;
+    VkDescriptorSet m_frame_descriptor_set = VK_NULL_HANDLE;
+    VkDescriptorSet m_object_descriptor_set = VK_NULL_HANDLE;
+
+    uint32_t m_uniform_set_index = 0;
+    vk::Buffer m_args_buffer;
+    uint32_t m_draw_count = 0;
     std::vector<ChunkUpdate> m_chunk_updates;
     std::mutex m_chunks_mutex;
     std::thread m_chunks_thread;
+    bool m_running = true;
     PlayerState m_player{};
     bool xrmode = false;
+    uint32_t m_swapchain_count = 0;
+    uint64_t m_timeline_value = 0;
 public:
     ~AppBase()
     {
-        // Wait until all commands are done
+        m_running = false;
         if (m_vk && m_vk->device())
         {
             vkDeviceWaitIdle(m_vk->device());
         }
-        for (auto& c : m_chunks)
-        {
-            m_vertex_buffer->subfree(c.buffer());
-        }
+        //for (auto& c : m_chunks)
+        //{
+        //    m_vertex_buffer->subfree(c.buffer());
+        //}
+        if (m_chunks_thread.joinable())
+            m_chunks_thread.join();
+        garbage_collect(true);
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
@@ -121,30 +141,63 @@ public:
         {
             m_renderpass = m_xr->renderpass();
             m_sample_count = m_xr->sample_count();
+            m_swapchain_count = m_xr->swapchain_count();
         }
         else
         {
             m_renderpass = m_vk->renderpass();
             m_sample_count = m_vk->samples_count();
+            m_swapchain_count = m_vk->swapchain_count();
         }
         solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
-        solid_flat->create(m_renderpass, m_sample_count);
+        solid_flat->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 1);
 
         // Create the grid object
-        m_grid = std::make_shared<Grid>();
-        m_grid->create(m_vk, 0);
+        //m_grid = std::make_shared<Grid>();
+        //m_grid->create(m_vk, 0);
 
         // Create and upload vertex buffer
-        m_vertex_buffer = std::make_shared<vk::Buffer>(m_vk, "CubeVertexBuffer");
-        if (!m_vertex_buffer->create(512 * (1 << 20),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
-            !m_vertex_buffer->create_staging(512 * (1 << 20)))
+        m_vertex_buffer = vk::Buffer(m_vk, "ChunksVertexBuffer");
+        if (!m_vertex_buffer.create(512 * (1 << 20),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
+        {
+            LOGE("Failed to create chunks vertex buffer");
+        }
+
+        m_frame_buffer = vk::Buffer(m_vk, "ChunksPerFrameBuffer");
+        if (!m_frame_buffer.create(sizeof(shaders::SolidFlatShader::PerFrameConstants),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
         {
             LOGE("Failed to create cube vertex buffer");
         }
 
-        solid_flat->uniform_frame()->create_staging(sizeof(shaders::SolidFlatShader::PerFrameConstants));
-        solid_flat->uniform_object()->create_staging(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * shaders::SolidFlatShader::MaxInstance());
+        m_object_buffer = vk::Buffer(m_vk, "ChunksPerObjectBuffer");
+        if (!m_object_buffer.create(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * 10'000,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
+        {
+            LOGE("Failed to create cube vertex buffer");
+        }
+
+        m_staging_buffer = vk::Buffer(m_vk, "StagingBuffer");
+        if (!m_staging_buffer.create(512 * (1 << 20),
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT))
+        {
+            LOGE("Failed to create cube vertex buffer");
+        }
+
+        m_args_buffer = vk::Buffer(m_vk, "CubeArgsBuffer");
+        constexpr uint32_t args_buffer_size = sizeof(VkDrawIndirectCommand) * 10'000;
+        if (!m_args_buffer.create(args_buffer_size,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
+        {
+            LOGE("Failed to create cube vertex buffer");
+        }
+
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             if (xrmode)
             {
@@ -155,11 +208,11 @@ public:
                 m_vk->init_resources(cmd);
             }
         });
-        m_chunks_thread = std::thread(&AppBase::generate_thread, this);
+        //m_chunks_thread = std::thread(&AppBase::generate_thread, this);
     }
     void generate_thread() noexcept
     {
-        while (true)
+        while (m_running)
         {
             generate_chunks();
         }
@@ -170,13 +223,13 @@ public:
         const uint32_t chunk_count = pow(size * 2 + 1, 3);
         neighbors.reserve(chunk_count);
         const int32_t side = size;
-        for (int32_t y = -side; y < side + 1; ++y)
+        for (int32_t y = -1; y < 1 + 1; ++y)
         {
             for (int32_t z = -side; z < side + 1; ++z)
             {
                 for (int32_t x = -side; x < side + 1; ++x)
                 {
-                    const glm::ivec3 sector = glm::ivec3{x, y, z} + origin;
+                    const glm::ivec3 sector = glm::ivec3{x, y, z} + glm::ivec3(origin.x, 0, origin.z);
                     neighbors.emplace_back(sector);
                 }
             }
@@ -185,161 +238,233 @@ public:
     }
     void generate_chunks() noexcept
     {
-        constexpr uint32_t neighbors_span = 7;
+        constexpr uint32_t neighbors_span = 8;
         constexpr uint32_t chunk_count = pow(neighbors_span * 2 + 1, 3);
-        static std::vector<glm::ivec3> neighbors;
 
         const glm::vec3 dist = glm::abs(m_player.cam_pos - glm::vec3(0.5f) - glm::vec3(m_player.cam_sector));
-        if (m_chunks.empty() || dist.x > .6 || dist.y > .6 || dist.z > .6)
+        if (dist.x > .6 || dist.y > .6 || dist.z > .6)
         {
-            glm::ivec3 new_sector = glm::floor(m_player.cam_pos);
-            if (m_chunks.empty() || m_player.cam_sector != new_sector)
-            {
-                neighbors = generate_neighbors(m_player.cam_sector, neighbors_span);
-            }
-            m_player.cam_sector = new_sector;
+            m_player.cam_sector = glm::floor(m_player.cam_pos);
             LOGI("travel to sector [%d, %d, %d]", m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
         }
 
-        const auto generator = FlatGenerator{32, 20};
+        const auto generator = FlatGenerator{8, 10};
         const auto mesher = SimpleMesher<shaders::SolidFlatShader::VertexInput>{};
+        const auto neighbors = generate_neighbors(m_player.cam_sector, neighbors_span);
 
-        size_t chunk_indices_offset = 0;
         std::vector<size_t> chunk_indices;
         chunk_indices.reserve(chunk_count);
         for (size_t i = 0; i < m_chunks.size(); ++i)
         {
-            if (auto it = std::ranges::find(neighbors, m_chunks[i].sector()); it == neighbors.end())
+            if (auto it = std::ranges::find(neighbors, m_chunks[i].sector); it == neighbors.end())
             {
                 chunk_indices.emplace_back(i);
             }
         }
 
+        size_t chunk_indices_offset = 0;
         for (const auto& sector : neighbors)
         {
             // check if it's already present
             if (auto it = std::ranges::find(m_chunks, sector,
-                [](auto& p){ return p.sector(); }); it != m_chunks.end())
+                [](auto& p){ return p.sector; }); it != m_chunks.end())
             {
                 continue;
             }
             if (m_chunks.size() < chunk_count)
             {
                 const auto blocks_data = generator.generate(sector);
-                if (blocks_data.empty)
-                {
-                    //LOGI("EMPTY block");
-                    continue;
-                }
-
                 auto chunk_data = mesher.mesh(blocks_data);
-                if (chunk_data.vertices.empty())
-                {
-                    // LOGI("EMPTY chunk");
-                    continue;
-                }
-
                 std::lock_guard lock(m_chunks_mutex);
                 auto& chunk = m_chunks.emplace_back();
-                m_chunk_updates.push_back(ChunkUpdate{
-                    .data = std::move(chunk_data),
-                    .chunk_index = m_chunks.size() - 1,
-                    .set_index = static_cast<uint32_t>(m_chunks.size() - 1),
-                    .color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1)),
-                    .sector = sector
-                });
-                //break;
+                chunk.mesh = std::move(chunk_data);
+                chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
+                chunk.sector = sector;
+                chunk.transform = glm::gtc::translate(glm::vec3(sector));
             }
             else if (!chunk_indices.empty())
             {
                 const auto blocks_data = generator.generate(sector);
-                if (blocks_data.empty)
-                {
-                    // LOGI("EMPTY block");
-                    continue;
-                }
-
                 auto chunk_data = mesher.mesh(blocks_data);
-                if (chunk_data.vertices.empty())
-                {
-                    // LOGI("EMPTY chunk");
-                    continue;
-                }
-
                 const uint32_t chunk_index = chunk_indices[chunk_indices_offset++];
                 std::lock_guard lock(m_chunks_mutex);
-                m_chunk_updates.push_back(ChunkUpdate{
-                    .data = std::move(chunk_data),
-                    .chunk_index = chunk_index,
-                    .set_index = chunk_index,
-                    .color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1)),
-                    .sector = sector
-                });
-                //break;
+                auto& chunk = m_chunks[chunk_index];
+                chunk.mesh = std::move(chunk_data);
+                chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
+                chunk.sector = sector;
+                chunk.transform = glm::gtc::translate(glm::vec3(sector));
             }
         }
     }
     void update_chunks(const vk::utils::FrameContext& frame) noexcept
     {
-        std::lock_guard lock(m_chunks_mutex);
-        for (const auto& chunk : m_chunk_updates)
+        //std::lock_guard lock(m_chunks_mutex);
+        //for (const auto& chunk : m_chunk_updates)
+        //{
+        //    if (!chunk.data.vertices.empty())
+        //    {
+        //        // LOGI("Generate NEW chunk");
+        //    }
+        //    else
+        //    {
+        //        m_chunks[chunk.chunk_index] = Chunk();
+        //    }
+        //}
+        //m_chunk_updates.clear();
+
+        // MEMO: DELETE SUBALLOCATED BUFFERS
+        //m_delete_buffers.emplace(0, std::pair(std::ref(m_frame_buffer), vk::BufferSuballocation{}));
+
+        if (!m_chunks.empty())
         {
-            m_vertex_buffer->subfree(m_chunks[chunk.chunk_index].buffer());
-            if (!chunk.data.vertices.empty())
+            auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
             {
-                size_t size = chunk.data.vertices.size() * sizeof(shaders::SolidFlatShader::VertexInput);
-                const auto buffer = m_vertex_buffer->suballoc(size);
-                const auto* ptr = reinterpret_cast<const uint8_t*>(chunk.data.vertices.data());
-                m_vertex_buffer->update_cmd(frame.cmd, std::span{ptr, size},
-                    buffer.value().offset, buffer.value().offset);
-                m_chunks[chunk.chunk_index].create(chunk.sector,
-                    chunk.color, chunk.set_index + 3, chunk.data.vertices.size(), buffer.value());
-                LOGI("Generate NEW chunk");
+                const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
+                const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
+                return dist1 >= dist2;
+            });
+
+            // std::ranges::stable_sort(m_chunks, [this](const auto& c1, const auto& c2) -> bool
+            // {
+            //     const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
+            //     const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
+            //     return dist1 > dist2;
+            // });
+
+            std::vector<shaders::SolidFlatShader::VertexInput> vbo;
+            vbo.reserve(m_chunks.size());
+            std::vector<shaders::SolidFlatShader::PerObjectBuffer> ubo;
+            ubo.reserve(m_chunks.size());
+            std::vector<VkDrawIndirectCommand> draw_args;
+            draw_args.reserve(m_chunks.size());
+            m_draw_count = 0;
+            for (const auto& chunk : m_chunks)
+            {
+                for (const auto& [k, m] : chunk.mesh)
+                {
+                    if (k != BlockType::Water)
+                    {
+                        // const uint32_t vertex_count = std::ranges::fold_left(chunk.mesh, size_t{0},
+                        //     [](size_t sum, auto const& v) { return sum + v.second.vertices.size(); });
+                        ubo.push_back({
+                            .ObjectTransform = glm::transpose(chunk.transform),
+                            .ObjectColor = glm::vec4(glm::vec3(chunk.color), 1.0f),
+                            .selected = false,
+                        });
+                        draw_args.push_back({
+                            .vertexCount = static_cast<uint32_t>(m.vertices.size()),
+                            .instanceCount = 1,
+                            .firstVertex = static_cast<uint32_t>(vbo.size()),
+                            .firstInstance = 0
+                        });
+                        vbo.append_range(m.vertices);
+                        m_draw_count++;
+                    }
+                }
             }
-            else
+            for (const auto& chunk : m_chunks)
             {
-                m_chunks[chunk.chunk_index].create(chunk.sector, chunk.color, chunk.set_index + 3, 0, {});
+                for (const auto& [k, m] : chunk.mesh)
+                {
+                    if (k == BlockType::Water)
+                    {
+                        ubo.push_back({
+                            .ObjectTransform = glm::transpose(chunk.transform),
+                            .ObjectColor = glm::vec4(glm::vec3(chunk.color), 1.0f),
+                            .selected = false,
+                        });
+                        draw_args.push_back({
+                            .vertexCount = static_cast<uint32_t>(m.vertices.size()),
+                            .instanceCount = 1,
+                            .firstVertex = static_cast<uint32_t>(vbo.size()),
+                            .firstInstance = 0
+                        });
+                        vbo.append_range(m.vertices);
+                        m_draw_count++;
+                    }
+                }
+            }
+            // m_draw_count = m_chunks.size();
+            if (m_draw_count > 0)
+            {
+                if (auto sb = m_staging_buffer.suballoc(vbo.size() *
+                    sizeof(shaders::SolidFlatShader::VertexInput), 64); sb)
+                {
+                    std::ranges::copy(vbo, static_cast<shaders::SolidFlatShader::VertexInput*>(sb->ptr));
+                    const auto dst_sb = m_vertex_buffer.suballoc(
+                        vbo.size() * sizeof(shaders::SolidFlatShader::VertexInput), 64);
+                    // m_vertex_buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), *sb, dst_sb->offset);
+                    m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
+                    // defer suballocation deletion
+                    m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                    m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), *dst_sb));
+                }
+
+                if (auto sb = m_staging_buffer.suballoc(ubo.size() *
+                    sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64); sb)
+                {
+                    std::ranges::copy(ubo, static_cast<shaders::SolidFlatShader::PerObjectBuffer*>(sb->ptr));
+                    const auto dst_sb = m_object_buffer.suballoc(
+                        ubo.size() * sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64);
+                    // m_object_buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), *sb, dst_sb->offset);
+                    m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
+                    // defer suballocation deletion
+                    m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                    m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_object_buffer), *dst_sb));
+                    m_object_descriptor_set = solid_flat->write_buffer(
+                        frame.present_index, 1, 0, m_object_buffer.buffer(),
+                        dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).value_or(VK_NULL_HANDLE);
+                }
+
+                if (auto sb = m_staging_buffer.suballoc(draw_args.size() *
+                    sizeof(VkDrawIndirectCommand), 64); sb)
+                {
+                    std::ranges::copy(draw_args, static_cast<VkDrawIndirectCommand*>(sb->ptr));
+                    const auto dst_sb = m_args_buffer.suballoc(
+                        draw_args.size() * sizeof(VkDrawIndirectCommand), 64);
+                    // m_args_buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), *sb, dst_sb->offset);
+                    m_copy_buffers.emplace_back(m_args_buffer, *sb, dst_sb->offset);
+                    // defer suballocation deletion
+                    m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                    m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_args_buffer), *dst_sb));
+                }
             }
         }
-        m_chunk_updates.clear();
     }
-    void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) const noexcept
+    void update(const vk::utils::FrameContext& frame) noexcept
     {
-        solid_flat->uniform_frame()->update_cmd(cmd, shaders::SolidFlatShader::PerFrameConstants{
+        solid_flat->reset_descriptors(frame.present_index);
+        generate_chunks();
+        update_chunks(frame);
+
+        const auto per_frame_constants = shaders::SolidFlatShader::PerFrameConstants{
             .ViewProjection = {
                 glm::transpose(frame.projection[0] * frame.view[0]),
                 glm::transpose(frame.projection[1] * frame.view[1]),
             }
-        });
+        };
 
-        // const std::array uniforms_object {
-        //     shaders::SolidFlatShader::PerObjectBuffer{
-        //         .ObjectTransform = glm::transpose(glm::gtc::translate(glm::vec3(0, 0, 1))),
-        //     },
-        //     shaders::SolidFlatShader::PerObjectBuffer{
-        //         .ObjectTransform = glm::transpose(m_xr->hand_pose(0) * glm::gtx::scale(glm::vec3(.1f)))
-        //     },
-        //     shaders::SolidFlatShader::PerObjectBuffer{
-        //         .ObjectTransform = glm::transpose(m_xr->hand_pose(1) * glm::gtx::scale(glm::vec3(.1f)))
-        //     },
-        // };
-        if (!m_chunks.empty())
+        if (const auto suballoc = m_staging_buffer.suballoc(sizeof(per_frame_constants), 64); suballoc)
         {
-            static std::array<shaders::SolidFlatShader::PerObjectBuffer, shaders::SolidFlatShader::MaxInstance()> uniforms_object{};
-            // update grid
-            uniforms_object[0].ObjectTransform = glm::identity<glm::mat4>();
-            uniforms_object[0].ObjectColor = glm::vec4{1.0f, 0.0f, 0.0f, 1.0f};
-            uniforms_object[0].selected = false;
-
-            for (const Chunk& chunk : m_chunks)
-            {
-                const size_t i  = chunk.descriptor_set_index();
-                uniforms_object[i].ObjectTransform = glm::transpose(chunk.transform());
-                uniforms_object[i].ObjectColor = chunk.color();
-                uniforms_object[i].selected = (m_player.cam_sector == chunk.sector());
-            }
-            solid_flat->uniform_object()->update_cmd(cmd, std::span(uniforms_object.data(), m_chunks.size() + 3));
+            // TODO: resolve conflicting in flight frames
+            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *suballoc));
+            std::copy_n(&per_frame_constants, 1, static_cast<shaders::SolidFlatShader::PerFrameConstants*>(suballoc->ptr));
+            // defer copy
+            m_copy_buffers.emplace_back(m_frame_buffer, *suballoc, 0);
+            m_frame_descriptor_set = solid_flat->write_buffer(
+                frame.present_index, 0, 0, m_frame_buffer.buffer(), 0, suballoc->size,
+                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).value_or(VK_NULL_HANDLE);
         }
+
+        solid_flat->update_descriptors();
+    }
+    void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) noexcept
+    {
+        for (auto& [buffer, sb, dst_offset] : m_copy_buffers)
+        {
+            buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), sb, dst_offset);
+        }
+        m_copy_buffers.clear();
 
         // Renderpass setup
         const std::array rgb{.3f, .3f, .3f};
@@ -398,37 +523,36 @@ public:
         // }
 
         // Drawing Grid
+        // {
+        //     const std::array vertex_buffers{m_grid->vertex_buffer()->buffer()};
+        //     constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
+        //     vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
+        //     vkCmdBindIndexBuffer(cmd, m_grid->index_buffer()->buffer(), 0, VK_INDEX_TYPE_UINT32);
+        //
+        //     const std::array<VkDescriptorSet, 2> sets = solid_flat->descriptor_sets(0);
+        //     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        //         solid_flat->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+        //
+        //     // Draw the cube using its indices
+        //     vkCmdDrawIndexed(cmd, m_grid->index_count(), 1, 0, 0, 0);
+        // }
+
+        std::lock_guard lock(m_chunks_mutex);
+        if (!m_chunks.empty())
         {
-            const std::array vertex_buffers{m_grid->vertex_buffer()->buffer()};
+            const std::array vertex_buffers{m_vertex_buffer.buffer()};
             constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
-            vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
-            vkCmdBindIndexBuffer(cmd, m_grid->index_buffer()->buffer(), 0, VK_INDEX_TYPE_UINT32);
+            vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
+                vertex_buffers.data(), vertex_buffers_offset.data());
 
-            const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(0);
+            const std::array sets{m_frame_descriptor_set, m_object_descriptor_set};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
-
-            // Draw the cube using its indices
-            vkCmdDrawIndexed(cmd, m_grid->index_count(), 1, 0, 0, 0);
-        }
-
-
-        for (const auto& chunk : m_chunks)
-        {
-            if (chunk.vertex_count() == 0)
-                continue;
-
-            const std::array vertex_buffers{m_vertex_buffer->buffer()};
-            const std::array vertex_buffers_offset{chunk.buffer_offset()};
-            vkCmdBindVertexBuffers(cmd, 0, vertex_buffers.size(), vertex_buffers.data(), vertex_buffers_offset.data());
-
-            const VkDescriptorSet& descriptor_set = solid_flat->descriptor_set(chunk.descriptor_set_index());
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                solid_flat->layout(), 0, 1, &descriptor_set, 0, nullptr);
+                solid_flat->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
             // Draw the cube using its indices
             // vkCmdDrawIndexed(cmd, chunk.index_count(), 1, 0, 0, 0);
-            vkCmdDraw(cmd, chunk.vertex_count(), 1, 0, 0);
+            vkCmdDrawIndirect(cmd, m_args_buffer.buffer(),
+                0, m_draw_count, sizeof(VkDrawIndirectCommand));
         }
 
         /*
@@ -551,30 +675,49 @@ public:
                 LOGE("Failed to sync input");
             }
 
-            m_xr->present([this, dt, &gamepad](const vk::utils::FrameContext& frame){
-                update_chunks(frame);
-                auto frame_fixed = frame;
+            vk::utils::FrameContext frame_fixed;
+            m_xr->present(
+            [this, dt, &gamepad, &frame_fixed](const vk::utils::FrameContext& frame)
+            {
+                frame_fixed = frame;
                 update_flying_camera_angles(dt, gamepad, m_xr->touch_controllers());
                 const auto cam_rot = glm::gtx::eulerAngleX(m_player.cam_angles.y) * glm::gtx::eulerAngleY(m_player.cam_angles.x);
                 const glm::mat4 head_rot = glm::inverse(glm::gtc::mat4_cast(frame.view_quat[0]));
                 update_flying_camera_pos(dt, gamepad, m_xr->touch_controllers(), head_rot * cam_rot);
                 for (uint32_t i = 0; i < 2; i++)
                     frame_fixed.view[i] = frame.view[i] * glm::inverse(cam_rot * glm::gtx::translate(m_player.cam_pos));
+                update(frame_fixed);
+            },
+            [this, dt, &frame_fixed](const vk::utils::FrameContext& frame){
+                frame_fixed.cmd = frame.cmd;
                 render(frame_fixed, dt, frame.cmd);
             });
-
         }
         else
         {
             // Submit empty frames
-            m_xr->present([](const vk::utils::FrameContext& frame){});
+            const auto nop = [](const vk::utils::FrameContext&){};
+            m_xr->present(nop, nop);
         }
     }
     void tick_windowed(const float dt, const GamepadState& gamepad) noexcept
     {
-        m_vk->present([this, dt, &gamepad](const vk::utils::FrameContext& frame)
+        vk::utils::FrameContext frame_fixed;
+        m_vk->present(
+        [this, dt, &gamepad, &frame_fixed](const vk::utils::FrameContext& frame)
         {
-            update_chunks(frame);
+            frame_fixed = frame;
+            const auto cam_rot = update_flying_camera_angles(dt, gamepad, {});
+            update_flying_camera_pos(dt, gamepad, {}, frame.view[0] * glm::inverse(cam_rot));
+            const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
+            frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(glm::radians(m_player.cam_fov), aspect, 0.01f, 100.f);
+            frame_fixed.projection[0][1][1] *= -1.0f; // flip Y for Vulkan
+            frame_fixed.view[0] = glm::inverse(glm::gtx::translate(m_player.cam_pos) * cam_rot);
+
+            update(frame_fixed);
+        },
+        [this, dt, &frame_fixed](const vk::utils::FrameContext& frame)
+        {
             const VkImageMemoryBarrier barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT,
@@ -586,37 +729,41 @@ public:
             };
             vkCmdPipelineBarrier(frame.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-            auto frame_fixed = frame;
-            const auto cam_rot = update_flying_camera_angles(dt, gamepad, {});
-            update_flying_camera_pos(dt, gamepad, {}, frame.view[0] * glm::inverse(cam_rot));
-            const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
-            frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(glm::radians(m_player.cam_fov), aspect, 0.01f, 100.f);
-            frame_fixed.projection[0][1][1] *= -1.0f; // flip Y for Vulkan
-            frame_fixed.view[0] = glm::inverse(glm::gtx::translate(m_player.cam_pos) * cam_rot);
-
+            frame_fixed.cmd = frame.cmd;
             render(frame_fixed, dt, frame.cmd);
         });
     }
     void tick(const float dt, const GamepadState& gamepad) noexcept
     {
-        garbage_collect();
         if (xrmode)
         {
+            m_timeline_value = m_xr->timeline_value().value_or(0);
+            garbage_collect(false);
             tick_xrmode(dt, gamepad);
         }
         else
         {
+            m_timeline_value = m_vk->timeline_value().value_or(0);
+            garbage_collect(false);
             tick_windowed(dt, gamepad);
         }
     }
-    void garbage_collect() noexcept
+    void garbage_collect(bool force) noexcept
     {
-        for (auto& [fence, buffer] : delete_buffers)
+        std::multimap<uint64_t, std::pair<vk::Buffer&, const vk::BufferSuballocation>> not_deleted;
+        for (auto& [timeline, buffer_pair] : m_delete_buffers)
         {
-            vkWaitForFences(m_vk->device(), 1, &fence, VK_TRUE, UINT64_MAX);
+            if (m_timeline_value >= timeline || force)
+            {
+                auto& [buffer, sb] = buffer_pair;
+                buffer.subfree(sb);
+            }
+            else
+            {
+                not_deleted.emplace(timeline, buffer_pair);
+            }
         }
-        delete_buffers.clear();
+        m_delete_buffers = std::move(not_deleted);
     }
     void on_resize(const uint32_t width, const uint32_t height) noexcept
     {

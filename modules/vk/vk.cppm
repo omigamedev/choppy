@@ -37,6 +37,15 @@ import ce.platform.android;
 
 export namespace ce::vk
 {
+struct NoCopy
+{
+    NoCopy() = default;
+    NoCopy(const NoCopy& other) = delete;
+    NoCopy(NoCopy&& other) noexcept = default;
+    NoCopy& operator=(const NoCopy& other) = delete;
+    NoCopy& operator=(NoCopy&& other) noexcept = default;
+};
+
 class Context final
 {
     VkInstance m_instance = VK_NULL_HANDLE;
@@ -61,15 +70,16 @@ class Context final
     VmaAllocation m_depth_allocation = VK_NULL_HANDLE;
     VmaAllocationInfo m_color_allocation_info = {};
     VmaAllocationInfo m_depth_allocation_info = {};
-    std::vector<VkSemaphore> m_wait_swapchain;
-    std::vector<VkSemaphore> m_wait_render;
-    uint32_t m_semaphore_index = 0;
 
     bool m_msaa_enabled = true;
 
+    std::vector<VkSemaphore> m_wait_swapchain;
+    std::vector<VkSemaphore> m_wait_render;
     uint32_t m_present_index = 0;
     std::vector<VkCommandBuffer> m_present_cmd;
-    std::vector<VkFence> m_present_fences;
+    VkSemaphore m_timeline_semaphore = VK_NULL_HANDLE;
+    uint64_t m_timeline_counter = 0;
+    std::vector<uint64_t> m_timeline_values;
 
     std::shared_ptr<platform::Window> m_window;
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
@@ -346,6 +356,8 @@ public:
             //VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
             VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+            VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
+            VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
         };
         constexpr std::array vk_device_optional_extensions{
             VK_KHR_MULTIVIEW_EXTENSION_NAME,
@@ -366,9 +378,13 @@ public:
         VkPhysicalDeviceBufferDeviceAddressFeatures bda_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
         };
+        VkPhysicalDeviceTimelineSemaphoreFeatures timeline_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
+            //.pNext = &bda_feature,
+        };
         VkPhysicalDeviceRobustness2FeaturesEXT robustness_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
-            //.pNext = &bda_feature,
+            .pNext = &timeline_features,
         };
         VkPhysicalDeviceMultiviewFeatures multiview_feature{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES,
@@ -403,6 +419,11 @@ public:
             LOGE("Failed to find a null descriptor robustness feature");
             return false;
         }
+        if (!timeline_features.timelineSemaphore)
+        {
+            LOGE("Failed to find a timeline semaphore feature");
+            return false;
+        }
         // disable not needed features
         robustness_feature.robustBufferAccess2 = false;
         robustness_feature.robustImageAccess2 = false;
@@ -412,6 +433,9 @@ public:
         const VkPhysicalDeviceFeatures2 enabled_features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
             .pNext = &imageless_feature,
+            .features = {
+                .multiDrawIndirect = true,
+            }
         };
         constexpr std::array queue_priority{1.f};
         const VkDeviceQueueCreateInfo queue_info{
@@ -445,10 +469,10 @@ public:
     bool create_swapchain() noexcept
     {
         constexpr std::array desired_color_formats{
-            VK_FORMAT_R8G8B8A8_SRGB,
-            VK_FORMAT_B8G8R8A8_SRGB,
             VK_FORMAT_R8G8B8A8_UNORM,
             VK_FORMAT_B8G8R8A8_UNORM,
+            VK_FORMAT_B8G8R8A8_SRGB,
+            VK_FORMAT_R8G8B8A8_SRGB,
         };
         constexpr std::array desired_depth_formats{
             VK_FORMAT_D32_SFLOAT,
@@ -613,8 +637,30 @@ public:
         }
 
         m_present_cmd = create_command_buffers("render_frame", swapchain_count());
-        m_present_fences = create_fences("present_fence", swapchain_count(), VK_FENCE_CREATE_SIGNALED_BIT);
+        //m_present_fences = create_fences("present_fence", swapchain_count(), VK_FENCE_CREATE_SIGNALED_BIT);
+        m_timeline_semaphore = create_timeline_semaphore();
+        m_timeline_values = std::vector<uint64_t>(swapchain_count(), 0);
         return true;
+    }
+    [[nodiscard]] VkSemaphore create_timeline_semaphore() const noexcept
+    {
+        constexpr VkSemaphoreTypeCreateInfo semaphore_type_create_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+            .initialValue = 0
+        };
+        const VkSemaphoreCreateInfo semaphore_create_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &semaphore_type_create_info
+        };
+        VkSemaphore semaphore{VK_NULL_HANDLE};
+        if (const VkResult result = vkCreateSemaphore(m_device, &semaphore_create_info, nullptr, &semaphore);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create timeline semaphore: %s", utils::to_string(result));
+            return VK_NULL_HANDLE;
+        }
+        return semaphore;
     }
     [[nodiscard]] VkCommandBuffer create_command_buffer(const std::string& name) const noexcept
     {
@@ -957,27 +1003,40 @@ public:
             | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
             0, 0, nullptr, 0, nullptr, static_cast<uint32_t>(barriers.size()), barriers.data());
     }
-    void present(const std::function<void(const utils::FrameContext& frame)>& render_callback) noexcept
+    [[nodiscard]] std::optional<uint64_t> timeline_value() const noexcept
     {
-        vkWaitForFences(m_device, 1, &m_present_fences[m_present_index], VK_TRUE, UINT64_MAX);
+        uint64_t value = 0;
+        if (const VkResult result = vkGetSemaphoreCounterValue(m_device, m_timeline_semaphore, &value);
+            result != VK_SUCCESS)
+        {
+            LOGE("timeline semaphore value failed: %s", utils::to_string(result));
+            return std::nullopt;
+        }
+        return value;
+    }
+    void present(const std::function<void(const utils::FrameContext& frame)>& update_callback,
+        const std::function<void(const utils::FrameContext& frame)>& render_callback) noexcept
+    {
+        const VkSemaphoreWaitInfo wait_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+            .semaphoreCount = 1,
+            .pSemaphores = &m_timeline_semaphore,
+            .pValues = &m_timeline_values[m_present_index],
+        };
+        vkWaitSemaphores(m_device, &wait_info, UINT64_MAX);
+
+        m_timeline_values[m_present_index] = ++m_timeline_counter;
 
         uint32_t swapchain_index;
         if (const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
-            m_wait_swapchain[m_semaphore_index], VK_NULL_HANDLE, &swapchain_index); result != VK_SUCCESS)
+            m_wait_swapchain[m_present_index], VK_NULL_HANDLE, &swapchain_index); result != VK_SUCCESS)
         {
             LOGE("vkAcquireNextImageKHR failed: %s", utils::to_string(result));
         }
 
-        vkResetFences(m_device, 1, &m_present_fences[m_present_index]);
-        vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
-        constexpr VkCommandBufferBeginInfo cmd_begin_info{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        };
-        vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
-
         const auto [width, height] = m_window->size();
-        const utils::FrameContext frame{
-            .cmd = m_present_cmd[m_present_index],
+        utils::FrameContext frame{
+            .cmd = VK_NULL_HANDLE,
             .size = {width, height},
             .color_image = m_color_image,
             .depth_image = m_depth_image,
@@ -987,17 +1046,48 @@ public:
             .resolve_color_view = m_color_swapchain_views[swapchain_index],
             .framebuffer = m_framebuffer,
             .renderpass = m_renderpass,
-            .fence = m_present_fences[m_present_index],
+            .present_index = m_present_index,
+            .timeline_value = m_timeline_counter,
             .display_time = 0,
             .view = {glm::gtx::identity<glm::mat4>()},
             .projection = {glm::gtx::identity<glm::mat4>()},
         };
-        render_callback(frame);
 
+        update_callback(frame);
+
+        vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
+        constexpr VkCommandBufferBeginInfo cmd_begin_info{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        };
+        vkBeginCommandBuffer(m_present_cmd[m_present_index], &cmd_begin_info);
+        frame.cmd = m_present_cmd[m_present_index];
+        render_callback(frame);
         vkEndCommandBuffer(m_present_cmd[m_present_index]);
-        submit(m_present_cmd[m_present_index], m_present_fences[m_present_index],
-            m_wait_swapchain[m_semaphore_index], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            m_wait_render[swapchain_index]);
+
+        const std::array<uint64_t, 2> signal_values = {0, m_timeline_values[m_present_index]};
+        const VkTimelineSemaphoreSubmitInfo timeline_submit_info{
+            .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+            .signalSemaphoreValueCount = signal_values.size(),
+            .pSignalSemaphoreValues = signal_values.data(),
+        };
+        const std::array signal_semaphores = {m_wait_render[swapchain_index], m_timeline_semaphore };
+        const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        const VkSubmitInfo submit_info{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = &timeline_submit_info,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &m_wait_swapchain[m_present_index],
+            .pWaitDstStageMask = &wait_stage,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &m_present_cmd[m_present_index],
+            .signalSemaphoreCount = signal_semaphores.size(),
+            .pSignalSemaphores = signal_semaphores.data(),
+        };
+        if (const VkResult result = vkQueueSubmit(m_queue, 1, &submit_info, VK_NULL_HANDLE);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to submit");
+        }
 
         const VkPresentInfoKHR present_info {
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -1012,7 +1102,6 @@ public:
         {
             LOGE("vkQueuePresentKHR failed: %s", utils::to_string(result));
         }
-        m_semaphore_index = (m_semaphore_index + 1) % swapchain_count();
         m_present_index = (m_present_index + 1) % swapchain_count();
     }
     void debug_name(const std::string& name, auto obj) const noexcept
@@ -1034,10 +1123,19 @@ struct BufferSuballocation
 {
     VmaVirtualAllocation alloc = VK_NULL_HANDLE;
     VkDeviceSize offset = 0;
+    VkDeviceSize size = 0;
+    void* ptr = nullptr;
 };
 
-class Buffer
+class Buffer : NoCopy
 {
+public:
+    Buffer(const Buffer& other) = delete;
+    Buffer(Buffer&& other) noexcept = default;
+    Buffer& operator=(const Buffer& other) = delete;
+    Buffer& operator=(Buffer&& other) noexcept = default;
+
+private:
     std::weak_ptr<Context> m_vk;
     std::string m_name;
     VkDeviceSize m_size = 0;
@@ -1051,6 +1149,7 @@ class Buffer
     VmaVirtualBlock m_virtual_block = VK_NULL_HANDLE;
 
 public:
+    Buffer() = default;
     Buffer(const std::shared_ptr<Context>& vk, std::string name) noexcept
         : m_vk(vk), m_name(std::move(name)) { }
     ~Buffer() noexcept
@@ -1061,7 +1160,9 @@ public:
             destroy();
     }
     [[nodiscard]] VkBuffer buffer() const noexcept { return m_buffer; }
-    bool create(const VkDeviceSize size, const VkBufferUsageFlags usage) noexcept
+    [[nodiscard]] VkDeviceSize size() const noexcept { return m_size; }
+    bool create(const VkDeviceSize size, const VkBufferUsageFlags usage, const VmaMemoryUsage memory_usage,
+        const VmaAllocationCreateFlags flags = {0}) noexcept
     {
         const auto vk = m_vk.lock();
         const VkBufferCreateInfo buffer_info{
@@ -1069,8 +1170,9 @@ public:
             .size = size,
             .usage = usage,
         };
-        constexpr VmaAllocationCreateInfo alloc_info{
-            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        const VmaAllocationCreateInfo alloc_info{
+            .flags = flags,
+            .usage = memory_usage,
         };
         if (const VkResult result = vmaCreateBuffer(vk->vma(), &buffer_info, &alloc_info,
             &m_buffer, &m_allocation, &m_allocation_info); result != VK_SUCCESS)
@@ -1082,7 +1184,8 @@ public:
         m_size = size;
         return true;
     }
-    [[nodiscard]] std::optional<BufferSuballocation> suballoc(const VkDeviceSize size) noexcept
+    [[nodiscard]] std::optional<BufferSuballocation> suballoc(const VkDeviceSize size,
+        const VkDeviceSize alignment) noexcept
     {
         if (!m_virtual_block)
         {
@@ -1094,7 +1197,7 @@ public:
                 return std::nullopt;
             }
         }
-        const VmaVirtualAllocationCreateInfo alloc_create_info = {.size = size, .alignment = 0x40};
+        const VmaVirtualAllocationCreateInfo alloc_create_info = {.size = size, .alignment = alignment};
         VmaVirtualAllocation alloc;
         VkDeviceSize offset;
         if (const VkResult result = vmaVirtualAllocate(m_virtual_block, &alloc_create_info, &alloc, &offset);
@@ -1103,7 +1206,7 @@ public:
             LOGE("Failed to allocate virtual block");
             return std::nullopt;
         }
-        return BufferSuballocation{alloc, offset};
+        return BufferSuballocation{alloc, offset, size, static_cast<uint8_t*>(m_allocation_info.pMappedData) + offset};
     }
     void subfree(const BufferSuballocation& suballoc) noexcept
     {
@@ -1179,6 +1282,11 @@ public:
             m_staging_size = 0;
         }
     }
+    void copy_from(VkCommandBuffer cmd, VkBuffer src_buffer, const BufferSuballocation& src, VkDeviceSize dst_offset) const noexcept
+    {
+        const VkBufferCopy copy_info{src.offset, dst_offset, src.size};
+        vkCmdCopyBuffer(cmd, src_buffer, m_buffer, 1, &copy_info);
+    }
     bool update_cmd(VkCommandBuffer cmd, const std::span<const uint8_t> data, VkDeviceSize src_offset, VkDeviceSize offset) const noexcept
     {
         if (!m_staging_buffer)
@@ -1230,20 +1338,16 @@ public:
 class ShaderModule
 {
 protected:
-    std::weak_ptr<Context> m_vk;
+    Context& m_vk;
     std::string m_name;
     VkShaderModule m_module_vs = VK_NULL_HANDLE;
     VkShaderModule m_module_ps = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_set_layout = VK_NULL_HANDLE;
     VkPipelineLayout m_layout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
-    VkDescriptorPool m_descriptor_pool = VK_NULL_HANDLE;
-    std::vector<VkDescriptorSet> m_descr_sets{};
 
     ShaderModule(const std::shared_ptr<Context>& vk, std::string name) noexcept
-        : m_vk(vk), m_name(std::move(name)) { }
-    [[nodiscard]] static std::optional<VkShaderModule> create_shader_module(
-        const std::shared_ptr<Context>& vk, const std::string& asset_path)
+        : m_vk(*vk), m_name(std::move(name)) { }
+    [[nodiscard]] std::optional<VkShaderModule> create_shader_module(const std::string& asset_path) const noexcept
     {
         LOGI("Loading shader %s", asset_path.c_str());
         const auto& p = platform::GetPlatform();
@@ -1264,7 +1368,7 @@ protected:
             .pCode = reinterpret_cast<uint32_t*>(shader_code.data())
         };
         VkShaderModule module{VK_NULL_HANDLE};
-        if (const VkResult result = vkCreateShaderModule(vk->device(), &info, nullptr, &module);
+        if (const VkResult result = vkCreateShaderModule(m_vk.device(), &info, nullptr, &module);
             result != VK_SUCCESS)
         {
             LOGE("Failed to create shader module: %s", utils::to_string(result));
@@ -1279,13 +1383,12 @@ protected:
             }
             return asset_path;
         }();
-        vk->debug_name(filename, module);
+        m_vk.debug_name(filename, module);
         return module;
     }
-    bool load_from_file(const std::shared_ptr<Context>& vk,
-        const std::string& vs_path, const std::string& ps_path) noexcept
+    bool load_from_file(const std::string& vs_path, const std::string& ps_path) noexcept
     {
-        if (auto ps = create_shader_module(vk, ps_path), vs = create_shader_module(vk, vs_path); vs && ps)
+        if (auto ps = create_shader_module(ps_path), vs = create_shader_module(vs_path); vs && ps)
         {
             m_module_ps = ps.value();
             m_module_vs = vs.value();
@@ -1301,13 +1404,10 @@ public:
     virtual ~ShaderModule() noexcept
     {
         LOGI("Destroying shader module: %s", m_name.c_str());
-        if (const auto& vk = m_vk.lock())
-        {
-            if (m_module_vs != VK_NULL_HANDLE)
-                vkDestroyShaderModule(vk->device(), m_module_vs, nullptr);
-            if (m_module_ps != VK_NULL_HANDLE)
-                vkDestroyShaderModule(vk->device(), m_module_ps, nullptr);
-        }
+        if (m_module_vs != VK_NULL_HANDLE)
+            vkDestroyShaderModule(m_vk.device(), m_module_vs, nullptr);
+        if (m_module_ps != VK_NULL_HANDLE)
+            vkDestroyShaderModule(m_vk.device(), m_module_ps, nullptr);
         m_module_vs = VK_NULL_HANDLE;
         m_module_ps = VK_NULL_HANDLE;
     }

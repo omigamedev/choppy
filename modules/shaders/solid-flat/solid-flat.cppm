@@ -1,8 +1,10 @@
 module;
 
 #include <array>
+#include <vector>
 #include <format>
 #include <memory>
+#include <optional>
 #include <volk.h>
 #include <vk_mem_alloc.h>
 #include <glm/gtx/compatibility.hpp>
@@ -18,28 +20,11 @@ export namespace ce::shaders
     {
     public:
         #include "solid-flat.h"
-        [[nodiscard]] static uint32_t constexpr MaxInstance() noexcept { return m_max_instances; };
     private:
-        std::shared_ptr<vk::Buffer> m_uniform_frame;
-        std::shared_ptr<vk::Buffer> m_uniform_object;
-        constexpr static uint32_t m_max_instances = 10000;
-        bool create_uniform(const std::shared_ptr<vk::Context>& vk) noexcept
-        {
-            m_uniform_frame = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::UniformFrame");
-            if (!m_uniform_frame->create(sizeof(PerFrameConstants),
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT))
-            {
-                return false;
-            }
-            m_uniform_object = std::make_shared<vk::Buffer>(vk, "SolidFlatShader::UniformObject");
-            if (!m_uniform_object->create(sizeof(PerObjectBuffer) * m_max_instances,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT))
-            {
-                return false;
-            }
-            return true;
-        }
-        bool create_layout(const std::shared_ptr<vk::Context>& vk)
+        std::array<VkDescriptorSetLayout, 2> m_set_layouts{VK_NULL_HANDLE};
+        std::vector<VkDescriptorPool> m_descriptor_pools;
+        std::vector<std::tuple<VkWriteDescriptorSet, VkDescriptorBufferInfo>> writes{};
+        bool create_layout()
         {
             constexpr std::array set_bindings{
                 // uniforms (type.PerFrameConstants)
@@ -52,42 +37,65 @@ export namespace ce::shaders
                 },
                 // uniforms (type.PerObjectBuffer)
                 VkDescriptorSetLayoutBinding{
+                    .binding = 0,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    .descriptorCount = 1,
+                    .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                    .pImmutableSamplers = nullptr
+                },
+                // uniforms (type.PerObjectArgs)
+                VkDescriptorSetLayoutBinding{
                     .binding = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                     .descriptorCount = 1,
                     .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
                     .pImmutableSamplers = nullptr
                 },
             };
-            const VkDescriptorSetLayoutCreateInfo set_info{
-                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                .flags = 0,
-                .bindingCount = static_cast<uint32_t>(set_bindings.size()),
-                .pBindings = set_bindings.data()
+            const std::array set_info{
+                // Per frame set
+                VkDescriptorSetLayoutCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                    .flags = 0,
+                    .bindingCount = 1,
+                    .pBindings = set_bindings.data()
+                },
+                // Per Object set
+                VkDescriptorSetLayoutCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                    .flags = 0,
+                    .bindingCount = 2,
+                    .pBindings = set_bindings.data() + 1
+                },
             };
-            if (const VkResult result = vkCreateDescriptorSetLayout(vk->device(), &set_info, nullptr, &m_set_layout);
-                result != VK_SUCCESS)
+            if (const VkResult result = vkCreateDescriptorSetLayout(m_vk.device(), &set_info[0],
+                nullptr, &m_set_layouts[0]);  result != VK_SUCCESS)
             {
                 return false;
             }
-            vk->debug_name(std::format("{}-SetLayout", m_name), m_set_layout);
+            m_vk.debug_name(std::format("{}-FrameSetLayout", m_name), m_set_layouts[0]);
+            if (const VkResult result = vkCreateDescriptorSetLayout(m_vk.device(), &set_info[1],
+                nullptr, &m_set_layouts[1]); result != VK_SUCCESS)
+            {
+                return false;
+            }
+            m_vk.debug_name(std::format("{}-FrameSetLayout", m_name), m_set_layouts[1]);
             // Pipeline layout
             const VkPipelineLayoutCreateInfo layout_info{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                 .flags = 0,
-                .setLayoutCount = 1,
-                .pSetLayouts = &m_set_layout,
+                .setLayoutCount = static_cast<uint32_t>(m_set_layouts.size()),
+                .pSetLayouts = m_set_layouts.data(),
             };
-            if (const VkResult result = vkCreatePipelineLayout(vk->device(), &layout_info, nullptr, &m_layout);
+            if (const VkResult result = vkCreatePipelineLayout(m_vk.device(), &layout_info, nullptr, &m_layout);
                 result != VK_SUCCESS)
             {
                 return false;
             }
-            vk->debug_name(std::format("{}-PipelineLayout", m_name), m_set_layout);
+            m_vk.debug_name(std::format("{}-PipelineLayout", m_name), m_layout);
             return true;
         }
-        bool create_pipeline(const std::shared_ptr<vk::Context>& vk, VkRenderPass renderpass,
-            const VkSampleCountFlagBits sample_count) noexcept
+        bool create_pipeline(VkRenderPass renderpass, const VkSampleCountFlagBits sample_count) noexcept
         {
             // Pipeline
             const std::array stages{
@@ -161,12 +169,12 @@ export namespace ce::shaders
                 .stencilTestEnable = false,
             };
             constexpr VkPipelineColorBlendAttachmentState blend_color{
-                .blendEnable = true,
+                .blendEnable = false,
                 .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
                 .colorBlendOp = VK_BLEND_OP_ADD,
                 .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
                 .alphaBlendOp = VK_BLEND_OP_ADD,
                 .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
@@ -203,80 +211,35 @@ export namespace ce::shaders
                 .renderPass = renderpass,
                 .subpass = 0
             };
-            if (const VkResult result = vkCreateGraphicsPipelines(vk->device(), VK_NULL_HANDLE,
+            if (const VkResult result = vkCreateGraphicsPipelines(m_vk.device(), VK_NULL_HANDLE,
                 1, &pipeline_info, nullptr, &m_pipeline); result != VK_SUCCESS)
             {
                 return false;
             }
             return true;
         }
-        bool create_sets(const std::shared_ptr<vk::Context>& vk) noexcept
+        bool create_pools(const uint32_t pools_count, const uint32_t frame_sets, const uint32_t object_sets) noexcept
         {
-            // Descriptor Pool
-            constexpr std::array descr_pool_sizes{
-                VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, m_max_instances * 2 },
-                // VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024 },
-                // VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024 },
-            };
-            const VkDescriptorPoolCreateInfo descr_pool_info{
-                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                .maxSets = m_max_instances,
-                .poolSizeCount = static_cast<uint32_t>(descr_pool_sizes.size()),
-                .pPoolSizes = descr_pool_sizes.data()
-            };
-            if (const VkResult result = vkCreateDescriptorPool(vk->device(),
-                &descr_pool_info, nullptr, &m_descriptor_pool); result != VK_SUCCESS)
+            m_descriptor_pools.resize(pools_count);
+            for (size_t i = 0; i < pools_count; i++)
             {
-                return false;
-            }
-            vk->debug_name(std::format("{}_descr_pool", m_name), m_descriptor_pool);
-
-            // Descriptor Sets
-            m_descr_sets = std::vector(m_max_instances, VkDescriptorSet{VK_NULL_HANDLE});
-            const std::vector set_layouts(m_descr_sets.size(), m_set_layout);
-            const VkDescriptorSetAllocateInfo set_alloc_info{
-                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                .descriptorPool = m_descriptor_pool,
-                .descriptorSetCount = static_cast<uint32_t>(set_layouts.size()),
-                .pSetLayouts = set_layouts.data()
-            };
-            if (const VkResult result = vkAllocateDescriptorSets(vk->device(),
-                &set_alloc_info, m_descr_sets.data()); result != VK_SUCCESS)
-            {
-                return false;
-            }
-            std::vector<VkWriteDescriptorSet> writes;
-            const VkDescriptorBufferInfo PerFrameConstants_info{
-                .buffer = m_uniform_frame->buffer(),
-                .offset = 0,
-                .range = VK_WHOLE_SIZE,
-            };
-            std::vector<VkDescriptorBufferInfo> PerObjectBuffer_info(m_max_instances);
-            for (uint32_t i = 0; i < m_max_instances; ++i)
-            {
-                PerObjectBuffer_info[i] = {
-                    .buffer = m_uniform_object->buffer(),
-                    .offset = sizeof(PerObjectBuffer) * i,
-                    .range = sizeof(PerObjectBuffer)
+                const std::array descr_pool_sizes{
+                    VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frame_sets },
+                    VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, object_sets * 2 },
                 };
-                writes.push_back({
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = m_descr_sets[i],
-                    .dstBinding = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pBufferInfo = &PerFrameConstants_info
-                });
-                writes.push_back({
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = m_descr_sets[i],
-                    .dstBinding = 1,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pBufferInfo = &PerObjectBuffer_info[i]
-                });
+                const VkDescriptorPoolCreateInfo descr_pool_info{
+                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                    .maxSets = frame_sets + object_sets,
+                    .poolSizeCount = static_cast<uint32_t>(descr_pool_sizes.size()),
+                    .pPoolSizes = descr_pool_sizes.data()
+                };
+                if (const VkResult result = vkCreateDescriptorPool(m_vk.device(),
+                    &descr_pool_info, nullptr, &m_descriptor_pools[i]); result != VK_SUCCESS)
+                {
+                    return false;
+                }
+                m_vk.debug_name(std::format("{}_descr_pool[{}]", m_name, i), m_descriptor_pools[i]);
             }
-            vkUpdateDescriptorSets(vk->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
             return true;
         }
     public:
@@ -285,18 +248,72 @@ export namespace ce::shaders
         ~SolidFlatShader() noexcept override = default;
         [[nodiscard]] VkPipeline pipeline() const noexcept { return m_pipeline; }
         [[nodiscard]] VkPipelineLayout layout() const noexcept { return m_layout; }
-        [[nodiscard]] VkDescriptorSet descriptor_set(const uint32_t index) const noexcept { return m_descr_sets[index]; }
-        [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform_frame() const noexcept { return m_uniform_frame; }
-        [[nodiscard]] const std::shared_ptr<vk::Buffer>& uniform_object() const noexcept { return m_uniform_object; }
-        bool create(VkRenderPass renderpass, const VkSampleCountFlagBits sample_count = VK_SAMPLE_COUNT_1_BIT) noexcept
+        bool create(VkRenderPass renderpass, const uint32_t pools_count, const VkSampleCountFlagBits sample_count,
+            const uint32_t frame_sets, const uint32_t object_sets) noexcept
         {
-            const auto vk = m_vk.lock();
-            if (!load_from_file(vk, "assets/shaders/solid-flat-vs.spv", "assets/shaders/solid-flat-ps.spv") ||
-                !create_uniform(vk) || !create_layout(vk) || !create_pipeline(vk, renderpass, sample_count) || !create_sets(vk))
+            if (!load_from_file("assets/shaders/solid-flat-vs.spv", "assets/shaders/solid-flat-ps.spv") ||
+                !create_layout() || !create_pipeline(renderpass, sample_count) ||
+                !create_pools(pools_count, frame_sets, object_sets))
             {
                 return false;
             }
             return true;
+        }
+        bool reset_descriptors(const uint32_t pool_index) const noexcept
+        {
+            if (const VkResult result = vkResetDescriptorPool(m_vk.device(), m_descriptor_pools[pool_index], 0);
+                result != VK_SUCCESS)
+            {
+                //TODO: LOGE
+                return false;
+            }
+            return true;
+        }
+        [[nodiscard]] std::optional<VkDescriptorSet> write_buffer(const uint32_t pool_index, const uint32_t set_index,
+            const uint32_t binding, VkBuffer buffer, const VkDeviceSize offset, const VkDeviceSize range,
+            const VkDescriptorType type) noexcept
+        {
+            // PerFrame descriptor set
+            const VkDescriptorSetAllocateInfo set_alloc_info{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = m_descriptor_pools[pool_index],
+                .descriptorSetCount = 1,
+                .pSetLayouts = &m_set_layouts[set_index],
+            };
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            if (const VkResult result = vkAllocateDescriptorSets(m_vk.device(),
+                &set_alloc_info, &set); result != VK_SUCCESS)
+            {
+                return std::nullopt;
+            }
+            const VkDescriptorBufferInfo buffer_info{
+                .buffer = buffer,
+                .offset = offset,
+                .range = range,
+            };
+            const VkWriteDescriptorSet write{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = set,
+                .dstBinding = binding,
+                .descriptorCount = 1,
+                .descriptorType = type,
+                .pBufferInfo = nullptr, // to be filled in later in update_descriptors()
+            };
+            writes.emplace_back(write, buffer_info);
+            return set;
+        }
+        void update_descriptors() noexcept
+        {
+            std::vector<VkWriteDescriptorSet> flat_writes{};
+            flat_writes.reserve(writes.size());
+            for (auto& [write, buffer_info] : writes)
+            {
+                write.pBufferInfo = &buffer_info;
+                flat_writes.emplace_back(write);
+            }
+            vkUpdateDescriptorSets(m_vk.device(),
+                static_cast<uint32_t>(flat_writes.size()), flat_writes.data(), 0, nullptr);
+            writes.clear();
         }
     };
 }

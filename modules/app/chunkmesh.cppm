@@ -1,10 +1,13 @@
 module;
 #include <cstdint>
 #include <concepts>
+#include <map>
 #include <vector>
 #include <memory>
 #include <span>
 #include <volk.h>
+
+#include "glm/gtx/compatibility.hpp"
 
 #ifdef __ANDROID__
 #include <jni.h>
@@ -33,7 +36,7 @@ concept VertexType = requires(T t)
 };
 
 template<VertexType T>
-struct ChunkMesh : NoCopy
+struct ChunkMesh final
 {
     using VertexType = T;
     std::vector<uint32_t> indices;
@@ -44,7 +47,7 @@ class ChunkMesher
 {
 public:
     virtual ~ChunkMesher() = default;
-    [[nodiscard]] virtual ChunkMesh<T> mesh(const ChunkData& data) const noexcept = 0;
+    [[nodiscard]] virtual std::map<BlockType, ChunkMesh<T>> mesh(const ChunkData& data) const noexcept = 0;
 };
 
 bool operator&(Block::Mask lhs, Block::Mask rhs)
@@ -56,7 +59,7 @@ template<VertexType T>
 class SimpleMesher final : public ChunkMesher<T>
 {
 public:
-    [[nodiscard]] ChunkMesh<T> mesh(const ChunkData& data) const noexcept override
+    [[nodiscard]] std::map<BlockType, ChunkMesh<T>> mesh(const ChunkData& data) const noexcept override
     {
         const uint32_t size = data.size;
 
@@ -83,8 +86,7 @@ public:
         if (vertices.empty())
             return {};
 
-        ChunkMesh<T> m;
-        m.vertices.reserve(36 * pow(size, 3));
+        std::map<BlockType, ChunkMesh<T>> meshes;
         for (uint32_t y = 0; y < size; ++y)
         {
             for (uint32_t z = 0; z < size; ++z)
@@ -94,6 +96,8 @@ public:
                     const uint32_t idx = x + z * size + y * size * size;
                     if (data.blocks[idx].type == BlockType::Air)
                         continue;
+
+                    auto& m = meshes[data.blocks[idx].type];
 
                     const uint32_t line_size = (size + 1);
                     const uint32_t plane_size = line_size * line_size;
@@ -118,7 +122,12 @@ public:
 
                     if (data.blocks[idx].type == BlockType::Water)
                     {
-                        CA = CB = CC = CD = glm::vec4(0, 0, 1, .5f);
+                        const float surface_y = vertices[VA].position.y + data.sector.y;
+                        const float b = glm::saturate(-surface_y / 0.5f);
+                        constexpr glm::vec3 top{5.f / 255.f, 113.f / 255.f, 1.f};
+                        constexpr glm::vec3 bottom{0.f, 19.f / 255.f, 61.f / 255.f};
+                        const glm::vec3 color = glm::gtc::lerp(top, bottom, b);
+                        CA = CB = CC = CD = glm::vec4(color, 0.5f);
                     }
 
                     if (data.blocks[idx].face_mask & Block::Mask::B)
@@ -178,38 +187,19 @@ public:
                 }
             }
         }
-        return m;
+        return std::move(meshes);
     }
 };
 
-class Chunk final : NoCopy
+struct Chunk final
 {
-    using Shader = shaders::SolidFlatShader;
-    vk::BufferSuballocation m_vertex_buffer{};
-    glm::mat4 m_transform{};
-    glm::vec4 m_color{};
-    glm::ivec3 m_sector{};
-    uint32_t m_vertex_count = 0;
-    uint32_t m_size = 0;
-    uint32_t m_height = 0;
-    uint32_t m_descriptor_set_index = 0;
-public:
-    [[nodiscard]] uint32_t vertex_count() const { return m_vertex_count; }
-    [[nodiscard]] VkDeviceSize buffer_offset() const noexcept { return m_vertex_buffer.offset; }
-    [[nodiscard]] const vk::BufferSuballocation& buffer() const noexcept { return m_vertex_buffer; }
-    [[nodiscard]] const glm::mat4& transform() const noexcept { return m_transform; }
-    [[nodiscard]] uint32_t descriptor_set_index() const noexcept { return m_descriptor_set_index; }
-    [[nodiscard]] const glm::vec4& color() const noexcept { return m_color; }
-    [[nodiscard]] const glm::ivec3& sector() const noexcept { return m_sector; }
-    bool create(const glm::ivec3& sector, const glm::vec4& color, uint32_t set_index, uint32_t vertex_count, const vk::BufferSuballocation& buffer) noexcept
-    {
-        m_descriptor_set_index = set_index;
-        m_transform = glm::gtc::translate(glm::vec3(sector));
-        m_color = color;
-        m_sector = sector;
-        m_vertex_buffer = buffer;
-        m_vertex_count = vertex_count;
-        return true;
-    }
+    bool valid = false;
+    glm::mat4 transform{};
+    glm::vec4 color{};
+    glm::ivec3 sector{};
+    std::map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> mesh;
+    //uint32_t size = 0;
+    //uint32_t height = 0;
+    //uint32_t descriptor_set_index = 0;
 };
 }
