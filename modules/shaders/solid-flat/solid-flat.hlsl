@@ -19,7 +19,11 @@ PixelInput VSMain(VertexInput input,
     return output;
 }
 
+[[vk::binding(1, 0)]] Texture2D myTexture;   // bound to descriptor set
+[[vk::binding(1, 0)]] SamplerState mySampler; // bound to sampler
+
 float4 PSMain(PixelInput input) : SV_TARGET
 {
-    return (input.color);
+    return myTexture.Sample(mySampler, input.color.xy);
+    //return (input.color);
 }

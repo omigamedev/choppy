@@ -1,6 +1,6 @@
 module;
 #include <cstdint>
-#include <cmath>
+#include <PerlinNoise.hpp>
 #include <vector>
 
 export module ce.app.chunkgen;
@@ -38,6 +38,8 @@ class FlatGenerator final : public ChunkGenerator
 {
     uint32_t m_size = 0;
     uint32_t m_ground_height = 0;
+	siv::PerlinNoise perlin{ std::random_device{} };
+
 public:
     explicit FlatGenerator(const uint32_t size, const uint32_t ground_height) noexcept
         : m_size(size), m_ground_height(ground_height) { }
@@ -55,7 +57,8 @@ public:
                     const glm::ivec3 loc{x, y, -z};
                     const glm::ivec3 cell = loc + sector * ssz;
                     const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
-                    const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * static_cast<float>(m_ground_height);
+                    // const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * static_cast<float>(m_ground_height);
+                    const float terrain_height = perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height);
                     //const float terrain_height = cell.z;//static_cast<float>(m_ground_height);
                     BlockType block = BlockType::Air;
                      if (cell.y < 0)

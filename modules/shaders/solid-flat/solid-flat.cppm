@@ -24,6 +24,7 @@ export namespace ce::shaders
         std::array<VkDescriptorSetLayout, 2> m_set_layouts{VK_NULL_HANDLE};
         std::vector<VkDescriptorPool> m_descriptor_pools;
         std::vector<std::tuple<VkWriteDescriptorSet, VkDescriptorBufferInfo>> writes{};
+        std::vector<std::tuple<VkWriteDescriptorSet, VkDescriptorImageInfo>> writes_texture{};
         bool create_layout()
         {
             constexpr std::array set_bindings{
@@ -33,6 +34,14 @@ export namespace ce::shaders
                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
                     .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                    .pImmutableSamplers = nullptr
+                },
+                // texture + sampler
+                VkDescriptorSetLayoutBinding{
+                    .binding = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
+                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
                     .pImmutableSamplers = nullptr
                 },
                 // uniforms (type.PerObjectBuffer)
@@ -57,7 +66,7 @@ export namespace ce::shaders
                 VkDescriptorSetLayoutCreateInfo{
                     .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                     .flags = 0,
-                    .bindingCount = 1,
+                    .bindingCount = 2,
                     .pBindings = set_bindings.data()
                 },
                 // Per Object set
@@ -65,7 +74,7 @@ export namespace ce::shaders
                     .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                     .flags = 0,
                     .bindingCount = 2,
-                    .pBindings = set_bindings.data() + 1
+                    .pBindings = set_bindings.data() + 2
                 },
             };
             if (const VkResult result = vkCreateDescriptorSetLayout(m_vk.device(), &set_info[0],
@@ -231,6 +240,7 @@ export namespace ce::shaders
             {
                 const std::array descr_pool_sizes{
                     VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frame_sets },
+                    VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frame_sets },
                     VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, object_sets * 2 },
                 };
                 const VkDescriptorPoolCreateInfo descr_pool_info{
@@ -275,9 +285,8 @@ export namespace ce::shaders
             }
             return true;
         }
-        [[nodiscard]] std::optional<VkDescriptorSet> write_buffer(const uint32_t pool_index, const uint32_t set_index,
-            const uint32_t binding, VkBuffer buffer, const VkDeviceSize offset, const VkDeviceSize range,
-            const VkDescriptorType type) noexcept
+        [[nodiscard]] std::optional<VkDescriptorSet> alloc_descriptor(const uint32_t pool_index,
+            const uint32_t set_index) noexcept
         {
             // PerFrame descriptor set
             const VkDescriptorSetAllocateInfo set_alloc_info{
@@ -292,6 +301,11 @@ export namespace ce::shaders
             {
                 return std::nullopt;
             }
+            return set;
+        }
+        void write_buffer(VkDescriptorSet set, const uint32_t binding, VkBuffer buffer,
+            const VkDeviceSize offset, const VkDeviceSize range, const VkDescriptorType type) noexcept
+        {
             const VkDescriptorBufferInfo buffer_info{
                 .buffer = buffer,
                 .offset = offset,
@@ -306,20 +320,42 @@ export namespace ce::shaders
                 .pBufferInfo = nullptr, // to be filled in later in update_descriptors()
             };
             writes.emplace_back(write, buffer_info);
-            return set;
+        }
+        void write_texture(VkDescriptorSet set, const uint32_t binding, VkImageView view, VkSampler sampler) noexcept
+        {
+            const VkDescriptorImageInfo image_info{
+                .sampler = sampler,
+                .imageView = view,
+                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+            const VkWriteDescriptorSet write{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = set,
+                .dstBinding = binding,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = nullptr, // to be filled in later in update_descriptors()
+            };
+            writes_texture.emplace_back(write, image_info);
         }
         void update_descriptors() noexcept
         {
             std::vector<VkWriteDescriptorSet> flat_writes{};
-            flat_writes.reserve(writes.size());
+            flat_writes.reserve(writes.size() + writes_texture.size());
             for (auto& [write, buffer_info] : writes)
             {
                 write.pBufferInfo = &buffer_info;
                 flat_writes.emplace_back(write);
             }
+            for (auto& [write, image_info] : writes_texture)
+            {
+                write.pImageInfo = &image_info;
+                flat_writes.emplace_back(write);
+            }
             vkUpdateDescriptorSets(m_vk.device(),
                 static_cast<uint32_t>(flat_writes.size()), flat_writes.data(), 0, nullptr);
             writes.clear();
+            writes_texture.clear();
         }
     };
 }

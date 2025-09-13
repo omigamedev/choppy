@@ -115,10 +115,10 @@ public:
                     const uint32_t VG = VE + line_size + 1;
                     const uint32_t VH = VE + 1;
 
-                    glm::vec4 CA{0, 0, 0, 1};
+                    glm::vec4 CA{0, 1, 0, 1};
                     glm::vec4 CB{0, 0, 1, 1};
-                    glm::vec4 CC{0, 1, 0, 1};
-                    glm::vec4 CD{1, 0, 0, 1};
+                    glm::vec4 CC{.5, 0, 0, 1};
+                    glm::vec4 CD{.5, 1, 0, 1};
 
                     if (data.blocks[idx].type == BlockType::Water)
                     {
@@ -150,6 +150,10 @@ public:
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::U)
                     {
+                        glm::vec4 CA{.5, 1, 0, 1};
+                        glm::vec4 CB{.5, 0, 1, 1};
+                        glm::vec4 CC{1, 0, 0, 1};
+                        glm::vec4 CD{1, 1, 0, 1};
                         m.vertices.emplace_back(vertices[VE].position, CA);
                         m.vertices.emplace_back(vertices[VF].position, CB);
                         m.vertices.emplace_back(vertices[VG].position, CC);

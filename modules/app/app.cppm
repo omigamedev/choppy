@@ -3,21 +3,17 @@ module;
 #include <span>
 #include <vector>
 #include <memory>
-#include <concepts>
-#include <deque>
 #include <ranges>
 #include <functional>
 #include <map>
 #include <mutex>
-#include <thread>
 #include <volk.h>
 #include <PerlinNoise.hpp>
-#include <ranges>
 
 #include "vk_mem_alloc.h"
-//#include "glm/gtx/compatibility.hpp"
-// #include "glm/gtx/euler_angles.hpp"
-// #include "glm/gtx/quaternion.hpp"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 #ifdef __ANDROID__
 #include <jni.h>
@@ -55,6 +51,12 @@ enum class GamepadButton : uint8_t
     ThumbLeft, ThumbRight,
     EnumCount
 };
+
+bool operator&(GamepadButton lhs, GamepadButton rhs)
+{
+    return static_cast<uint8_t>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
+}
+
 struct GamepadState
 {
     std::array<bool, static_cast<size_t>(GamepadButton::EnumCount)> buttons{false};
@@ -81,6 +83,14 @@ struct ChunkUpdate : NoCopy
     glm::vec4 color{};
     glm::ivec3 sector{};
 };
+struct Texture
+{
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+    VmaAllocationInfo allocation_info{};
+    VkImageView image_view = VK_NULL_HANDLE;
+    glm::uvec2 size{};
+};
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
@@ -104,6 +114,9 @@ class AppBase final
     VkDescriptorSet m_frame_descriptor_set = VK_NULL_HANDLE;
     VkDescriptorSet m_object_descriptor_set = VK_NULL_HANDLE;
 
+    Texture m_texture;
+    VkSampler m_sampler = VK_NULL_HANDLE;
+
     vk::Buffer m_args_buffer;
     VkDeviceSize m_args_buffer_offset = 0;
     uint32_t m_draw_count = 0;
@@ -115,6 +128,8 @@ class AppBase final
     bool xrmode = false;
     uint32_t m_swapchain_count = 0;
     uint64_t m_timeline_value = 0;
+    FlatGenerator generator{8, 10};
+
 public:
     ~AppBase()
     {
@@ -133,6 +148,117 @@ public:
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
+
+    [[nodiscard]] std::optional<Texture> load_texture(const std::string& path)
+    {
+        const auto& p = platform::GetPlatform();
+        const auto file_content = p.read_file(path);
+        if (!file_content)
+        {
+            LOGE("Failed to read shader code: %s", path.c_str());
+            return std::nullopt;
+        }
+
+        int32_t width, height, channels;
+        if (const uint8_t* rgb = stbi_load_from_memory(file_content->data(), file_content->size(),
+            &width, &height, &channels, STBI_rgb_alpha); rgb)
+        {
+            const VkImageCreateInfo create_info{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = VK_FORMAT_R8G8B8A8_UNORM,
+                .extent = VkExtent3D(width, height, 1),
+                .mipLevels = 1,
+                .arrayLayers = 1,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            };
+            VkImage image = VK_NULL_HANDLE;
+            VmaAllocationCreateInfo vma_create_info{
+                .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            };
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VmaAllocationInfo allocation_info{};
+            if (const VkResult r = vmaCreateImage(m_vk->vma(), &create_info, &vma_create_info, &image, &allocation,
+                &allocation_info); r != VK_SUCCESS)
+            {
+                LOGE("Could not create image. Error: %s", vk::utils::to_string(r));
+                return std::nullopt;
+            }
+            const VkImageViewCreateInfo image_view_info{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format = create_info.format,
+                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
+            };
+            VkImageView image_view = VK_NULL_HANDLE;
+            if (const VkResult r = vkCreateImageView(m_vk->device(), &image_view_info, nullptr, &image_view);
+                r != VK_SUCCESS)
+            {
+                LOGE("Could not create image view. Error: %s", vk::utils::to_string(r));
+                return std::nullopt;
+            }
+
+            if (const auto sb = m_staging_buffer.suballoc(width * height * 4, 64); sb)
+            {
+                std::span src(rgb, width * height * 4);
+                std::ranges::copy(src, static_cast<uint8_t*>(sb->ptr));
+                m_vk->exec_immediate("init image", [&](VkCommandBuffer cmd)
+                {
+                    const VkImageMemoryBarrier barrier_transfer{
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .srcAccessMask = 0,
+                        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        .image = image,
+                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
+                    };
+                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        0, 0, nullptr, 0, nullptr, 1, &barrier_transfer);
+
+                    const VkBufferImageCopy copy_info{
+                        .bufferOffset = sb->offset,
+                        .bufferRowLength = static_cast<uint32_t>(width),
+                        .bufferImageHeight = static_cast<uint32_t>(height),
+                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                        .imageOffset = VkOffset3D{0, 0, 0},
+                        .imageExtent = VkExtent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1},
+                    };
+                    vkCmdCopyBufferToImage(cmd, m_staging_buffer.buffer(), image,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_info);
+
+                    const VkImageMemoryBarrier barrier_sampling{
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        .image = image,
+                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
+                    };
+                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        0, 0, nullptr, 0, nullptr, 1, &barrier_sampling);
+                });
+                m_staging_buffer.subfree(*sb);
+                LOGI("Image Loaded");
+                return Texture{
+                    .image = image,
+                    .allocation = allocation,
+                    .allocation_info = allocation_info,
+                    .image_view = image_view,
+                    .size = {width, height},
+                };
+            }
+        }
+        return std::nullopt;
+    }
 
     void init(const bool xr_mode) noexcept
     {
@@ -209,6 +335,31 @@ public:
                 m_vk->init_resources(cmd);
             }
         });
+
+        m_texture = load_texture("assets/grass.png").value();
+
+        const VkSamplerCreateInfo sampler_info{
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = VK_FILTER_NEAREST,
+            .minFilter = VK_FILTER_NEAREST,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .mipLodBias = 0.f,
+            .anisotropyEnable = false,
+            .maxAnisotropy = 1.f,
+            .compareEnable = false,
+            .compareOp = VK_COMPARE_OP_ALWAYS,
+            .minLod = 0.f,
+            .maxLod = VK_LOD_CLAMP_NONE,
+            .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            .unnormalizedCoordinates = false,
+        };
+        if (const VkResult r = vkCreateSampler(m_vk->device(), &sampler_info, nullptr, &m_sampler); r != VK_SUCCESS)
+        {
+            LOGE("Failed to create sampler");
+        }
         //m_chunks_thread = std::thread(&AppBase::generate_thread, this);
     }
     void generate_thread() noexcept
@@ -242,7 +393,7 @@ public:
         // if (!m_chunks.empty())
         //     return;
 
-        constexpr uint32_t neighbors_span = 8;
+        constexpr uint32_t neighbors_span = 7;
         constexpr uint32_t chunk_count = (neighbors_span * 2 + 1) * (neighbors_span * 2 + 1) * (3);
 
         const glm::vec3 dist = glm::abs(m_player.cam_pos - glm::vec3(0.5f) - glm::vec3(m_player.cam_sector));
@@ -252,7 +403,6 @@ public:
             LOGI("travel to sector [%d, %d, %d]", m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
         }
 
-        const auto generator = FlatGenerator{8, 10};
         const auto mesher = SimpleMesher<shaders::SolidFlatShader::VertexInput>{};
         const auto neighbors = generate_neighbors(m_player.cam_sector, neighbors_span);
 
@@ -334,7 +484,7 @@ public:
             //     return dist1 > dist2;
             // });
 
-            std::ranges::shuffle(m_chunks, std::mt19937{std::random_device{}()});
+            //std::ranges::shuffle(m_chunks, std::mt19937{std::random_device{}()});
 
             std::vector<shaders::SolidFlatShader::VertexInput> vbo;
             vbo.reserve(m_chunks.size());
@@ -387,9 +537,12 @@ public:
                     // defer suballocation deletion
                     m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
                     m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_object_buffer), *dst_sb));
-                    m_object_descriptor_set = solid_flat->write_buffer(
-                        frame.present_index, 1, 0, m_object_buffer.buffer(),
-                        dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).value_or(VK_NULL_HANDLE);
+                    if (auto set = solid_flat->alloc_descriptor(frame.present_index, 1); set)
+                    {
+                        m_object_descriptor_set = *set;
+                        solid_flat->write_buffer(*set, 0, m_object_buffer.buffer(),
+                            dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                    }
                 }
 
                 if (auto sb = m_staging_buffer.suballoc(draw_args.size() *
@@ -425,9 +578,13 @@ public:
             std::copy_n(&per_frame_constants, 1, static_cast<shaders::SolidFlatShader::PerFrameConstants*>(sb->ptr));
             // defer copy
             m_copy_buffers.emplace_back(m_frame_buffer, *sb, dst_sb->offset);
-            m_frame_descriptor_set = solid_flat->write_buffer(
-                frame.present_index, 0, 0, m_frame_buffer.buffer(), dst_sb->offset, dst_sb->size,
-                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).value_or(VK_NULL_HANDLE);
+            if (auto set = solid_flat->alloc_descriptor(frame.present_index, 0))
+            {
+                m_frame_descriptor_set = *set;
+                solid_flat->write_buffer(*set, 0, m_frame_buffer.buffer(),
+                    dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                solid_flat->write_texture(*set, 1, m_texture.image_view, m_sampler);
+            }
 
             // defer suballocation deletion
             m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
@@ -607,7 +764,7 @@ public:
             speed = speed * 0.25f;
         if (m_player.keys[VK_CONTROL])
             speed = speed * 4.f;
-
+        speed = speed + 10.f * gamepad.trigger_right;
 #else
         const float speed = 1;
 #endif
@@ -642,12 +799,12 @@ public:
         if (fabs(gamepad.thumbstick_left[0]) > dead_zone)
         {
             const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[0];
+            m_player.cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[0] * speed;
         }
         if (fabs(gamepad.thumbstick_left[1]) > dead_zone)
         {
             const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1];
+            m_player.cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1] * speed;
         }
         if (fabs(touch.thumbstick_left.x) > dead_zone)
         {
