@@ -81,11 +81,17 @@ export namespace ce::shaders
             }
             m_vk.debug_name(std::format("{}-FrameSetLayout", m_name), m_set_layouts[1]);
             // Pipeline layout
+            VkPushConstantRange push_constant_range{};
+            push_constant_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+            push_constant_range.offset = 0;
+            push_constant_range.size = sizeof(PushBuffer);
             const VkPipelineLayoutCreateInfo layout_info{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                 .flags = 0,
                 .setLayoutCount = static_cast<uint32_t>(m_set_layouts.size()),
                 .pSetLayouts = m_set_layouts.data(),
+                .pushConstantRangeCount = 1,
+                .pPushConstantRanges = &push_constant_range
             };
             if (const VkResult result = vkCreatePipelineLayout(m_vk.device(), &layout_info, nullptr, &m_layout);
                 result != VK_SUCCESS)

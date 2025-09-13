@@ -13,6 +13,11 @@ struct alignas(16) PerObjectBuffer
     bool selected;
 };
 
+struct PushBuffer
+{
+    uint DrawIndex;
+};
+
 struct PerObjectArgs
 {
     uint ObjectIndex;

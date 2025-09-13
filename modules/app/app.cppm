@@ -98,17 +98,18 @@ class AppBase final
     std::vector<std::tuple<vk::Buffer&, const vk::BufferSuballocation, VkDeviceSize /*dst_offset*/>> m_copy_buffers;
     vk::Buffer m_staging_buffer;
     vk::Buffer m_vertex_buffer;
+    VkDeviceSize m_vertex_buffer_offset = 0;
     vk::Buffer m_frame_buffer;
     vk::Buffer m_object_buffer;
     VkDescriptorSet m_frame_descriptor_set = VK_NULL_HANDLE;
     VkDescriptorSet m_object_descriptor_set = VK_NULL_HANDLE;
 
-    uint32_t m_uniform_set_index = 0;
     vk::Buffer m_args_buffer;
+    VkDeviceSize m_args_buffer_offset = 0;
     uint32_t m_draw_count = 0;
-    std::vector<ChunkUpdate> m_chunk_updates;
-    std::mutex m_chunks_mutex;
-    std::thread m_chunks_thread;
+    // std::vector<ChunkUpdate> m_chunk_updates;
+    // std::mutex m_chunks_mutex;
+    // std::thread m_chunks_thread;
     bool m_running = true;
     PlayerState m_player{};
     bool xrmode = false;
@@ -126,14 +127,14 @@ public:
         //{
         //    m_vertex_buffer->subfree(c.buffer());
         //}
-        if (m_chunks_thread.joinable())
-            m_chunks_thread.join();
+        // if (m_chunks_thread.joinable())
+        //     m_chunks_thread.join();
         garbage_collect(true);
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
 
-    void init(bool xr_mode) noexcept
+    void init(const bool xr_mode) noexcept
     {
         xrmode = xr_mode;
 
@@ -166,7 +167,7 @@ public:
         }
 
         m_frame_buffer = vk::Buffer(m_vk, "ChunksPerFrameBuffer");
-        if (!m_frame_buffer.create(sizeof(shaders::SolidFlatShader::PerFrameConstants),
+        if (!m_frame_buffer.create(sizeof(shaders::SolidFlatShader::PerFrameConstants) * m_swapchain_count * 2,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
         {
@@ -174,7 +175,7 @@ public:
         }
 
         m_object_buffer = vk::Buffer(m_vk, "ChunksPerObjectBuffer");
-        if (!m_object_buffer.create(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * 10'000,
+        if (!m_object_buffer.create(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * 30'000,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
         {
@@ -190,7 +191,7 @@ public:
         }
 
         m_args_buffer = vk::Buffer(m_vk, "CubeArgsBuffer");
-        constexpr uint32_t args_buffer_size = sizeof(VkDrawIndirectCommand) * 10'000;
+        constexpr uint32_t args_buffer_size = sizeof(VkDrawIndirectCommand) * 30'000;
         if (!m_args_buffer.create(args_buffer_size,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
             VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
@@ -217,7 +218,7 @@ public:
             generate_chunks();
         }
     }
-    [[nodiscard]] std::vector<glm::ivec3> generate_neighbors(const glm::ivec3 origin, int32_t size) const noexcept
+    [[nodiscard]] std::vector<glm::ivec3> generate_neighbors(const glm::ivec3 origin, const int32_t size) const noexcept
     {
         std::vector<glm::ivec3> neighbors;
         const uint32_t chunk_count = pow(size * 2 + 1, 3);
@@ -238,8 +239,11 @@ public:
     }
     void generate_chunks() noexcept
     {
+        // if (!m_chunks.empty())
+        //     return;
+
         constexpr uint32_t neighbors_span = 8;
-        constexpr uint32_t chunk_count = pow(neighbors_span * 2 + 1, 3);
+        constexpr uint32_t chunk_count = (neighbors_span * 2 + 1) * (neighbors_span * 2 + 1) * (3);
 
         const glm::vec3 dist = glm::abs(m_player.cam_pos - glm::vec3(0.5f) - glm::vec3(m_player.cam_sector));
         if (dist.x > .6 || dist.y > .6 || dist.z > .6)
@@ -251,6 +255,8 @@ public:
         const auto generator = FlatGenerator{8, 10};
         const auto mesher = SimpleMesher<shaders::SolidFlatShader::VertexInput>{};
         const auto neighbors = generate_neighbors(m_player.cam_sector, neighbors_span);
+
+        //m_chunks.clear();
 
         std::vector<size_t> chunk_indices;
         chunk_indices.reserve(chunk_count);
@@ -275,7 +281,7 @@ public:
             {
                 const auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data);
-                std::lock_guard lock(m_chunks_mutex);
+                // std::lock_guard lock(m_chunks_mutex);
                 auto& chunk = m_chunks.emplace_back();
                 chunk.mesh = std::move(chunk_data);
                 chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
@@ -287,7 +293,7 @@ public:
                 const auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data);
                 const uint32_t chunk_index = chunk_indices[chunk_indices_offset++];
-                std::lock_guard lock(m_chunks_mutex);
+                // std::lock_guard lock(m_chunks_mutex);
                 auto& chunk = m_chunks[chunk_index];
                 chunk.mesh = std::move(chunk_data);
                 chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
@@ -312,24 +318,23 @@ public:
         //}
         //m_chunk_updates.clear();
 
-        // MEMO: DELETE SUBALLOCATED BUFFERS
-        //m_delete_buffers.emplace(0, std::pair(std::ref(m_frame_buffer), vk::BufferSuballocation{}));
-
         if (!m_chunks.empty())
         {
-            auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
-            {
-                const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
-                const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
-                return dist1 >= dist2;
-            });
+            // auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
+            // {
+            //     const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
+            //     const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
+            //     return dist1 >= dist2;
+            // });
 
-            // std::ranges::stable_sort(m_chunks, [this](const auto& c1, const auto& c2) -> bool
+            // std::ranges::sort(m_chunks, [this](const auto& c1, const auto& c2) -> bool
             // {
             //     const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
             //     const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
             //     return dist1 > dist2;
             // });
+
+            std::ranges::shuffle(m_chunks, std::mt19937{std::random_device{}()});
 
             std::vector<shaders::SolidFlatShader::VertexInput> vbo;
             vbo.reserve(m_chunks.size());
@@ -342,59 +347,32 @@ public:
             {
                 for (const auto& [k, m] : chunk.mesh)
                 {
-                    if (k != BlockType::Water)
-                    {
-                        // const uint32_t vertex_count = std::ranges::fold_left(chunk.mesh, size_t{0},
-                        //     [](size_t sum, auto const& v) { return sum + v.second.vertices.size(); });
-                        ubo.push_back({
-                            .ObjectTransform = glm::transpose(chunk.transform),
-                            .ObjectColor = glm::vec4(glm::vec3(chunk.color), 1.0f),
-                            .selected = false,
-                        });
-                        draw_args.push_back({
-                            .vertexCount = static_cast<uint32_t>(m.vertices.size()),
-                            .instanceCount = 1,
-                            .firstVertex = static_cast<uint32_t>(vbo.size()),
-                            .firstInstance = 0
-                        });
-                        vbo.append_range(m.vertices);
-                        m_draw_count++;
-                    }
+                    // const uint32_t vertex_count = std::ranges::fold_left(chunk.mesh, size_t{0},
+                    //     [](size_t sum, auto const& v) { return sum + v.second.vertices.size(); });
+                    ubo.push_back({
+                        .ObjectTransform = glm::transpose(chunk.transform),
+                        .ObjectColor = glm::vec4(glm::vec3(chunk.color), 1.0f),
+                        .selected = false,
+                    });
+                    draw_args.push_back({
+                        .vertexCount = static_cast<uint32_t>(m.vertices.size()),
+                        .instanceCount = 1,
+                        .firstVertex = static_cast<uint32_t>(vbo.size()),
+                        .firstInstance = 0
+                    });
+                    vbo.append_range(m.vertices);
+                    m_draw_count++;
                 }
             }
-            for (const auto& chunk : m_chunks)
-            {
-                for (const auto& [k, m] : chunk.mesh)
-                {
-                    if (k == BlockType::Water)
-                    {
-                        ubo.push_back({
-                            .ObjectTransform = glm::transpose(chunk.transform),
-                            .ObjectColor = glm::vec4(glm::vec3(chunk.color), 1.0f),
-                            .selected = false,
-                        });
-                        draw_args.push_back({
-                            .vertexCount = static_cast<uint32_t>(m.vertices.size()),
-                            .instanceCount = 1,
-                            .firstVertex = static_cast<uint32_t>(vbo.size()),
-                            .firstInstance = 0
-                        });
-                        vbo.append_range(m.vertices);
-                        m_draw_count++;
-                    }
-                }
-            }
-            // m_draw_count = m_chunks.size();
             if (m_draw_count > 0)
             {
                 if (auto sb = m_staging_buffer.suballoc(vbo.size() *
                     sizeof(shaders::SolidFlatShader::VertexInput), 64); sb)
                 {
                     std::ranges::copy(vbo, static_cast<shaders::SolidFlatShader::VertexInput*>(sb->ptr));
-                    const auto dst_sb = m_vertex_buffer.suballoc(
-                        vbo.size() * sizeof(shaders::SolidFlatShader::VertexInput), 64);
-                    // m_vertex_buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), *sb, dst_sb->offset);
+                    const auto dst_sb = m_vertex_buffer.suballoc(sb->size, 64);
                     m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
+                    m_vertex_buffer_offset = dst_sb->offset;
                     // defer suballocation deletion
                     m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
                     m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), *dst_sb));
@@ -404,9 +382,7 @@ public:
                     sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64); sb)
                 {
                     std::ranges::copy(ubo, static_cast<shaders::SolidFlatShader::PerObjectBuffer*>(sb->ptr));
-                    const auto dst_sb = m_object_buffer.suballoc(
-                        ubo.size() * sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64);
-                    // m_object_buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), *sb, dst_sb->offset);
+                    const auto dst_sb = m_object_buffer.suballoc(sb->size, 64);
                     m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
                     // defer suballocation deletion
                     m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
@@ -420,9 +396,8 @@ public:
                     sizeof(VkDrawIndirectCommand), 64); sb)
                 {
                     std::ranges::copy(draw_args, static_cast<VkDrawIndirectCommand*>(sb->ptr));
-                    const auto dst_sb = m_args_buffer.suballoc(
-                        draw_args.size() * sizeof(VkDrawIndirectCommand), 64);
-                    // m_args_buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), *sb, dst_sb->offset);
+                    const auto dst_sb = m_args_buffer.suballoc(sb->size, 64);
+                    m_args_buffer_offset = dst_sb->offset;
                     m_copy_buffers.emplace_back(m_args_buffer, *sb, dst_sb->offset);
                     // defer suballocation deletion
                     m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
@@ -444,16 +419,19 @@ public:
             }
         };
 
-        if (const auto suballoc = m_staging_buffer.suballoc(sizeof(per_frame_constants), 64); suballoc)
+        if (const auto sb = m_staging_buffer.suballoc(sizeof(per_frame_constants), 64); sb)
         {
-            // TODO: resolve conflicting in flight frames
-            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *suballoc));
-            std::copy_n(&per_frame_constants, 1, static_cast<shaders::SolidFlatShader::PerFrameConstants*>(suballoc->ptr));
+            const auto dst_sb = m_frame_buffer.suballoc(sb->size, 64);
+            std::copy_n(&per_frame_constants, 1, static_cast<shaders::SolidFlatShader::PerFrameConstants*>(sb->ptr));
             // defer copy
-            m_copy_buffers.emplace_back(m_frame_buffer, *suballoc, 0);
+            m_copy_buffers.emplace_back(m_frame_buffer, *sb, dst_sb->offset);
             m_frame_descriptor_set = solid_flat->write_buffer(
-                frame.present_index, 0, 0, m_frame_buffer.buffer(), 0, suballoc->size,
+                frame.present_index, 0, 0, m_frame_buffer.buffer(), dst_sb->offset, dst_sb->size,
                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).value_or(VK_NULL_HANDLE);
+
+            // defer suballocation deletion
+            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_frame_buffer), *dst_sb));
         }
 
         solid_flat->update_descriptors();
@@ -465,6 +443,20 @@ public:
             buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), sb, dst_offset);
         }
         m_copy_buffers.clear();
+
+        const VkBufferMemoryBarrier barrier{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = m_args_buffer.buffer(),
+            .offset = m_args_buffer_offset,
+            .size = VK_WHOLE_SIZE,
+        };
+
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+            0, 0, nullptr, 1, &barrier, 0, nullptr);
 
         // Renderpass setup
         const std::array rgb{.3f, .3f, .3f};
@@ -537,11 +529,11 @@ public:
         //     vkCmdDrawIndexed(cmd, m_grid->index_count(), 1, 0, 0, 0);
         // }
 
-        std::lock_guard lock(m_chunks_mutex);
+        // std::lock_guard lock(m_chunks_mutex);
         if (!m_chunks.empty())
         {
             const std::array vertex_buffers{m_vertex_buffer.buffer()};
-            constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
+            const std::array vertex_buffers_offset{m_vertex_buffer_offset};
             vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                 vertex_buffers.data(), vertex_buffers_offset.data());
 
@@ -549,10 +541,8 @@ public:
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 solid_flat->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
-            // Draw the cube using its indices
-            // vkCmdDrawIndexed(cmd, chunk.index_count(), 1, 0, 0, 0);
             vkCmdDrawIndirect(cmd, m_args_buffer.buffer(),
-                0, m_draw_count, sizeof(VkDrawIndirectCommand));
+                m_args_buffer_offset, m_draw_count, sizeof(VkDrawIndirectCommand));
         }
 
         /*
@@ -612,7 +602,12 @@ public:
     {
         constexpr float dead_zone = 0.05;
 #ifdef _WIN32
-        const float speed = m_player.keys[VK_SHIFT] ? .25f : 1.f;
+        float speed = 1.f;
+        if (m_player.keys[VK_SHIFT])
+            speed = speed * 0.25f;
+        if (m_player.keys[VK_CONTROL])
+            speed = speed * 4.f;
+
 #else
         const float speed = 1;
 #endif
@@ -751,18 +746,21 @@ public:
     void garbage_collect(bool force) noexcept
     {
         std::multimap<uint64_t, std::pair<vk::Buffer&, const vk::BufferSuballocation>> not_deleted;
+        uint32_t removed_count = 0;
         for (auto& [timeline, buffer_pair] : m_delete_buffers)
         {
-            if (m_timeline_value >= timeline || force)
+            if (m_timeline_value > timeline || force)
             {
                 auto& [buffer, sb] = buffer_pair;
                 buffer.subfree(sb);
+                removed_count++;
             }
             else
             {
                 not_deleted.emplace(timeline, buffer_pair);
             }
         }
+        // LOGE("\rGC: removed %d / %llu", removed_count, m_delete_buffers.size());
         m_delete_buffers = std::move(not_deleted);
     }
     void on_resize(const uint32_t width, const uint32_t height) noexcept
