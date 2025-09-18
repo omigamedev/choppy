@@ -25,7 +25,10 @@ module;
 #include <openxr/openxr_platform.h>
 #include <xr_linear.h>
 
-#include "vk_mem_alloc.h"
+#include <vk_mem_alloc.h>
+
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyVulkan.hpp>
 
 export module ce.xr;
 import ce.vk;
@@ -1631,6 +1634,7 @@ public:
     }
     bool sync_input() noexcept
     {
+        ZoneScoped;
         // sync action data
         sync_action_set(m_action_set);
 
@@ -1645,6 +1649,7 @@ public:
     }
     bool sync_pose(const XrTime time) noexcept
     {
+        ZoneScoped;
         // hands
         for (uint32_t i = 0; i < 2; ++i)
         {
@@ -1721,29 +1726,43 @@ public:
     void present(const std::function<void(const vk::utils::FrameContext& frame)>& update_callback,
         const std::function<void(const vk::utils::FrameContext& frame)>& render_callback) noexcept
     {
-        const VkSemaphoreWaitInfo timeline_wait_info{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-            .semaphoreCount = 1,
-            .pSemaphores = &m_timeline_semaphore,
-            .pValues = &m_timeline_values[m_present_index],
-        };
-        vkWaitSemaphores(m_device, &timeline_wait_info, UINT64_MAX);
+        ZoneScoped;
+
+        {
+            ZoneScopedN("wait semaphores");
+            ZoneValue(m_timeline_values[m_present_index]);
+            const VkSemaphoreWaitInfo timeline_wait_info{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                .semaphoreCount = 1,
+                .pSemaphores = &m_timeline_semaphore,
+                .pValues = &m_timeline_values[m_present_index],
+            };
+            vkWaitSemaphores(m_device, &timeline_wait_info, UINT64_MAX);
+        }
         vkResetCommandBuffer(m_present_cmd[m_present_index], 0);
 
         m_timeline_values[m_present_index] = ++m_timeline_counter;
+        ZoneValue(m_timeline_values[m_present_index]);
 
-        constexpr XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frame_state{.type = XR_TYPE_FRAME_STATE};
-        if (const XrResult result = xrWaitFrame(m_session, &wait_info, &frame_state); !XR_SUCCEEDED(result))
         {
-            LOGE("xrWaitFrame failed: %s", to_string(result));
-            return;
+            ZoneScopedN("xrWaitFrame");
+            constexpr XrFrameWaitInfo wait_info{.type = XR_TYPE_FRAME_WAIT_INFO};
+            if (const XrResult result = xrWaitFrame(m_session, &wait_info, &frame_state); !XR_SUCCEEDED(result))
+            {
+                LOGE("xrWaitFrame failed: %s", to_string(result));
+                return;
+            }
         }
-        constexpr XrFrameBeginInfo begin_info{.type = XR_TYPE_FRAME_BEGIN_INFO};
-        if (const XrResult result = xrBeginFrame(m_session, &begin_info); !XR_SUCCEEDED(result))
+
         {
-            LOGE("xrBeginFrame failed: %s", to_string(result));
-            return;
+            ZoneScopedN("xrBeginFrame");
+            constexpr XrFrameBeginInfo begin_info{.type = XR_TYPE_FRAME_BEGIN_INFO};
+            if (const XrResult result = xrBeginFrame(m_session, &begin_info); !XR_SUCCEEDED(result))
+            {
+                LOGE("xrBeginFrame failed: %s", to_string(result));
+                return;
+            }
         }
 
         sync_pose(frame_state.predictedDisplayTime);
@@ -1765,20 +1784,26 @@ public:
         }
 
         uint32_t acquired_index = 0;
-        constexpr XrSwapchainImageAcquireInfo acquire_info{.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-        if (const XrResult result = xrAcquireSwapchainImage(color_swapchain, &acquire_info, &acquired_index);
-            !XR_SUCCEEDED(result))
         {
-            LOGE("xrAcquireSwapchainImage failed: %s", to_string(result));
-            return;
+            ZoneScopedN("acquire image");
+            constexpr XrSwapchainImageAcquireInfo acquire_info{.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+            if (const XrResult result = xrAcquireSwapchainImage(color_swapchain, &acquire_info, &acquired_index);
+                !XR_SUCCEEDED(result))
+            {
+                LOGE("xrAcquireSwapchainImage failed: %s", to_string(result));
+                return;
+            }
         }
 
-        constexpr XrSwapchainImageWaitInfo image_wait_info{
-            .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION};
-        if (const XrResult result = xrWaitSwapchainImage(color_swapchain, &image_wait_info); !XR_SUCCEEDED(result))
         {
-            LOGE("xrWaitSwapchainImage failed: %s", to_string(result));
-            return;
+            ZoneScopedN("wait image");
+            constexpr XrSwapchainImageWaitInfo image_wait_info{
+                .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION};
+            if (const XrResult result = xrWaitSwapchainImage(color_swapchain, &image_wait_info); !XR_SUCCEEDED(result))
+            {
+                LOGE("xrWaitSwapchainImage failed: %s", to_string(result));
+                return;
+            }
         }
 
         vk::utils::FrameContext frame{
@@ -1832,74 +1857,83 @@ public:
         }
         vkEndCommandBuffer(m_present_cmd[m_present_index]);
 
-        const uint64_t signal_values = m_timeline_values[m_present_index];
-        const VkTimelineSemaphoreSubmitInfo timeline_submit_info{
-            .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-            .signalSemaphoreValueCount = 1,
-            .pSignalSemaphoreValues = &signal_values,
-        };
-        const VkSubmitInfo submit_info{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = &timeline_submit_info,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &m_present_cmd[m_present_index],
-            .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &m_timeline_semaphore,
-        };
-        if (const VkResult result = vkQueueSubmit(m_vk->queue(), 1, &submit_info, VK_NULL_HANDLE);
-            result != VK_SUCCESS)
         {
-            LOGE("Failed to submit");
-        }
-
-        std::vector layer_views(views_count, XrCompositionLayerProjectionView{});
-        for (uint32_t i = 0; i < views_count; i++)
-        {
-            layer_views[i] = XrCompositionLayerProjectionView{
-                .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
-                .pose = views[i].pose,
-                .fov = views[i].fov,
-                .subImage = XrSwapchainSubImage{
-                    .swapchain = color_swapchain,
-                    .imageRect = {
-                        .offset = {0, 0},
-                        .extent = {
-                            static_cast<int32_t>(m_framebuffer_size.width),
-                            static_cast<int32_t>(m_framebuffer_size.height)
-                        }
-                    },
-                    .imageArrayIndex = i
-                }
+            ZoneScopedN("submit");
+            const uint64_t signal_values = m_timeline_values[m_present_index];
+            const VkTimelineSemaphoreSubmitInfo timeline_submit_info{
+                .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+                .signalSemaphoreValueCount = 1,
+                .pSignalSemaphoreValues = &signal_values,
             };
+            const VkSubmitInfo submit_info{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .pNext = &timeline_submit_info,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &m_present_cmd[m_present_index],
+                .signalSemaphoreCount = 1,
+                .pSignalSemaphores = &m_timeline_semaphore,
+            };
+            if (const VkResult result = vkQueueSubmit(m_vk->queue(), 1, &submit_info, VK_NULL_HANDLE);
+                result != VK_SUCCESS)
+            {
+                LOGE("Failed to submit");
+            }
         }
 
-        constexpr XrSwapchainImageReleaseInfo release_info{.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-        if (const XrResult result = xrReleaseSwapchainImage(color_swapchain, &release_info); !XR_SUCCEEDED(result))
         {
-            LOGE("xrReleaseSwapchainImage failed: %s", to_string(result));
-            return;
+            ZoneScopedN("release swapchain");
+            constexpr XrSwapchainImageReleaseInfo release_info{.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            if (const XrResult result = xrReleaseSwapchainImage(color_swapchain, &release_info); !XR_SUCCEEDED(result))
+            {
+                LOGE("xrReleaseSwapchainImage failed: %s", to_string(result));
+                return;
+            }
         }
 
-        const XrCompositionLayerProjection projection_layer{
-            .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
-            .layerFlags = 0,
-            .space = m_space,
-            .viewCount = static_cast<uint32_t>(layer_views.size()),
-            .views = layer_views.data(),
-        };
+        {
+            ZoneScopedN("end frame");
+            std::vector layer_views(views_count, XrCompositionLayerProjectionView{});
+            for (uint32_t i = 0; i < views_count; i++)
+            {
+                layer_views[i] = XrCompositionLayerProjectionView{
+                    .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
+                    .pose = views[i].pose,
+                    .fov = views[i].fov,
+                    .subImage = XrSwapchainSubImage{
+                        .swapchain = color_swapchain,
+                        .imageRect = {
+                            .offset = {0, 0},
+                            .extent = {
+                                static_cast<int32_t>(m_framebuffer_size.width),
+                                static_cast<int32_t>(m_framebuffer_size.height)
+                            }
+                        },
+                        .imageArrayIndex = i
+                    }
+                };
+            }
 
-        const std::array layers{
-            reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection_layer)
-        };
+            const XrCompositionLayerProjection projection_layer{
+                .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
+                .layerFlags = 0,
+                .space = m_space,
+                .viewCount = static_cast<uint32_t>(layer_views.size()),
+                .views = layer_views.data(),
+            };
 
-        const XrFrameEndInfo end_info{
-            .type = XR_TYPE_FRAME_END_INFO,
-            .displayTime = frame_state.predictedDisplayTime,
-            .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
-            .layerCount = static_cast<uint32_t>(layers.size()),
-            .layers = layers.data()
-        };
-        xrEndFrame(m_session, &end_info);
+            const std::array layers{
+                reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection_layer)
+            };
+
+            const XrFrameEndInfo end_info{
+                .type = XR_TYPE_FRAME_END_INFO,
+                .displayTime = frame_state.predictedDisplayTime,
+                .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
+                .layerCount = static_cast<uint32_t>(layers.size()),
+                .layers = layers.data()
+            };
+            xrEndFrame(m_session, &end_info);
+        }
         m_present_index = (m_present_index + 1) % swapchain_count();
     }
 };

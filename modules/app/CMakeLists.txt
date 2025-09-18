@@ -8,7 +8,10 @@ FetchContent_Declare(perlin
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG master)
-FetchContent_MakeAvailable(perlin glm stb)
+FetchContent_Declare(tracy
+    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+    GIT_TAG v0.12.2)
+FetchContent_MakeAvailable(perlin glm stb tracy)
 
 add_library(perlin INTERFACE)
 target_include_directories(perlin INTERFACE ${perlin_SOURCE_DIR})

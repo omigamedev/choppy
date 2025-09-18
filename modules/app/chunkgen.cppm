@@ -36,16 +36,16 @@ public:
 };
 class FlatGenerator final : public ChunkGenerator
 {
-    uint32_t m_size = 0;
+    uint32_t m_chunk_size = 0;
     uint32_t m_ground_height = 0;
 	siv::PerlinNoise perlin{ std::random_device{} };
 
 public:
     explicit FlatGenerator(const uint32_t size, const uint32_t ground_height) noexcept
-        : m_size(size), m_ground_height(ground_height) { }
+        : m_chunk_size(size), m_ground_height(ground_height) { }
     [[nodiscard]] ChunkData generate([[maybe_unused]] const glm::ivec3 sector) const noexcept override
     {
-        const int32_t ssz = static_cast<int32_t>(m_size);
+        const int32_t ssz = static_cast<int32_t>(m_chunk_size);
         std::vector<BlockType> tmp;
         tmp.reserve(pow(ssz + 2, 3));
         for (int32_t y = -1; y < ssz + 1; ++y)
@@ -74,18 +74,18 @@ public:
         bool full = false;
         std::vector<Block> blocks;
         blocks.reserve(pow(ssz, 3));
-        for (uint32_t y = 0; y < m_size; ++y)
+        for (uint32_t y = 0; y < m_chunk_size; ++y)
         {
-            for (uint32_t z = 0; z < m_size; ++z)
+            for (uint32_t z = 0; z < m_chunk_size; ++z)
             {
-                for (uint32_t x = 0; x < m_size; ++x)
+                for (uint32_t x = 0; x < m_chunk_size; ++x)
                 {
-                    const int32_t sz = static_cast<int32_t>(m_size + 2);
+                    const int32_t sz = static_cast<int32_t>(m_chunk_size + 2);
                     const auto C = tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 1];
                     uint8_t mask = 0;
                     if (C == BlockType::Water)
                     {
-                        mask |= 1;//(tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
+                        mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
                         mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
                         mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
                         mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;
@@ -108,7 +108,7 @@ public:
             }
         }
 
-        return ChunkData{.size = m_size, .sector = sector, .blocks = std::move(blocks), .empty = !full};
+        return ChunkData{.size = m_chunk_size, .sector = sector, .blocks = std::move(blocks), .empty = !full};
     }
 };
 }

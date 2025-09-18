@@ -32,7 +32,7 @@ target_sources(vk PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     FILES vk.cppm utils.cppm)
-target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator platform glmcppm)
+target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator platform glmcppm Tracy::TracyClient)
 target_compile_definitions(vk PRIVATE VMA_IMPLEMENTATION)
 if(WIN32)
     target_compile_definitions(vk PUBLIC NOMINMAX)

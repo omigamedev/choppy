@@ -12,6 +12,9 @@ module;
 #include <volk.h>
 #include <vk_mem_alloc.h>
 
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyVulkan.hpp>
+
 #ifdef __ANDROID__
 #include <android/log.h>
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
@@ -87,6 +90,10 @@ class Context final
     VkFormat m_depth_format = VK_FORMAT_UNDEFINED;
     const uint32_t m_queue_index = 0;
     VmaAllocator m_vma = VK_NULL_HANDLE;
+
+    VkCommandBuffer tracy_cmd = VK_NULL_HANDLE;
+    TracyVkCtx tracy_ctx = nullptr;
+
     bool create_vulkan_objects() noexcept
     {
         VkPhysicalDeviceProperties2 physical_device_properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
@@ -134,6 +141,10 @@ class Context final
         }
         debug_name("ce_command_pool", m_cmd_pool);
 
+        tracy_cmd = create_command_buffer("tracy_cmd");
+        tracy_ctx = TracyVkContextCalibrated(m_physical_device, m_device, m_queue, tracy_cmd,
+            vkGetPhysicalDeviceCalibrateableTimeDomainsEXT, vkGetCalibratedTimestampsEXT);
+
         // Init VMA
         VmaVulkanFunctions vulkanFunctions = {};
         vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
@@ -161,6 +172,7 @@ public:
     [[nodiscard]] VkRenderPass renderpass() const noexcept { return m_renderpass; }
     [[nodiscard]] VkSwapchainKHR swapchain() const noexcept { return m_swapchain; }
     [[nodiscard]] VkSampleCountFlagBits samples_count() const noexcept { return m_msaa_enabled ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT; }
+    [[nodiscard]] TracyVkCtx tracy() const noexcept { return tracy_ctx; }
     [[nodiscard]] uint32_t swapchain_count() const noexcept
     {
         return static_cast<uint32_t>(m_color_swapchain_images.size());
@@ -365,6 +377,7 @@ public:
             VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
             VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME,
             VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME,
+            VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME,
         };
         for (const char* e : vk_device_optional_extensions)
         {
@@ -1017,21 +1030,31 @@ public:
     void present(const std::function<void(const utils::FrameContext& frame)>& update_callback,
         const std::function<void(const utils::FrameContext& frame)>& render_callback) noexcept
     {
-        const VkSemaphoreWaitInfo wait_info{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-            .semaphoreCount = 1,
-            .pSemaphores = &m_timeline_semaphore,
-            .pValues = &m_timeline_values[m_present_index],
-        };
-        vkWaitSemaphores(m_device, &wait_info, UINT64_MAX);
+        ZoneScoped;
+
+        {
+            ZoneScopedN("wait semaphores");
+            ZoneValue(m_timeline_values[m_present_index]);
+            const VkSemaphoreWaitInfo wait_info{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                .semaphoreCount = 1,
+                .pSemaphores = &m_timeline_semaphore,
+                .pValues = &m_timeline_values[m_present_index],
+            };
+            vkWaitSemaphores(m_device, &wait_info, UINT64_MAX);
+        }
 
         m_timeline_values[m_present_index] = ++m_timeline_counter;
+        ZoneValue(m_timeline_values[m_present_index]);
 
         uint32_t swapchain_index;
-        if (const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
-            m_wait_swapchain[m_present_index], VK_NULL_HANDLE, &swapchain_index); result != VK_SUCCESS)
         {
-            LOGE("vkAcquireNextImageKHR failed: %s", utils::to_string(result));
+            ZoneScopedN("acquire image");
+            if (const VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
+               m_wait_swapchain[m_present_index], VK_NULL_HANDLE, &swapchain_index); result != VK_SUCCESS)
+            {
+                LOGE("vkAcquireNextImageKHR failed: %s", utils::to_string(result));
+            }
         }
 
         const auto [width, height] = m_window->size();
@@ -1089,18 +1112,21 @@ public:
             LOGE("Failed to submit");
         }
 
-        const VkPresentInfoKHR present_info {
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &m_wait_render[swapchain_index],
-            .swapchainCount = 1,
-            .pSwapchains = &m_swapchain,
-            .pImageIndices = &swapchain_index,
-        };
-        if (const VkResult result = vkQueuePresentKHR(m_queue, &present_info);
-            result != VK_SUCCESS)
         {
-            LOGE("vkQueuePresentKHR failed: %s", utils::to_string(result));
+            ZoneScopedN("queue present");
+            const VkPresentInfoKHR present_info {
+                .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                .waitSemaphoreCount = 1,
+                .pWaitSemaphores = &m_wait_render[swapchain_index],
+                .swapchainCount = 1,
+                .pSwapchains = &m_swapchain,
+                .pImageIndices = &swapchain_index,
+            };
+            if (const VkResult result = vkQueuePresentKHR(m_queue, &present_info);
+                result != VK_SUCCESS)
+            {
+                LOGE("vkQueuePresentKHR failed: %s", utils::to_string(result));
+            }
         }
         m_present_index = (m_present_index + 1) % swapchain_count();
     }

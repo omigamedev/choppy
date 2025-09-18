@@ -47,7 +47,8 @@ class ChunkMesher
 {
 public:
     virtual ~ChunkMesher() = default;
-    [[nodiscard]] virtual std::map<BlockType, ChunkMesh<T>> mesh(const ChunkData& data) const noexcept = 0;
+    [[nodiscard]] virtual std::map<BlockType, ChunkMesh<T>> mesh(
+        const ChunkData& data, const float block_size) const noexcept = 0;
 };
 
 bool operator&(Block::Mask lhs, Block::Mask rhs)
@@ -59,22 +60,22 @@ template<VertexType T>
 class SimpleMesher final : public ChunkMesher<T>
 {
 public:
-    [[nodiscard]] std::map<BlockType, ChunkMesh<T>> mesh(const ChunkData& data) const noexcept override
+    [[nodiscard]] std::map<BlockType, ChunkMesh<T>> mesh(
+        const ChunkData& data, const float block_size) const noexcept override
     {
         const uint32_t size = data.size;
 
         std::vector<T> vertices;
         vertices.reserve(pow(size + 1, 3));
-        const float normalizer = 1.f / static_cast<float>(size);
         for (uint32_t y = 0; y < size + 1; ++y)
         {
             for (uint32_t z = 0; z < size + 1; ++z)
             {
                 for (uint32_t x = 0; x < size + 1; ++x)
                 {
-                    const float nx = static_cast<float>(x) * normalizer;
-                    const float nz = static_cast<float>(z) * normalizer;
-                    const float ny = static_cast<float>(y) * normalizer;
+                    const float nx = static_cast<float>(x) * block_size;
+                    const float nz = static_cast<float>(z) * block_size;
+                    const float ny = static_cast<float>(y) * block_size;
                     vertices.push_back({
                         .position = {nx, ny, -nz, 1.0f},
                         .color = {x, y, z, 1.0f},
@@ -115,10 +116,10 @@ public:
                     const uint32_t VG = VE + line_size + 1;
                     const uint32_t VH = VE + 1;
 
-                    glm::vec4 CA{0, 1, 0, 1};
-                    glm::vec4 CB{0, 0, 1, 1};
-                    glm::vec4 CC{.5, 0, 0, 1};
-                    glm::vec4 CD{.5, 1, 0, 1};
+                    glm::vec4 CA{ 0, .5, 0, 1};
+                    glm::vec4 CB{ 0,  0, 1, 1};
+                    glm::vec4 CC{.5,  0, 0, 1};
+                    glm::vec4 CD{.5, .5, 0, 1};
 
                     if (data.blocks[idx].type == BlockType::Water)
                     {
@@ -127,7 +128,7 @@ public:
                         constexpr glm::vec3 top{5.f / 255.f, 113.f / 255.f, 1.f};
                         constexpr glm::vec3 bottom{0.f, 19.f / 255.f, 61.f / 255.f};
                         const glm::vec3 color = glm::gtc::lerp(top, bottom, b);
-                        CA = CB = CC = CD = glm::vec4(color, 0.5f);
+                        //CA = CB = CC = CD = glm::vec4(color, 0.5f);
                     }
 
                     if (data.blocks[idx].face_mask & Block::Mask::B)
@@ -150,16 +151,32 @@ public:
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::U)
                     {
-                        glm::vec4 CA{.5, 1, 0, 1};
-                        glm::vec4 CB{.5, 0, 1, 1};
-                        glm::vec4 CC{1, 0, 0, 1};
-                        glm::vec4 CD{1, 1, 0, 1};
-                        m.vertices.emplace_back(vertices[VE].position, CA);
-                        m.vertices.emplace_back(vertices[VF].position, CB);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
-                        m.vertices.emplace_back(vertices[VE].position, CA);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
-                        m.vertices.emplace_back(vertices[VH].position, CD);
+                        if (data.blocks[idx].type == BlockType::Water)
+                        {
+                            auto CA = glm::vec4{ 0,  1, 0, 1};
+                            auto CB = glm::vec4{ 0, .5, 1, 1};
+                            auto CC = glm::vec4{.5, .5, 0, 1};
+                            auto CD = glm::vec4{.5,  1, 0, 1};
+                            m.vertices.emplace_back(vertices[VE].position - glm::vec4(0, .1, 0, 0), CA);
+                            m.vertices.emplace_back(vertices[VF].position - glm::vec4(0, .1, 0, 0), CB);
+                            m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
+                            m.vertices.emplace_back(vertices[VE].position - glm::vec4(0, .1, 0, 0), CA);
+                            m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
+                            m.vertices.emplace_back(vertices[VH].position - glm::vec4(0, .1, 0, 0), CD);
+                        }
+                        else
+                        {
+                            auto CA = glm::vec4{.5, .5, 0, 1};
+                            auto CB = glm::vec4{.5,  0, 1, 1};
+                            auto CC = glm::vec4{ 1,  0, 0, 1};
+                            auto CD = glm::vec4{ 1, .5, 0, 1};
+                            m.vertices.emplace_back(vertices[VE].position, CA);
+                            m.vertices.emplace_back(vertices[VF].position, CB);
+                            m.vertices.emplace_back(vertices[VG].position, CC);
+                            m.vertices.emplace_back(vertices[VE].position, CA);
+                            m.vertices.emplace_back(vertices[VG].position, CC);
+                            m.vertices.emplace_back(vertices[VH].position, CD);
+                        }
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::D)
                     {

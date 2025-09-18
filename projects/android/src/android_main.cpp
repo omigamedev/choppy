@@ -12,6 +12,8 @@
 #include <memory>
 #include <volk.h>
 
+#include <tracy/Tracy.hpp>
+
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
 
@@ -23,6 +25,18 @@ import ce.platform.android;
 import ce.platform.globals;
 
 using namespace ce;
+
+void* operator new(const std::size_t count)
+{
+    const auto ptr = malloc(count);
+    TracyAlloc(ptr, count);
+    return ptr;
+}
+void operator delete(void* ptr) noexcept
+{
+    TracyFree(ptr);
+    free(ptr);
+}
 
 class AndroidContext
 {

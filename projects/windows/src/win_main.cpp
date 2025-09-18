@@ -13,6 +13,21 @@ import ce.platform;
 import ce.platform.globals;
 import ce.platform.win32;
 
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyVulkan.hpp>
+
+void* operator new(const std::size_t count)
+{
+    const auto ptr = malloc(count);
+    TracyAlloc(ptr, count);
+    return ptr;
+}
+void operator delete(void* ptr) noexcept
+{
+    TracyFree(ptr);
+    free(ptr);
+}
+
 std::string hresult_to_string(const HRESULT hr)
 {
     char* msgBuffer = nullptr;
@@ -48,7 +63,7 @@ class WindowsContext
     {
         const auto& win32 = ce::platform::GetPlatform<ce::platform::Win32>();
         m_window = std::static_pointer_cast<ce::platform::Win32Window>(win32.new_window());
-        return m_window->create(1024, 1024);
+        return m_window->create(1920, 1080);
     }
 public:
     bool create()
