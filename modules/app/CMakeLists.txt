@@ -1,16 +1,16 @@
 include(FetchContent)
 FetchContent_Declare(glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG 1.0.1)
+    GIT_TAG 0af55ccecd98d4e5a8d1fad7de25ba429d60e863) # 1.0.1
 FetchContent_Declare(perlin
     GIT_REPOSITORY https://github.com/Reputeless/PerlinNoise.git
-    GIT_TAG master)
+    GIT_TAG 39ca74069057407a04c46e2ec06baf57c6fc4b3f) # v3.0.0
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG master)
+    GIT_TAG fede005abaf93d9d7f3a679d1999b2db341b360f) # Sep 7, 2025
 FetchContent_Declare(tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-    GIT_TAG v0.12.2)
+    GIT_TAG c556831ddc6fe26d2fce01c14c97205a9dad46d5) # v0.12.2
 FetchContent_MakeAvailable(perlin glm stb tracy)
 
 add_library(perlin INTERFACE)

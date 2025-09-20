@@ -5,7 +5,7 @@ else()
 FetchContent_Declare(
     VulkanHeaders
     GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-    GIT_TAG v1.4.321)
+    GIT_TAG 2cd90f9d20df57eac214c148f3aed885372ddcfe) # v1.4.321
 FetchContent_MakeAvailable(VulkanHeaders)
 find_package(Vulkan REQUIRED)
 endif()
@@ -13,7 +13,7 @@ endif()
 FetchContent_Declare(
     Volk
     GIT_REPOSITORY https://github.com/zeux/volk.git
-    GIT_TAG vulkan-sdk-1.4.321)
+    GIT_TAG a8da8ef3368482b0ee9b0ec0c6079a16a89c6924) # vulkan-sdk-1.4.321
 if (WIN32)
     set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
 elseif()
@@ -24,7 +24,7 @@ FetchContent_MakeAvailable(Volk)
 FetchContent_Declare(
     VulkanMemoryAllocator
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
-    GIT_TAG v3.3.0)
+    GIT_TAG 1d8f600fd424278486eade7ed3e877c99f0846b1) # v3.3.0
 FetchContent_MakeAvailable(VulkanMemoryAllocator)
 
 add_library(vk OBJECT)
