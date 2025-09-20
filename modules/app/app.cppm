@@ -19,6 +19,8 @@ module;
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include "tracy/TracyC.h"
+
 #ifdef __ANDROID__
 #include <jni.h>
 #include <android/log.h>
@@ -82,7 +84,7 @@ struct PlayerState
 };
 struct ChunkUpdate : NoCopy
 {
-    ChunkMesh<shaders::SolidFlatShader::VertexInput> data;
+    std::map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> data;
     size_t chunk_index = 0;
     glm::vec4 color{};
     glm::ivec3 sector{};
@@ -97,7 +99,7 @@ struct Texture
 };
 struct ChunksState
 {
-    vk::BufferSuballocation vertex_buffer{};
+    //vk::BufferSuballocation vertex_buffer{};
     vk::BufferSuballocation uniform_buffer{};
     vk::BufferSuballocation args_buffer{};
 };
@@ -142,10 +144,11 @@ class AppBase final
 
     FlatGenerator generator{ChunkSize, 20};
     SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
-    std::vector<ChunkUpdate> m_chunk_updates;
-    std::mutex m_chunks_mutex;
+    // std::vector<uint32_t> m_chunk_updates;
+    TracyLockable(std::mutex, m_chunks_mutex);
     std::thread m_chunks_thread;
     ChunksState m_chunks_state;
+    bool needs_update = false;
 
 public:
     ~AppBase()
@@ -155,10 +158,11 @@ public:
         {
             vkDeviceWaitIdle(m_vk->device());
         }
-        //for (auto& c : m_chunks)
-        //{
-        //    m_vertex_buffer->subfree(c.buffer());
-        //}
+        for (auto& c : m_chunks)
+        {
+            if (!c.dirty && c.buffer.alloc)
+                m_vertex_buffer.subfree(c.buffer);
+        }
         if (m_chunks_thread.joinable())
             m_chunks_thread.join();
         clear_chunks_state(0);
@@ -379,13 +383,14 @@ public:
         {
             LOGE("Failed to create sampler");
         }
-        // m_chunks_thread = std::thread(&AppBase::generate_thread, this);
+        m_chunks_thread = std::thread(&AppBase::generate_thread, this);
     }
     void generate_thread() noexcept
     {
+        tracy::SetThreadName("generate_thread");
         while (m_running)
         {
-            generate_chunks();
+            needs_update |= generate_chunks();
         }
     }
     [[nodiscard]] std::vector<glm::ivec3> generate_neighbors(const glm::ivec3 origin, const int32_t size) const noexcept
@@ -420,10 +425,10 @@ public:
             m_player.cam_sector = glm::floor(cur_sector);
             LOGI("travel to sector [%d, %d, %d]", m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
         }
-        else
-        {
-            return false;
-        }
+        //else
+        //{
+        //    return false;
+        //}
 
         const auto neighbors = generate_neighbors(m_player.cam_sector, ChunkRings);
 
@@ -450,24 +455,29 @@ public:
             {
                 const auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                // std::lock_guard lock(m_chunks_mutex);
+                std::lock_guard lock(m_chunks_mutex);
+                // m_chunk_updates.emplace_back(m_chunks.size());
                 auto& chunk = m_chunks.emplace_back();
                 chunk.mesh = std::move(chunk_data);
                 chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 chunk.sector = sector;
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
+                chunk.dirty = true;
+                break;
             }
             else if (!chunk_indices.empty())
             {
                 const auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
                 const uint32_t chunk_index = chunk_indices[chunk_indices_offset++];
-                // std::lock_guard lock(m_chunks_mutex);
+                std::lock_guard lock(m_chunks_mutex);
                 auto& chunk = m_chunks[chunk_index];
                 chunk.mesh = std::move(chunk_data);
                 chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 chunk.sector = sector;
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
+                chunk.dirty = true;
+                break;
             }
         }
         return true;
@@ -475,8 +485,8 @@ public:
     void clear_chunks_state(const uint64_t timeline_value) noexcept
     {
         ZoneScoped;
-        if (m_chunks_state.vertex_buffer.alloc)
-            m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_vertex_buffer), m_chunks_state.vertex_buffer));
+        //if (m_chunks_state.vertex_buffer.alloc)
+        //    m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_vertex_buffer), m_chunks_state.vertex_buffer));
         if (m_chunks_state.uniform_buffer.alloc)
             m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_object_buffer), m_chunks_state.uniform_buffer));
         if (m_chunks_state.args_buffer.alloc)
@@ -485,27 +495,14 @@ public:
     void update_chunks(const vk::utils::FrameContext& frame) noexcept
     {
         ZoneScoped;
-        //std::lock_guard lock(m_chunks_mutex);
-        //for (const auto& chunk : m_chunk_updates)
-        //{
-        //    if (!chunk.data.vertices.empty())
-        //    {
-        //        // LOGI("Generate NEW chunk");
-        //    }
-        //    else
-        //    {
-        //        m_chunks[chunk.chunk_index] = Chunk();
-        //    }
-        //}
-        //m_chunk_updates.clear();
 
         clear_chunks_state(frame.timeline_value);
-        auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
-        {
-            const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
-            const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
-            return dist1 >= dist2;
-        });
+        // auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
+        // {
+        //     const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
+        //     const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
+        //     return dist1 >= dist2;
+        // });
 
         // std::ranges::sort(m_chunks, [this](const auto& c1, const auto& c2) -> bool
         // {
@@ -516,52 +513,63 @@ public:
 
         //std::ranges::shuffle(m_chunks, std::mt19937{std::random_device{}()});
 
-        std::vector<shaders::SolidFlatShader::VertexInput> vbo;
-        vbo.reserve(m_chunks.size());
         std::vector<shaders::SolidFlatShader::PerObjectBuffer> ubo;
         ubo.reserve(m_chunks.size());
         std::vector<VkDrawIndirectCommand> draw_args;
         draw_args.reserve(m_chunks.size());
         m_draw_count = 0;
         uint32_t polys = 0;
-        for (const auto& chunk : sorted_chunks)
+        std::lock_guard lock(m_chunks_mutex);
+        for (auto& chunk : m_chunks)
         {
+            std::vector<shaders::SolidFlatShader::VertexInput> vbo;
             for (const auto& [k, m] : chunk.mesh)
             {
-                // const uint32_t vertex_count = std::ranges::fold_left(chunk.mesh, size_t{0},
-                //     [](size_t sum, auto const& v) { return sum + v.second.vertices.size(); });
-                ubo.push_back({
-                    .ObjectTransform = glm::transpose(chunk.transform),
-                    .ObjectColor = glm::vec4(glm::vec3(chunk.color), 1.0f),
-                    .selected = false,
-                });
-                draw_args.push_back({
-                    .vertexCount = static_cast<uint32_t>(m.vertices.size()),
-                    .instanceCount = 1,
-                    .firstVertex = static_cast<uint32_t>(vbo.size()),
-                    .firstInstance = 0
-                });
                 vbo.append_range(m.vertices);
-                m_draw_count++;
                 polys += m.vertices.size();
             }
+            if (vbo.empty())
+                continue;
+
+            if (chunk.dirty)
+            {
+                if (const auto sb = m_staging_buffer.suballoc(vbo.size() *
+                    sizeof(shaders::SolidFlatShader::VertexInput), 64))
+                {
+                    if (const auto dst_sb = m_vertex_buffer.suballoc(sb->size, 64))
+                    {
+                        std::ranges::copy(vbo, static_cast<shaders::SolidFlatShader::VertexInput*>(sb->ptr));
+                        m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
+                        //m_chunks_state.vertex_buffer = *dst_sb;
+
+                        if (chunk.buffer.alloc)
+                            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer));
+                        chunk.buffer = *dst_sb;
+                        chunk.dirty = false;
+                    }
+                    // defer suballocation deletion
+                    m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                }
+            }
+
+            m_draw_count++;
+
+            ubo.push_back({
+                .ObjectTransform = glm::transpose(chunk.transform),
+                .ObjectColor = glm::vec4(glm::vec3(chunk.color), 1.0f),
+                .selected = false,
+            });
+            const auto vertex_offset = chunk.buffer.offset / sizeof(shaders::SolidFlatShader::VertexInput);
+            draw_args.push_back({
+                .vertexCount = static_cast<uint32_t>(vbo.size()),
+                .instanceCount = 1,
+                .firstVertex = static_cast<uint32_t>(vertex_offset),
+                .firstInstance = 0
+            });
         }
         LOGI("drawing %d polys", polys / 3);
         if (m_draw_count > 0)
         {
-            if (const auto sb = m_staging_buffer.suballoc(vbo.size() *
-                sizeof(shaders::SolidFlatShader::VertexInput), 64))
-            {
-                if (const auto dst_sb = m_vertex_buffer.suballoc(sb->size, 64))
-                {
-                    std::ranges::copy(vbo, static_cast<shaders::SolidFlatShader::VertexInput*>(sb->ptr));
-                    m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
-                    m_chunks_state.vertex_buffer = *dst_sb;
-                }
-                // defer suballocation deletion
-                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
-            }
-
             if (const auto sb = m_staging_buffer.suballoc(ubo.size() *
                 sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64))
             {
@@ -592,10 +600,12 @@ public:
     {
         ZoneScoped;
         solid_flat->reset_descriptors(frame.present_index);
-        const bool needs_update = generate_chunks();
 
         if (needs_update)
+        {
             update_chunks(frame);
+            needs_update = false;
+        }
 
         const auto per_frame_constants = shaders::SolidFlatShader::PerFrameConstants{
             .ViewProjection = {
@@ -740,7 +750,7 @@ public:
         if (!m_chunks.empty())
         {
             const std::array vertex_buffers{m_vertex_buffer.buffer()};
-            const std::array vertex_buffers_offset{m_chunks_state.vertex_buffer.offset};
+            const std::array vertex_buffers_offset{VkDeviceSize{0ull}};
             vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                 vertex_buffers.data(), vertex_buffers_offset.data());
 

@@ -219,6 +219,8 @@ struct Chunk final
     glm::vec4 color{};
     glm::ivec3 sector{};
     std::map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> mesh;
+    vk::BufferSuballocation buffer{};
+    bool dirty = false;
     //uint32_t size = 0;
     //uint32_t height = 0;
     //uint32_t descriptor_set_index = 0;
