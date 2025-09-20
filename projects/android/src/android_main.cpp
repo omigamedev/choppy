@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/asset_manager.h>
 #include <android/configuration.h>
+#include <android/choreographer.h>
 #include <android/log.h>
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
@@ -36,6 +37,21 @@ void operator delete(void* ptr) noexcept
 {
     TracyFree(ptr);
     free(ptr);
+}
+
+void vsyncCallback(long frameTimeNanos, void* data)
+{
+    FrameMarkNamed("ScreenRefresh");   // Marks a frame in Tracy
+
+    // Reschedule callback for next vsync
+    AChoreographer* choreographer = AChoreographer_getInstance();
+    AChoreographer_postFrameCallback(choreographer, vsyncCallback, data);
+}
+
+void initVsync()
+{
+    AChoreographer* choreographer = AChoreographer_getInstance();
+    AChoreographer_postFrameCallback(choreographer, vsyncCallback, nullptr);
 }
 
 class AndroidContext
@@ -288,6 +304,7 @@ void handle_cmd(android_app *pApp, int32_t cmd) noexcept
             if (auto context = reinterpret_cast<AndroidContext*>(pApp->userData))
             {
                 context->begin_session();
+                initVsync();
             }
             break;
         case APP_CMD_TERM_WINDOW:

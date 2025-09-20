@@ -567,7 +567,7 @@ public:
                 .firstInstance = 0
             });
         }
-        LOGI("drawing %d polys", polys / 3);
+        //LOGI("drawing %d polys", polys / 3);
         if (m_draw_count > 0)
         {
             if (const auto sb = m_staging_buffer.suballoc(ubo.size() *
@@ -817,6 +817,25 @@ public:
         }
         return glm::gtx::eulerAngleYX(-m_player.cam_angles.x, -m_player.cam_angles.y);
     }
+    void trace_ray(const glm::vec3& origin, const glm::vec3& direction) const noexcept
+    {
+        constexpr uint32_t max_iterations = 10000;
+        constexpr float step = BlockSize / 2.f;
+        for (uint32_t i = 0; i < max_iterations; ++i)
+        {
+            const float t = i * step;
+            const glm::vec3 p = origin + t * direction;
+            const glm::ivec3 cell = glm::floor(p / BlockSize);
+            const glm::ivec3 sector = glm::floor(p / (BlockSize * ChunkSize));
+            const BlockType b = generator.peek(cell);
+            if (b != BlockType::Air)
+            {
+                LOGI("block type %s cell (%d, %d, %d) sector (%d, %d, %d)", to_string(b),
+                    cell.x, cell.y, cell.z, sector.x, sector.y, sector.z);
+                break;
+            }
+        }
+    }
     void update_flying_camera_pos(const float dt, const GamepadState& gamepad,
         const xr::TouchControllerState& touch, const glm::mat4& view)
     {
@@ -828,6 +847,11 @@ public:
             speed = speed * 0.25f;
         if (m_player.keys[VK_CONTROL])
             speed = speed * 4.f;
+        if (m_player.keys[VK_SPACE])
+        {
+            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
+            trace_ray(m_player.cam_pos, forward);
+        }
         speed = speed + 10.f * gamepad.trigger_right;
 #else
         const float speed = 3.f + 10.f * touch.trigger_left;

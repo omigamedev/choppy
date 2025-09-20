@@ -16,6 +16,17 @@ enum class BlockType : uint8_t
     Grass,
     Dirt,
 };
+const char* to_string(const BlockType b)
+{
+    switch (b)
+    {
+    case BlockType::Air: return  "Air";
+    case BlockType::Water: return "Water";
+    case BlockType::Grass: return "Grass";
+    case BlockType::Dirt: return "Dirt";
+    default: return "Unknown";
+    }
+}
 struct Block final
 {
     BlockType type;
@@ -43,7 +54,21 @@ class FlatGenerator final : public ChunkGenerator
 public:
     explicit FlatGenerator(const uint32_t size, const uint32_t ground_height) noexcept
         : m_chunk_size(size), m_ground_height(ground_height) { }
-    [[nodiscard]] ChunkData generate([[maybe_unused]] const glm::ivec3 sector) const noexcept override
+    [[nodiscard]] BlockType peek(const glm::ivec3 cell) const noexcept
+    {
+        const int32_t ssz = static_cast<int32_t>(m_chunk_size);
+        const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
+        // const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * static_cast<float>(m_ground_height);
+        const float terrain_height = perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height);
+        //const float terrain_height = cell.z;//static_cast<float>(m_ground_height);
+        BlockType block = BlockType::Air;
+        if (cell.y < 0)
+            block = BlockType::Water;
+        if (cell.y <= terrain_height)
+            block = BlockType::Dirt;
+        return block;
+    }
+    [[nodiscard]] ChunkData generate(const glm::ivec3 sector) const noexcept override
     {
         const int32_t ssz = static_cast<int32_t>(m_chunk_size);
         std::vector<BlockType> tmp;

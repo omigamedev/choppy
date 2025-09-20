@@ -1933,6 +1933,7 @@ public:
                 .layers = layers.data()
             };
             xrEndFrame(m_session, &end_info);
+            FrameMarkNamed("xrEndFrame");
         }
         m_present_index = (m_present_index + 1) % swapchain_count();
     }

@@ -1127,6 +1127,7 @@ public:
             {
                 LOGE("vkQueuePresentKHR failed: %s", utils::to_string(result));
             }
+            FrameMark;
         }
         m_present_index = (m_present_index + 1) % swapchain_count();
     }
