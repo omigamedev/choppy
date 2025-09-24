@@ -77,7 +77,7 @@ public:
                     const float nz = static_cast<float>(z) * block_size;
                     const float ny = static_cast<float>(y) * block_size;
                     vertices.push_back({
-                        .position = {nx, ny, -nz, 1.0f},
+                        .position = {nx, ny, nz, 1.0f},
                         .color = {x, y, z, 1.0f},
                     });
                 }
@@ -134,20 +134,20 @@ public:
                     if (data.blocks[idx].face_mask & Block::Mask::B)
                     {
                         m.vertices.emplace_back(vertices[VA].position, CA);
+                        m.vertices.emplace_back(vertices[VH].position, CC);
                         m.vertices.emplace_back(vertices[VE].position, CB);
-                        m.vertices.emplace_back(vertices[VH].position, CC);
                         m.vertices.emplace_back(vertices[VA].position, CA);
-                        m.vertices.emplace_back(vertices[VH].position, CC);
                         m.vertices.emplace_back(vertices[VD].position, CD);
+                        m.vertices.emplace_back(vertices[VH].position, CC);
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::F)
                     {
                         m.vertices.emplace_back(vertices[VC].position, CA);
+                        m.vertices.emplace_back(vertices[VF].position, CC);
                         m.vertices.emplace_back(vertices[VG].position, CB);
-                        m.vertices.emplace_back(vertices[VF].position, CC);
                         m.vertices.emplace_back(vertices[VC].position, CA);
-                        m.vertices.emplace_back(vertices[VF].position, CC);
                         m.vertices.emplace_back(vertices[VB].position, CD);
+                        m.vertices.emplace_back(vertices[VF].position, CC);
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::U)
                     {
@@ -158,11 +158,11 @@ public:
                             auto CC = glm::vec4{.5, .5, 0, 1};
                             auto CD = glm::vec4{.5,  1, 0, 1};
                             m.vertices.emplace_back(vertices[VE].position - glm::vec4(0, .1, 0, 0), CA);
+                            m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
                             m.vertices.emplace_back(vertices[VF].position - glm::vec4(0, .1, 0, 0), CB);
-                            m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
                             m.vertices.emplace_back(vertices[VE].position - glm::vec4(0, .1, 0, 0), CA);
-                            m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
                             m.vertices.emplace_back(vertices[VH].position - glm::vec4(0, .1, 0, 0), CD);
+                            m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
                         }
                         else
                         {
@@ -171,39 +171,39 @@ public:
                             auto CC = glm::vec4{ 1,  0, 0, 1};
                             auto CD = glm::vec4{ 1, .5, 0, 1};
                             m.vertices.emplace_back(vertices[VE].position, CA);
+                            m.vertices.emplace_back(vertices[VG].position, CC);
                             m.vertices.emplace_back(vertices[VF].position, CB);
-                            m.vertices.emplace_back(vertices[VG].position, CC);
                             m.vertices.emplace_back(vertices[VE].position, CA);
-                            m.vertices.emplace_back(vertices[VG].position, CC);
                             m.vertices.emplace_back(vertices[VH].position, CD);
+                            m.vertices.emplace_back(vertices[VG].position, CC);
                         }
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::D)
                     {
                         m.vertices.emplace_back(vertices[VB].position, CA);
+                        m.vertices.emplace_back(vertices[VD].position, CC);
                         m.vertices.emplace_back(vertices[VA].position, CB);
-                        m.vertices.emplace_back(vertices[VD].position, CC);
                         m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VD].position, CC);
                         m.vertices.emplace_back(vertices[VC].position, CD);
+                        m.vertices.emplace_back(vertices[VD].position, CC);
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::R)
                     {
                         m.vertices.emplace_back(vertices[VD].position, CA);
+                        m.vertices.emplace_back(vertices[VG].position, CC);
                         m.vertices.emplace_back(vertices[VH].position, CB);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
                         m.vertices.emplace_back(vertices[VD].position, CA);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
                         m.vertices.emplace_back(vertices[VC].position, CD);
+                        m.vertices.emplace_back(vertices[VG].position, CC);
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::L)
                     {
                         m.vertices.emplace_back(vertices[VB].position, CA);
+                        m.vertices.emplace_back(vertices[VE].position, CC);
                         m.vertices.emplace_back(vertices[VF].position, CB);
-                        m.vertices.emplace_back(vertices[VE].position, CC);
                         m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VE].position, CC);
                         m.vertices.emplace_back(vertices[VA].position, CD);
+                        m.vertices.emplace_back(vertices[VE].position, CC);
                     }
                 }
             }

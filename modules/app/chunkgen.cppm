@@ -1,6 +1,7 @@
 module;
 #include <cstdint>
 #include <PerlinNoise.hpp>
+#include <unordered_map>
 #include <vector>
 
 export module ce.app.chunkgen;
@@ -39,17 +40,51 @@ struct ChunkData final : NoCopy
     std::vector<Block> blocks;
     bool empty = true;
 };
+
+struct IVec3Hash
+{
+    size_t operator()(const glm::ivec3& v) const noexcept
+    {
+        // 64-bit FNV-1a style hash
+        const uint64_t x = static_cast<uint64_t>(v.x);
+        const uint64_t y = static_cast<uint64_t>(v.y);
+        const uint64_t z = static_cast<uint64_t>(v.z);
+
+        uint64_t h = 1469598103934665603ULL; // FNV offset
+        h ^= x; h *= 1099511628211ULL;
+        h ^= y; h *= 1099511628211ULL;
+        h ^= z; h *= 1099511628211ULL;
+
+        return static_cast<size_t>(h);
+    }
+};
+struct U8Vec3Hash
+{
+    size_t operator()(const glm::u8vec3& v) const noexcept
+    {
+        // Pack x,y,z into 24 bits: [00000000|zzzzzzzz|yyyyyyyy|xxxxxxxx]
+        uint32_t packed = (uint32_t(v.x)) |
+                          (uint32_t(v.y) << 8) |
+                          (uint32_t(v.z) << 16);
+
+        // Promote to size_t so it works with 32- or 64-bit platforms
+        return static_cast<size_t>(packed);
+    }
+};
+
 class ChunkGenerator
 {
 public:
     virtual ~ChunkGenerator() = default;
-    [[nodiscard]] virtual ChunkData generate(glm::ivec3 sector) const noexcept = 0;
+    [[nodiscard]] virtual ChunkData generate(const glm::ivec3& sector) const noexcept = 0;
 };
 class FlatGenerator final : public ChunkGenerator
 {
     uint32_t m_chunk_size = 0;
     uint32_t m_ground_height = 0;
-	siv::PerlinNoise perlin{ std::random_device{} };
+	// siv::PerlinNoise perlin{ std::random_device{} };
+	siv::PerlinNoise perlin{ 1 };
+    std::unordered_map<glm::ivec3, std::unordered_map<glm::u8vec3, BlockType, U8Vec3Hash>, IVec3Hash> m_edits;
 
 public:
     explicit FlatGenerator(const uint32_t size, const uint32_t ground_height) noexcept
@@ -57,10 +92,19 @@ public:
     [[nodiscard]] BlockType peek(const glm::ivec3 cell) const noexcept
     {
         const int32_t ssz = static_cast<int32_t>(m_chunk_size);
+        const glm::ivec3 sector = glm::floor(glm::vec3(cell) / ssz);
+        const glm::u8vec3 local_cell = cell - sector * ssz;
+        const auto sector_it =  m_edits.find(sector);
+        if (sector_it != m_edits.end())
+        {
+            const auto cell_it = sector_it->second.find(local_cell);
+            if (cell_it != sector_it->second.end())
+            {
+                return cell_it->second;
+            }
+        }
         const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
-        // const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * static_cast<float>(m_ground_height);
         const float terrain_height = perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height);
-        //const float terrain_height = cell.z;//static_cast<float>(m_ground_height);
         BlockType block = BlockType::Air;
         if (cell.y < 0)
             block = BlockType::Water;
@@ -68,7 +112,11 @@ public:
             block = BlockType::Dirt;
         return block;
     }
-    [[nodiscard]] ChunkData generate(const glm::ivec3 sector) const noexcept override
+    void edit(const glm::ivec3& sector, const glm::u8vec3& local_cell, const BlockType block_type) noexcept
+    {
+        m_edits[sector][local_cell] = block_type;
+    }
+    [[nodiscard]] ChunkData generate(const glm::ivec3& sector) const noexcept override
     {
         const int32_t ssz = static_cast<int32_t>(m_chunk_size);
         std::vector<BlockType> tmp;
@@ -79,19 +127,9 @@ public:
             {
                 for (int32_t x = -1; x < ssz + 1; ++x)
                 {
-                    const glm::ivec3 loc{x, y, -z};
+                    const glm::ivec3 loc{x, y, z};
                     const glm::ivec3 cell = loc + sector * ssz;
-                    const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
-                    // const float terrain_height = cosf(nc.x * 1.f) * sinf(nc.z * 2.f) * static_cast<float>(m_ground_height);
-                    const float terrain_height = perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height);
-                    //const float terrain_height = cell.z;//static_cast<float>(m_ground_height);
-                    BlockType block = BlockType::Air;
-                     if (cell.y < 0)
-                         block = BlockType::Water;
-                    if (cell.y <= terrain_height)
-                        block = BlockType::Dirt;
-                    //const BlockType block = cell.y <= terrain_height ? BlockType::Dirt : BlockType::Air;
-                    tmp.emplace_back(block);
+                    tmp.emplace_back(peek(cell));
                 }
             }
         }

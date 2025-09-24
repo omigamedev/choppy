@@ -11,6 +11,7 @@ module;
 #define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #endif
 
+#include <unordered_map>
 #include <cstdio>
 #include <vector>
 #include <algorithm>
@@ -40,16 +41,25 @@ export namespace ce::xr
 {
 enum class TouchControllerButton : uint8_t
 {
-    Menu, View,
+    Menu, System,
     A, B, X, Y,
-    Up, Down, Left, Right,
-    ShoulderLeft, ShoulderRight,
     ThumbLeft, ThumbRight,
     EnumCount
 };
+constexpr auto TouchControllerButtonCount = std::to_underlying(TouchControllerButton::EnumCount);
+constexpr std::array TouchControllerButtonToPath {
+    std::pair{"button_menu", "/user/hand/left/input/menu/click"},
+    std::pair{"button_system", "/user/hand/right/input/system/click"},
+    std::pair{"button_a", "/user/hand/right/input/a/click"},
+    std::pair{"button_b", "/user/hand/right/input/b/click"},
+    std::pair{"button_x", "/user/hand/left/input/x/click"},
+    std::pair{"button_y", "/user/hand/left/input/y/click"},
+    std::pair{"button_thumb_left", "/user/hand/left/input/thumbstick/click"},
+    std::pair{"button_thumb_right", "/user/hand/right/input/thumbstick/click"},
+};
 struct TouchControllerState final
 {
-    std::array<bool, static_cast<size_t>(TouchControllerButton::EnumCount)> buttons{false};
+    std::array<bool, TouchControllerButtonCount> buttons{false};
     glm::vec2 thumbstick_left{};
     glm::vec2 thumbstick_right{};
     float trigger_left{0};
@@ -108,7 +118,7 @@ class Context final
 
     // Input bindings
     XrActionSet m_action_set = XR_NULL_HANDLE;
-    XrAction m_action_teleport = XR_NULL_HANDLE;
+    std::array<XrAction, TouchControllerButtonCount> m_action_buttons{XR_NULL_HANDLE};
     XrAction m_action_left_thumb = XR_NULL_HANDLE;
     XrAction m_action_right_thumb = XR_NULL_HANDLE;
     XrAction m_action_haptic = XR_NULL_HANDLE;
@@ -1498,7 +1508,6 @@ public:
     bool bind_input() noexcept
     {
         m_action_set = create_action_set("gameplay");
-        m_action_teleport = create_action("teleport", XR_ACTION_TYPE_BOOLEAN_INPUT);
         m_action_left_thumb = create_action("left_thumb", XR_ACTION_TYPE_VECTOR2F_INPUT);
         m_action_right_thumb = create_action("right_thumb", XR_ACTION_TYPE_VECTOR2F_INPUT);
         m_hands_path[0] = create_path("/user/hand/left");
@@ -1508,8 +1517,7 @@ public:
         m_hands_space[0] = create_action_space(m_action_pose, m_hands_path[0]);
         m_hands_space[1] = create_action_space(m_action_pose, m_hands_path[1]);
 
-        const std::array bindings{
-            XrActionSuggestedBinding{m_action_teleport, create_path("/user/hand/right/input/a/click")},
+        std::vector bindings{
             XrActionSuggestedBinding{m_action_left_thumb, create_path("/user/hand/left/input/thumbstick")},
             XrActionSuggestedBinding{m_action_right_thumb, create_path("/user/hand/right/input/thumbstick")},
             XrActionSuggestedBinding{m_action_haptic, create_path("/user/hand/right/output/haptic")},
@@ -1517,6 +1525,11 @@ public:
             XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/right/input/aim/pose")},
             XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/right/input/aim/pose")},
         };
+        for (size_t i = 0; i < TouchControllerButtonToPath.size(); ++i)
+        {
+            m_action_buttons[i] = create_action(TouchControllerButtonToPath[i].first, XR_ACTION_TYPE_BOOLEAN_INPUT);
+            bindings.emplace_back(m_action_buttons[i], create_path(TouchControllerButtonToPath[i].second));
+        }
 
         XrInteractionProfileSuggestedBinding suggestedBindings{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         suggestedBindings.interactionProfile = create_path("/interaction_profiles/oculus/touch_controller");
@@ -1541,7 +1554,7 @@ public:
 
         return true;
     }
-    bool sync_action_set(XrActionSet set) const noexcept
+    bool sync_action_set(const XrActionSet set) const noexcept
     {
         const XrActiveActionSet activeActionSet{set, XR_NULL_PATH};
         const XrActionsSyncInfo syncInfo{
@@ -1635,14 +1648,16 @@ public:
     bool sync_input() noexcept
     {
         ZoneScoped;
-        // sync action data
         sync_action_set(m_action_set);
 
-        const auto teleportState = action_state_boolean(m_action_teleport);
-        if (teleportState && teleportState.value().changedSinceLastSync && teleportState.value().currentState)
+        // NOT CORRECT TouchControllerButtonCount may not match m_action_buttons on other devices no Touch
+        for (size_t i = 0; i < TouchControllerButtonCount; ++i)
         {
-            LOGI("FIRE");
-            apply_haptic_feedback(m_action_haptic, m_hands_path[1]);
+            const auto button_state = action_state_boolean(m_action_buttons[i]);
+            if (button_state && button_state->changedSinceLastSync)
+            {
+                m_controller.buttons[i] = button_state->currentState;
+            }
         }
 
         return true;
