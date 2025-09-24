@@ -19,6 +19,7 @@ module;
 
 export module ce.app.cube;
 import ce.vk;
+import ce.vk.buffer;
 import ce.shaders.solidflat;
 
 export namespace ce::app

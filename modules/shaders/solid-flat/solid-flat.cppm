@@ -12,6 +12,7 @@ module;
 export module ce.shaders.solidflat;
 import ce.shaders;
 import ce.vk;
+import ce.vk.shader;
 import glm;
 
 export namespace ce::shaders

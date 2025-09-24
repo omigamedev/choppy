@@ -38,6 +38,8 @@ import ce.platform;
 import ce.platform.globals;
 import ce.xr;
 import ce.vk;
+import ce.vk.buffer;
+import ce.vk.shader;
 import ce.vk.utils;
 import ce.shaders.solidflat;
 import ce.app.grid;

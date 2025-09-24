@@ -3,6 +3,7 @@ module;
 #include <memory>
 #include <array>
 #include <volk.h>
+#include <vk_mem_alloc.h>
 
 #ifdef __ANDROID__
 #include <jni.h>
@@ -17,6 +18,7 @@ module;
 
 export module ce.app.grid;
 import ce.vk;
+import ce.vk.buffer;
 import ce.shaders.solidflat;
 
 export namespace ce::app

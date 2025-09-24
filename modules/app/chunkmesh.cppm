@@ -25,6 +25,7 @@ import ce.app.utils;
 import ce.app.chunkgen;
 import ce.shaders.solidflat;
 import ce.vk;
+import ce.vk.buffer;
 import glm;
 
 export namespace ce::app

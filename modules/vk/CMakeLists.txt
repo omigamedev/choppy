@@ -27,13 +27,12 @@ FetchContent_Declare(
     GIT_TAG 1d8f600fd424278486eade7ed3e877c99f0846b1) # v3.3.0
 FetchContent_MakeAvailable(VulkanMemoryAllocator)
 
-add_library(vk OBJECT)
+add_library(vk OBJECT vma.cpp)
 target_sources(vk PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES vk.cppm utils.cppm)
+    FILES vk.cppm utils.cppm buffer.cppm shader.cppm)
 target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator platform glmcppm Tracy::TracyClient)
-target_compile_definitions(vk PRIVATE VMA_IMPLEMENTATION)
 if(WIN32)
     target_compile_definitions(vk PUBLIC NOMINMAX)
 else()
