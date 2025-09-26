@@ -102,15 +102,19 @@ struct Texture
 };
 struct ChunksState
 {
+    VkDescriptorSet object_descriptor_set = VK_NULL_HANDLE;
+    VkDescriptorSet frame_descriptor_set = VK_NULL_HANDLE;
     //vk::BufferSuballocation vertex_buffer{};
     vk::BufferSuballocation uniform_buffer{};
     vk::BufferSuballocation args_buffer{};
+    uint32_t draw_count = 0;
 };
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
     std::shared_ptr<vk::Context> m_vk;
-    std::shared_ptr<shaders::SolidFlatShader> solid_flat;
+    std::shared_ptr<shaders::SolidFlatShader> shader_opaque;
+    std::shared_ptr<shaders::SolidFlatShader> shader_transparent;
     shaders::SolidFlatShader::PerFrameConstants uniform{};
 	siv::PerlinNoise perlin{ std::random_device{} };
     //std::shared_ptr<Grid> m_grid;
@@ -125,14 +129,11 @@ class AppBase final
     vk::Buffer m_vertex_buffer;
     vk::Buffer m_frame_buffer;
     vk::Buffer m_object_buffer;
-    VkDescriptorSet m_frame_descriptor_set = VK_NULL_HANDLE;
-    VkDescriptorSet m_object_descriptor_set = VK_NULL_HANDLE;
 
     Texture m_texture;
     VkSampler m_sampler = VK_NULL_HANDLE;
 
     vk::Buffer m_args_buffer;
-    uint32_t m_draw_count = 0;
     bool m_running = true;
     PlayerState m_player{};
     bool xrmode = false;
@@ -150,7 +151,7 @@ class AppBase final
     // std::vector<uint32_t> m_chunk_updates;
     TracyLockable(std::mutex, m_chunks_mutex);
     std::thread m_chunks_thread;
-    ChunksState m_chunks_state;
+    std::unordered_map<BlockType, ChunksState> m_chunks_state;
     std::vector<glm::ivec3> m_regenerate_sectors;
     bool needs_update = false;
 
@@ -164,8 +165,8 @@ public:
         }
         for (auto& c : m_chunks)
         {
-            if (!c.dirty && c.buffer.alloc)
-                m_vertex_buffer.subfree(c.buffer);
+            for (auto& [k, b] : c.buffer)
+                m_vertex_buffer.subfree(b);
         }
         if (m_chunks_thread.joinable())
             m_chunks_thread.join();
@@ -303,8 +304,10 @@ public:
             m_swapchain_count = m_vk->swapchain_count();
         }
 
-        solid_flat = std::make_shared<shaders::SolidFlatShader>(m_vk, "Test");
-        solid_flat->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 1);
+        shader_opaque = std::make_shared<shaders::SolidFlatShader>(m_vk, "Opaque");
+        shader_opaque->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, false, false);
+        shader_transparent = std::make_shared<shaders::SolidFlatShader>(m_vk, "Transparent");
+        shader_transparent->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, true, true);
 
         // Create the grid object
         //m_grid = std::make_shared<Grid>();
@@ -434,7 +437,13 @@ public:
         //    return false;
         //}
 
-        const auto neighbors = generate_neighbors(m_player.cam_sector, ChunkRings);
+        auto neighbors = generate_neighbors(m_player.cam_sector, ChunkRings);
+        std::ranges::sort(neighbors, [cur_sector](const glm::ivec3 a, const glm::ivec3 b)
+        {
+            const float dist1 = glm::gtx::distance2(glm::vec3(a), cur_sector);
+            const float dist2 = glm::gtx::distance2(glm::vec3(b), cur_sector);
+            return dist1 < dist2;
+        });
 
         std::vector<size_t> chunk_indices;
         chunk_indices.reserve(chunk_count);
@@ -491,16 +500,26 @@ public:
         ZoneScoped;
         //if (m_chunks_state.vertex_buffer.alloc)
         //    m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_vertex_buffer), m_chunks_state.vertex_buffer));
-        if (m_chunks_state.uniform_buffer.alloc)
-            m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_object_buffer), m_chunks_state.uniform_buffer));
-        if (m_chunks_state.args_buffer.alloc)
-            m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_args_buffer), m_chunks_state.args_buffer));
+        for (const auto& [k, state] : m_chunks_state)
+        {
+            if (state.uniform_buffer.alloc)
+                m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_object_buffer), state.uniform_buffer));
+            if (state.args_buffer.alloc)
+                m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_args_buffer), state.args_buffer));
+        }
+        m_chunks_state.clear();
     }
+    struct BatchDraw
+    {
+        std::vector<shaders::SolidFlatShader::PerObjectBuffer> ubo;
+        std::vector<VkDrawIndirectCommand> draw_args;
+        uint32_t draw_count = 0;
+    };
     void update_chunks(const vk::utils::FrameContext& frame) noexcept
     {
         ZoneScoped;
 
-        clear_chunks_state(frame.timeline_value);
+        std::lock_guard lock(m_chunks_mutex);
         auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
         {
             const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
@@ -508,102 +527,87 @@ public:
             return dist1 >= dist2;
         });
 
-        // std::ranges::sort(m_chunks, [this](const auto& c1, const auto& c2) -> bool
-        // {
-        //     const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
-        //     const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
-        //     return dist1 > dist2;
-        // });
-
-        //std::ranges::shuffle(m_chunks, std::mt19937{std::random_device{}()});
-
-        std::vector<shaders::SolidFlatShader::PerObjectBuffer> ubo;
-        ubo.reserve(m_chunks.size());
-        std::vector<VkDrawIndirectCommand> draw_args;
-        draw_args.reserve(m_chunks.size());
-        m_draw_count = 0;
-        uint32_t polys = 0;
-        std::lock_guard lock(m_chunks_mutex);
+        std::unordered_map<BlockType, BatchDraw> batches;
         for (auto& chunk : sorted_chunks)
         {
-            std::vector<shaders::SolidFlatShader::VertexInput> vbo;
             for (const auto& [k, m] : chunk.mesh)
             {
-                vbo.append_range(m.vertices);
-                polys += m.vertices.size();
-            }
-            if (vbo.empty())
-                continue;
-
-            if (chunk.dirty)
-            {
-                if (const auto sb = m_staging_buffer.suballoc(vbo.size() *
-                    sizeof(shaders::SolidFlatShader::VertexInput), 64))
+                if (m.vertices.empty())
                 {
-                    if (const auto dst_sb = m_vertex_buffer.suballoc(sb->size, 64))
-                    {
-                        std::ranges::copy(vbo, static_cast<shaders::SolidFlatShader::VertexInput*>(sb->ptr));
-                        m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
-                        //m_chunks_state.vertex_buffer = *dst_sb;
-
-                        if (chunk.buffer.alloc)
-                            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer));
-                        chunk.buffer = *dst_sb;
-                        chunk.dirty = false;
-                    }
-                    // defer suballocation deletion
-                    m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                    if (chunk.buffer[k].alloc)
+                        m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer[k]));
+                    chunk.buffer.erase(k);
+                    continue;
                 }
+                if (chunk.dirty)
+                {
+                    if (const auto sb = m_staging_buffer.suballoc(m.vertices.size() *
+                        sizeof(shaders::SolidFlatShader::VertexInput), 64))
+                    {
+                        if (const auto dst_sb = m_vertex_buffer.suballoc(sb->size, 64))
+                        {
+                            std::ranges::copy(m.vertices, static_cast<shaders::SolidFlatShader::VertexInput*>(sb->ptr));
+                            m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
+                            //m_chunks_state.vertex_buffer = *dst_sb;
+
+                            if (chunk.buffer[k].alloc)
+                                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer[k]));
+                            chunk.buffer[k] = *dst_sb;
+                        }
+                        // defer suballocation deletion
+                        m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                    }
+                }
+                batches[k].ubo.push_back({
+                    .ObjectTransform = glm::transpose(chunk.transform),
+                });
+                const auto vertex_offset = chunk.buffer[k].offset / sizeof(shaders::SolidFlatShader::VertexInput);
+                batches[k].draw_args.push_back({
+                    .vertexCount = static_cast<uint32_t>(m.vertices.size()),
+                    .instanceCount = 1,
+                    .firstVertex = static_cast<uint32_t>(vertex_offset),
+                    .firstInstance = 0
+                });
+                batches[k].draw_count++;
             }
-
-            m_draw_count++;
-
-            ubo.push_back({
-                .ObjectTransform = glm::transpose(chunk.transform),
-                .ObjectColor = glm::vec4(glm::vec3(chunk.color), 1.0f),
-                .selected = false,
-            });
-            const auto vertex_offset = chunk.buffer.offset / sizeof(shaders::SolidFlatShader::VertexInput);
-            draw_args.push_back({
-                .vertexCount = static_cast<uint32_t>(vbo.size()),
-                .instanceCount = 1,
-                .firstVertex = static_cast<uint32_t>(vertex_offset),
-                .firstInstance = 0
-            });
+            chunk.dirty = false;
         }
         //LOGI("drawing %d polys", polys / 3);
-        if (m_draw_count > 0)
+        clear_chunks_state(frame.timeline_value);
+        for (const auto& [k, batch] : batches)
         {
-            if (const auto sb = m_staging_buffer.suballoc(ubo.size() *
+            if (const auto sb = m_staging_buffer.suballoc(batch.ubo.size() *
                 sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64))
             {
                 if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
                 {
-                    std::ranges::copy(ubo, static_cast<shaders::SolidFlatShader::PerObjectBuffer*>(sb->ptr));
+                    std::ranges::copy(batch.ubo, static_cast<shaders::SolidFlatShader::PerObjectBuffer*>(sb->ptr));
                     m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
-                    m_chunks_state.uniform_buffer = *dst_sb;
+                    m_chunks_state[k].uniform_buffer = *dst_sb;
                 }
                 // defer suballocation deletion
                 m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
             }
 
-            if (const auto sb = m_staging_buffer.suballoc(draw_args.size() * sizeof(VkDrawIndirectCommand), 64))
+            if (const auto sb = m_staging_buffer.suballoc(batch.draw_args.size() * sizeof(VkDrawIndirectCommand), 64))
             {
                 if (const auto dst_sb = m_args_buffer.suballoc(sb->size, 64))
                 {
-                    std::ranges::copy(draw_args, static_cast<VkDrawIndirectCommand*>(sb->ptr));
+                    std::ranges::copy(batch.draw_args, static_cast<VkDrawIndirectCommand*>(sb->ptr));
                     m_copy_buffers.emplace_back(m_args_buffer, *sb, dst_sb->offset);
-                    m_chunks_state.args_buffer = *dst_sb;
+                    m_chunks_state[k].args_buffer = *dst_sb;
                 }
                 // defer suballocation deletion
                 m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
             }
+            m_chunks_state[k].draw_count = batch.draw_count;
         }
     }
     void update(const vk::utils::FrameContext& frame) noexcept
     {
         ZoneScoped;
-        solid_flat->reset_descriptors(frame.present_index);
+        shader_opaque->reset_descriptors(frame.present_index);
+        shader_transparent->reset_descriptors(frame.present_index);
 
         if (needs_update)
         {
@@ -624,27 +628,36 @@ public:
             std::copy_n(&per_frame_constants, 1, static_cast<shaders::SolidFlatShader::PerFrameConstants*>(sb->ptr));
             // defer copy
             m_copy_buffers.emplace_back(m_frame_buffer, *sb, dst_sb->offset);
-            if (const auto set = solid_flat->alloc_descriptor(frame.present_index, 0))
+            for (auto& [k, state] : m_chunks_state)
             {
-                m_frame_descriptor_set = *set;
-                solid_flat->write_buffer(*set, 0, m_frame_buffer.buffer(),
-                    dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                solid_flat->write_texture(*set, 1, m_texture.image_view, m_sampler);
+                const auto& shader = (k == BlockType::Water) ? shader_transparent : shader_opaque;
+                if (const auto set = shader->alloc_descriptor(frame.present_index, 0))
+                {
+                    state.frame_descriptor_set = *set;
+                    shader->write_buffer(*set, 0, m_frame_buffer.buffer(),
+                        dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                    shader->write_texture(*set, 1, m_texture.image_view, m_sampler);
+                }
             }
 
             // defer suballocation deletion
             m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
             m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_frame_buffer), *dst_sb));
         }
-        if (const auto set = solid_flat->alloc_descriptor(frame.present_index, 1))
+        for (auto& [k, state] : m_chunks_state)
         {
-            m_object_descriptor_set = *set;
-            solid_flat->write_buffer(*set, 0, m_object_buffer.buffer(),
-                m_chunks_state.uniform_buffer.offset, m_chunks_state.uniform_buffer.size,
-                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            const auto& shader = (k == BlockType::Water) ? shader_transparent : shader_opaque;
+            if (const auto set = shader->alloc_descriptor(frame.present_index, 1))
+            {
+                state.object_descriptor_set = *set;
+                shader->write_buffer(*set, 0, m_object_buffer.buffer(),
+                    state.uniform_buffer.offset, state.uniform_buffer.size,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            }
         }
 
-        solid_flat->update_descriptors();
+        shader_opaque->update_descriptors();
+        shader_transparent->update_descriptors();
     }
     void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) noexcept
     {
@@ -660,19 +673,24 @@ public:
 
         {
             TracyVkZone(m_vk->tracy(), cmd, "Copy Barrier");
-            const VkBufferMemoryBarrier barrier{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .buffer = m_args_buffer.buffer(),
-                .offset = m_chunks_state.args_buffer.offset,
-                .size = m_chunks_state.args_buffer.size,
-            };
+            std::vector<VkBufferMemoryBarrier> barriers;
+            barriers.reserve(m_chunks_state.size());
+            for (const auto& [k, state] : m_chunks_state)
+            {
+                barriers.push_back({
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .buffer = m_args_buffer.buffer(),
+                    .offset = state.args_buffer.offset,
+                    .size = state.args_buffer.size,
+                });
+            }
 
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-                0, 0, nullptr, 1, &barrier, 0, nullptr);
+                0, 0, nullptr, static_cast<uint32_t>(barriers.size()), barriers.data(), 0, nullptr);
         }
 
         char zone_name[64];
@@ -723,8 +741,6 @@ public:
             vkCmdSetScissorWithCount(cmd, 1, &scissor);
         }
 
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, solid_flat->pipeline());
-
         // {
         //     const std::array vertex_buffers{m_vertex_buffer->buffer()};
         //     constexpr std::array vertex_buffers_offset{VkDeviceSize{0}};
@@ -751,19 +767,25 @@ public:
         // }
 
         // std::lock_guard lock(m_chunks_mutex);
-        if (!m_chunks.empty())
+        const std::vector layers{
+            std::pair(shader_opaque, m_chunks_state[BlockType::Dirt]),
+            std::pair(shader_transparent, m_chunks_state[BlockType::Water]),
+        };
+        for (const auto& [shader, state] : layers)
         {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader->pipeline());
+
             const std::array vertex_buffers{m_vertex_buffer.buffer()};
             const std::array vertex_buffers_offset{VkDeviceSize{0ull}};
             vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                 vertex_buffers.data(), vertex_buffers_offset.data());
 
-            const std::array sets{m_frame_descriptor_set, m_object_descriptor_set};
+            const std::array sets{state.frame_descriptor_set, state.object_descriptor_set};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                solid_flat->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+                shader->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
             vkCmdDrawIndirect(cmd, m_args_buffer.buffer(),
-                m_chunks_state.args_buffer.offset, m_draw_count, sizeof(VkDrawIndirectCommand));
+                state.args_buffer.offset, state.draw_count, sizeof(VkDrawIndirectCommand));
         }
 
         /*

@@ -9,18 +9,6 @@ struct alignas(64) PerFrameConstants
 struct alignas(16) PerObjectBuffer
 {
     float4x4 ObjectTransform;
-    float4 ObjectColor;
-    bool selected;
-};
-
-struct PushBuffer
-{
-    uint DrawIndex;
-};
-
-struct PerObjectArgs
-{
-    uint ObjectIndex;
 };
 
 struct VertexInput

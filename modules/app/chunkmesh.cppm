@@ -5,6 +5,7 @@ module;
 #include <vector>
 #include <memory>
 #include <span>
+#include <unordered_map>
 #include <volk.h>
 
 #include "glm/gtx/compatibility.hpp"
@@ -40,7 +41,6 @@ template<VertexType T>
 struct ChunkMesh final
 {
     using VertexType = T;
-    std::vector<uint32_t> indices;
     std::vector<VertexType> vertices;
 };
 template<VertexType T>
@@ -48,7 +48,7 @@ class ChunkMesher
 {
 public:
     virtual ~ChunkMesher() = default;
-    [[nodiscard]] virtual std::map<BlockType, ChunkMesh<T>> mesh(
+    [[nodiscard]] virtual std::unordered_map<BlockType, ChunkMesh<T>> mesh(
         const ChunkData& data, const float block_size) const noexcept = 0;
 };
 
@@ -61,7 +61,7 @@ template<VertexType T>
 class SimpleMesher final : public ChunkMesher<T>
 {
 public:
-    [[nodiscard]] std::map<BlockType, ChunkMesh<T>> mesh(
+    [[nodiscard]] std::unordered_map<BlockType, ChunkMesh<T>> mesh(
         const ChunkData& data, const float block_size) const noexcept override
     {
         const uint32_t size = data.size;
@@ -88,7 +88,7 @@ public:
         if (vertices.empty())
             return {};
 
-        std::map<BlockType, ChunkMesh<T>> meshes;
+        std::unordered_map<BlockType, ChunkMesh<T>> meshes;
         for (uint32_t y = 0; y < size; ++y)
         {
             for (uint32_t z = 0; z < size; ++z)
@@ -118,19 +118,9 @@ public:
                     const uint32_t VH = VE + 1;
 
                     glm::vec4 CA{ 0, .5, 0, 1};
-                    glm::vec4 CB{ 0,  0, 1, 1};
+                    glm::vec4 CB{ 0,  0, 0, 1};
                     glm::vec4 CC{.5,  0, 0, 1};
                     glm::vec4 CD{.5, .5, 0, 1};
-
-                    if (data.blocks[idx].type == BlockType::Water)
-                    {
-                        const float surface_y = vertices[VA].position.y + data.sector.y;
-                        const float b = glm::saturate(-surface_y / 0.5f);
-                        constexpr glm::vec3 top{5.f / 255.f, 113.f / 255.f, 1.f};
-                        constexpr glm::vec3 bottom{0.f, 19.f / 255.f, 61.f / 255.f};
-                        const glm::vec3 color = glm::gtc::lerp(top, bottom, b);
-                        //CA = CB = CC = CD = glm::vec4(color, 0.5f);
-                    }
 
                     if (data.blocks[idx].face_mask & Block::Mask::B)
                     {
@@ -154,10 +144,10 @@ public:
                     {
                         if (data.blocks[idx].type == BlockType::Water)
                         {
-                            auto CA = glm::vec4{ 0,  1, 0, 1};
-                            auto CB = glm::vec4{ 0, .5, 1, 1};
-                            auto CC = glm::vec4{.5, .5, 0, 1};
-                            auto CD = glm::vec4{.5,  1, 0, 1};
+                            auto CA = glm::vec4{ 0,  1, 0, 0.5f};
+                            auto CB = glm::vec4{ 0, .5, 0, 0.5f};
+                            auto CC = glm::vec4{.5, .5, 0, 0.5f};
+                            auto CD = glm::vec4{.5,  1, 0, 0.5f};
                             m.vertices.emplace_back(vertices[VE].position - glm::vec4(0, .1, 0, 0), CA);
                             m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
                             m.vertices.emplace_back(vertices[VF].position - glm::vec4(0, .1, 0, 0), CB);
@@ -219,8 +209,8 @@ struct Chunk final
     glm::mat4 transform{};
     glm::vec4 color{};
     glm::ivec3 sector{};
-    std::map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> mesh;
-    vk::BufferSuballocation buffer{};
+    std::unordered_map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> mesh;
+    std::unordered_map<BlockType, vk::BufferSuballocation> buffer{};
     bool dirty = false;
     //uint32_t size = 0;
     //uint32_t height = 0;
