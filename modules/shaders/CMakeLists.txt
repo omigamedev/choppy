@@ -26,6 +26,7 @@ endif()
 set(SHADER_METADATA_LIST)
 set(SHADER_MODULES_LIST)
 add_subdirectory(solid-flat)
+add_subdirectory(solid-color)
 
 # A list to hold all the files we will generate.
 set(HLSL_GENERATED_FILES)

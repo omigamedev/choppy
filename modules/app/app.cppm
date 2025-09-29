@@ -42,6 +42,7 @@ import ce.vk.buffer;
 import ce.vk.shader;
 import ce.vk.utils;
 import ce.shaders.solidflat;
+import ce.shaders.solidcolor;
 import ce.app.grid;
 import ce.app.cube;
 import ce.app.utils;
@@ -103,11 +104,17 @@ struct Texture
 struct ChunksState
 {
     VkDescriptorSet object_descriptor_set = VK_NULL_HANDLE;
-    VkDescriptorSet frame_descriptor_set = VK_NULL_HANDLE;
     //vk::BufferSuballocation vertex_buffer{};
     vk::BufferSuballocation uniform_buffer{};
     vk::BufferSuballocation args_buffer{};
     uint32_t draw_count = 0;
+};
+struct Geometry
+{
+    VkDescriptorSet object_descriptor_set = VK_NULL_HANDLE;
+    vk::BufferSuballocation vertex_buffer{};
+    vk::BufferSuballocation uniform_buffer{};
+    uint32_t vertex_count = 0;
 };
 class AppBase final
 {
@@ -115,9 +122,9 @@ class AppBase final
     std::shared_ptr<vk::Context> m_vk;
     std::shared_ptr<shaders::SolidFlatShader> shader_opaque;
     std::shared_ptr<shaders::SolidFlatShader> shader_transparent;
+    std::shared_ptr<shaders::SolidColorShader> shader_color;
     shaders::SolidFlatShader::PerFrameConstants uniform{};
 	siv::PerlinNoise perlin{ std::random_device{} };
-    //std::shared_ptr<Grid> m_grid;
     std::vector<Chunk> m_chunks;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
@@ -133,6 +140,12 @@ class AppBase final
     Texture m_texture;
     VkSampler m_sampler = VK_NULL_HANDLE;
 
+    Geometry m_cube{};
+    vk::BufferSuballocation shader_flat_frame{};
+    vk::BufferSuballocation shader_color_frame{};
+    VkDescriptorSet shader_flat_frame_set = VK_NULL_HANDLE;
+    VkDescriptorSet shader_color_frame_set = VK_NULL_HANDLE;
+
     vk::Buffer m_args_buffer;
     bool m_running = true;
     PlayerState m_player{};
@@ -144,7 +157,7 @@ class AppBase final
     static constexpr float BlockSize = 0.5f;
     // Number of blocks per chunk
     static constexpr uint32_t ChunkSize = 32;
-    static constexpr uint32_t ChunkRings = 4;
+    static constexpr uint32_t ChunkRings = 8;
 
     FlatGenerator generator{ChunkSize, 20};
     SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
@@ -153,7 +166,7 @@ class AppBase final
     std::thread m_chunks_thread;
     std::unordered_map<BlockType, ChunksState> m_chunks_state;
     std::vector<glm::ivec3> m_regenerate_sectors;
-    bool needs_update = false;
+    std::atomic_bool needs_update = false;
 
 public:
     ~AppBase()
@@ -308,6 +321,8 @@ public:
         shader_opaque->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, false, false);
         shader_transparent = std::make_shared<shaders::SolidFlatShader>(m_vk, "Transparent");
         shader_transparent->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, true, true);
+        shader_color = std::make_shared<shaders::SolidColorShader>(m_vk, "Color");
+        shader_color->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, true, false);
 
         // Create the grid object
         //m_grid = std::make_shared<Grid>();
@@ -323,7 +338,7 @@ public:
         }
 
         m_frame_buffer = vk::Buffer(m_vk, "ChunksPerFrameBuffer");
-        if (!m_frame_buffer.create(sizeof(shaders::SolidFlatShader::PerFrameConstants) * m_swapchain_count * 2,
+        if (!m_frame_buffer.create(sizeof(shaders::SolidFlatShader::PerFrameConstants) * 100,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
         {
@@ -354,6 +369,8 @@ public:
         {
             LOGE("Failed to create cube vertex buffer");
         }
+
+        m_cube = create_cube();
 
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             if (xrmode)
@@ -392,12 +409,83 @@ public:
         }
         m_chunks_thread = std::thread(&AppBase::generate_thread, this);
     }
+    Geometry create_cube() noexcept
+    {
+        Geometry cube;
+        // Define the 8 vertices of the cube with unique colors for interpolation
+        constexpr std::array<shaders::SolidColorShader::VertexInput, 8> points = {{
+            // {position},
+            {{0, 0, 1, 1.0f}}, // 0: Front-Bottom-Left,  Red
+            {{1, 0, 1, 1.0f}}, // 1: Front-Bottom-Right, Green
+            {{1, 1, 1, 1.0f}}, // 2: Front-Top-Right,    Blue
+            {{0, 1, 1, 1.0f}}, // 3: Front-Top-Left,     Yellow
+            {{0, 0, 0, 1.0f}}, // 4: Back-Bottom-Left,   Magenta
+            {{1, 0, 0, 1.0f}}, // 5: Back-Bottom-Right,  Cyan
+            {{1, 1, 0, 1.0f}}, // 6: Back-Top-Right,     White
+            {{0, 1, 0, 1.0f}}, // 7: Back-Top-Left,      Gray
+        }};
+
+        // Define the 36 indices for the 12 triangles of the cube
+        constexpr std::array<uint32_t, 36> indices = {
+            // Front face (+Z)
+            0, 1, 2,   2, 3, 0,
+            // Back face (-Z)
+            4, 7, 6,   6, 5, 4,
+            // Top face (+Y)
+            3, 2, 6,   6, 7, 3,
+            // Bottom face (-Y)
+            4, 5, 1,   1, 0, 4,
+            // Right face (+X)
+            1, 5, 6,   6, 2, 1,
+            // Left face (-X)
+            4, 0, 3,   3, 7, 4,
+        };
+
+        std::vector<shaders::SolidColorShader::VertexInput> vertices;
+        vertices.reserve(indices.size() * 3);
+        for (const auto i : indices)
+        {
+            vertices.emplace_back(points[i]);
+        }
+        cube.vertex_count = static_cast<uint32_t>(vertices.size());
+
+        constexpr shaders::SolidColorShader::PerObjectBuffer ubo{
+            .ObjectTransform = glm::gtc::identity<glm::mat4>(),
+            .Color = {1, 0, 0, 1}
+        };
+
+        if (const auto sb = m_staging_buffer.suballoc(vertices.size() *
+            sizeof(shaders::SolidColorShader::VertexInput), 64))
+        {
+            if (const auto dst_sb = m_vertex_buffer.suballoc(sb->size, 64))
+            {
+                std::ranges::copy(vertices, static_cast<shaders::SolidColorShader::VertexInput*>(sb->ptr));
+                m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
+                cube.vertex_buffer = *dst_sb;
+            }
+            // defer suballocation deletion
+            m_delete_buffers.emplace(1, std::pair(std::ref(m_staging_buffer), *sb));
+        }
+        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+        {
+            if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
+            {
+                *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = ubo;
+                m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
+                cube.uniform_buffer = *dst_sb;
+            }
+            // defer suballocation deletion
+            m_delete_buffers.emplace(1, std::pair(std::ref(m_staging_buffer), *sb));
+        }
+        return cube;
+    }
     void generate_thread() noexcept
     {
         tracy::SetThreadName("generate_thread");
         while (m_running)
         {
-            needs_update |= generate_chunks();
+            if (generate_chunks())
+                needs_update.store(true);
         }
     }
     [[nodiscard]] std::vector<glm::ivec3> generate_neighbors(const glm::ivec3 origin, const int32_t size) const noexcept
@@ -422,20 +510,9 @@ public:
     }
     [[nodiscard]] bool generate_chunks() noexcept
     {
-        ZoneScoped;
         constexpr uint32_t chunk_count = (ChunkRings * 2 + 1) * (ChunkRings * 2 + 1) * (3);
 
         const glm::vec3 cur_sector = glm::floor(m_player.cam_pos / (ChunkSize * BlockSize));
-        //const glm::vec3 dist = glm::abs(cur_sector - glm::vec3(m_player.cam_sector));
-        if (m_chunks.size() < chunk_count || glm::any(glm::notEqual(m_player.cam_sector, glm::ivec3(glm::floor(cur_sector)))))// || dist.x > .6 || dist.y > .6 || dist.z > .6)
-        {
-            m_player.cam_sector = cur_sector;
-            LOGI("travel to sector [%d, %d, %d]", m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
-        }
-        //else
-        //{
-        //    return false;
-        //}
 
         auto neighbors = generate_neighbors(m_player.cam_sector, ChunkRings);
         std::ranges::sort(neighbors, [cur_sector](const glm::ivec3 a, const glm::ivec3 b)
@@ -455,7 +532,29 @@ public:
             }
         }
 
+        //const glm::vec3 dist = glm::abs(cur_sector - glm::vec3(m_player.cam_sector));
+        if (m_chunks.size() < chunk_count || !chunk_indices.empty() || m_player.cam_sector != glm::ivec3(glm::floor(cur_sector)))
+        {
+            m_player.cam_sector = cur_sector;
+            if (m_chunks.size() < chunk_count)
+            {
+                LOGI("Loading world: %d%%", static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
+            }
+            else
+            {
+                LOGI("travel to sector [%d, %d, %d]",
+                    m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
+            }
+        }
+        else
+        {
+            return false;
+        }
+        ZoneScoped;
+
         size_t chunk_indices_offset = 0;
+        uint32_t chunks_to_generate = 8;
+        std::lock_guard lock(m_chunks_mutex);
         for (const auto& sector : neighbors)
         {
             // check if it's already present
@@ -468,7 +567,6 @@ public:
             {
                 const auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                std::lock_guard lock(m_chunks_mutex);
                 // m_chunk_updates.emplace_back(m_chunks.size());
                 auto& chunk = m_chunks.emplace_back();
                 chunk.mesh = std::move(chunk_data);
@@ -476,21 +574,24 @@ public:
                 chunk.sector = sector;
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
                 chunk.dirty = true;
-                break;
+                needs_update = true;
+                if (!--chunks_to_generate)
+                    break;
             }
             else if (!chunk_indices.empty())
             {
                 const auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
                 const uint32_t chunk_index = chunk_indices[chunk_indices_offset++];
-                std::lock_guard lock(m_chunks_mutex);
                 auto& chunk = m_chunks[chunk_index];
                 chunk.mesh = std::move(chunk_data);
                 chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 chunk.sector = sector;
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
                 chunk.dirty = true;
-                break;
+                needs_update = true;
+                if (!--chunks_to_generate)
+                    break;
             }
         }
         return true;
@@ -519,12 +620,15 @@ public:
     {
         ZoneScoped;
 
-        std::lock_guard lock(m_chunks_mutex);
+        std::unique_lock lock(m_chunks_mutex, std::try_to_lock);
+        if (!lock.owns_lock())
+            return;
+
         auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
         {
             const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
             const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
-            return dist1 >= dist2;
+            return dist1 < dist2;
         });
 
         std::unordered_map<BlockType, BatchDraw> batches;
@@ -602,48 +706,64 @@ public:
             }
             m_chunks_state[k].draw_count = batch.draw_count;
         }
+        needs_update = false;
     }
-    void update(const vk::utils::FrameContext& frame) noexcept
+    void update(const vk::utils::FrameContext& frame, glm::mat4 view) noexcept
     {
         ZoneScoped;
         shader_opaque->reset_descriptors(frame.present_index);
         shader_transparent->reset_descriptors(frame.present_index);
+        shader_color->reset_descriptors(frame.present_index);
 
-        if (needs_update)
-        {
-            update_chunks(frame);
-            needs_update = false;
-        }
+        update_chunks(frame);
 
-        const auto per_frame_constants = shaders::SolidFlatShader::PerFrameConstants{
-            .ViewProjection = {
-                glm::transpose(frame.projection[0] * frame.view[0]),
-                glm::transpose(frame.projection[1] * frame.view[1]),
-            }
-        };
-
-        if (const auto sb = m_staging_buffer.suballoc(sizeof(per_frame_constants), 64))
+        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidFlatShader::PerFrameConstants), 64))
         {
             const auto dst_sb = m_frame_buffer.suballoc(sb->size, 64);
-            std::copy_n(&per_frame_constants, 1, static_cast<shaders::SolidFlatShader::PerFrameConstants*>(sb->ptr));
+            *static_cast<shaders::SolidFlatShader::PerFrameConstants*>(sb->ptr) = {
+                .ViewProjection = {
+                    glm::transpose(frame.projection[0] * frame.view[0]),
+                    glm::transpose(frame.projection[1] * frame.view[1]),
+                }
+            };
             // defer copy
             m_copy_buffers.emplace_back(m_frame_buffer, *sb, dst_sb->offset);
-            for (auto& [k, state] : m_chunks_state)
-            {
-                const auto& shader = (k == BlockType::Water) ? shader_transparent : shader_opaque;
-                if (const auto set = shader->alloc_descriptor(frame.present_index, 0))
-                {
-                    state.frame_descriptor_set = *set;
-                    shader->write_buffer(*set, 0, m_frame_buffer.buffer(),
-                        dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                    shader->write_texture(*set, 1, m_texture.image_view, m_sampler);
-                }
-            }
-
+            shader_flat_frame = *dst_sb;
             // defer suballocation deletion
             m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
             m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_frame_buffer), *dst_sb));
+            if (const auto set = shader_opaque->alloc_descriptor(frame.present_index, 0))
+            {
+                shader_flat_frame_set = *set;
+                shader_opaque->write_buffer(*set, 0, m_frame_buffer.buffer(),
+                    dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                shader_opaque->write_texture(*set, 1, m_texture.image_view, m_sampler);
+            }
         }
+
+        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerFrameConstants), 64))
+        {
+            const auto dst_sb = m_frame_buffer.suballoc(sb->size, 64);
+            *static_cast<shaders::SolidColorShader::PerFrameConstants*>(sb->ptr) = {
+                .ViewProjection = {
+                    glm::transpose(frame.projection[0] * frame.view[0]),
+                    glm::transpose(frame.projection[1] * frame.view[1]),
+                }
+            };
+            // defer copy
+            m_copy_buffers.emplace_back(m_frame_buffer, *sb, dst_sb->offset);
+            shader_color_frame = *dst_sb;
+            // defer suballocation deletion
+            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_frame_buffer), *dst_sb));
+            if (const auto set = shader_color->alloc_descriptor(frame.present_index, 0))
+            {
+                shader_color_frame_set = *set;
+                shader_color->write_buffer(*set, 0, m_frame_buffer.buffer(),
+                    dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            }
+        }
+
         for (auto& [k, state] : m_chunks_state)
         {
             const auto& shader = (k == BlockType::Water) ? shader_transparent : shader_opaque;
@@ -656,8 +776,45 @@ public:
             }
         }
 
+        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+        {
+            if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
+            {
+                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
+                if (auto hit = build_block_cell(m_player.cam_pos, forward))
+                {
+                    *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                        .ObjectTransform = glm::transpose(
+                            glm::gtc::translate(glm::vec3(*hit) * BlockSize) * glm::gtx::scale(glm::vec3(BlockSize))),
+                        .Color = {.1, .1, .1, 1}
+                    };
+                    // LOGI("hit: [%d, %d, %d]", hit->x, hit->y, hit->z);
+                }
+                else
+                {
+                    *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                        .ObjectTransform = glm::gtc::identity<glm::mat4>(),
+                        .Color = {0, 0, 0, 1}
+                    };
+                }
+                m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
+                m_cube.uniform_buffer = *dst_sb;
+                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_object_buffer), *dst_sb));
+            }
+            // defer suballocation deletion
+            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+        }
+        if (const auto set = shader_color->alloc_descriptor(frame.present_index, 1))
+        {
+            m_cube.object_descriptor_set = *set;
+            shader_color->write_buffer(*set, 0, m_object_buffer.buffer(),
+                m_cube.uniform_buffer.offset, m_cube.uniform_buffer.size,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        }
+
         shader_opaque->update_descriptors();
         shader_transparent->update_descriptors();
+        shader_color->update_descriptors();
     }
     void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) noexcept
     {
@@ -767,25 +924,44 @@ public:
         // }
 
         // std::lock_guard lock(m_chunks_mutex);
-        const std::vector layers{
-            std::pair(shader_opaque, m_chunks_state[BlockType::Dirt]),
-            std::pair(shader_transparent, m_chunks_state[BlockType::Water]),
-        };
-        for (const auto& [shader, state] : layers)
+        if (m_chunks_state.size() > 1)
         {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader->pipeline());
+            const std::vector layers{
+                std::pair(shader_opaque, m_chunks_state[BlockType::Dirt]),
+                std::pair(shader_transparent, m_chunks_state[BlockType::Water]),
+            };
+            for (const auto& [shader, state] : layers)
+            {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader->pipeline());
+
+                const std::array vertex_buffers{m_vertex_buffer.buffer()};
+                const std::array vertex_buffers_offset{VkDeviceSize{0ull}};
+                vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
+                    vertex_buffers.data(), vertex_buffers_offset.data());
+
+                const std::array sets{shader_flat_frame_set, state.object_descriptor_set};
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    shader->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+
+                vkCmdDrawIndirect(cmd, m_args_buffer.buffer(),
+                    state.args_buffer.offset, state.draw_count, sizeof(VkDrawIndirectCommand));
+            }
+        }
+
+        // draw cube
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader_color->pipeline());
 
             const std::array vertex_buffers{m_vertex_buffer.buffer()};
-            const std::array vertex_buffers_offset{VkDeviceSize{0ull}};
+            const std::array vertex_buffers_offset{m_cube.vertex_buffer.offset};
             vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                 vertex_buffers.data(), vertex_buffers_offset.data());
 
-            const std::array sets{state.frame_descriptor_set, state.object_descriptor_set};
+            const std::array sets{shader_color_frame_set, m_cube.object_descriptor_set};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                shader->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+                shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
-            vkCmdDrawIndirect(cmd, m_args_buffer.buffer(),
-                state.args_buffer.offset, state.draw_count, sizeof(VkDrawIndirectCommand));
+            vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
         }
 
         /*
@@ -863,16 +1039,128 @@ public:
         }
         return std::nullopt;
     }
+    [[nodiscard]] std::optional<std::tuple<glm::ivec3, BlockType, glm::vec3, glm::ivec3>> trace_dda(const glm::vec3& origin,
+        const glm::vec3& direction, const float dist, const auto hit_test) const noexcept
+        requires std::invocable<decltype(hit_test), const BlockType> &&
+             std::same_as<std::invoke_result_t<decltype(hit_test), const BlockType>, bool>
+    {
+        const auto hits = traverse_3d_dda(origin, direction, glm::vec3(0), dist);
+        for (const auto& [cell, t, n] : hits)
+        {
+            const BlockType b = generator.peek(cell);
+            if (hit_test(b))
+            {
+                return std::tuple(cell, b, origin + t * direction, n);
+            }
+        }
+        return std::nullopt;
+    }
+    std::vector<std::tuple<glm::ivec3, float, glm::ivec3>> traverse_3d_dda(const glm::vec3& origin,
+        const glm::vec3& direction, const glm::vec3& grid_origin_reference, const float max_t) const noexcept
+    {
+        std::vector<std::tuple<glm::ivec3, float, glm::ivec3>> traversed_voxels;
+        // Grid coordinate of the ray's origin relative to the grid reference (0,0,0)
+        const glm::vec3 relative_origin = origin - grid_origin_reference;
+
+        // Direction sign for stepping (+1 or -1)
+        const glm::ivec3 step{
+            (direction.x >= 0.0f) ? 1 : -1,
+            (direction.y >= 0.0f) ? 1 : -1,
+            (direction.z >= 0.0f) ? 1 : -1,
+        };
+
+        constexpr float infinity = std::numeric_limits<float>::max();
+        const glm::vec3 t_delta{
+            (glm::abs(direction.x) < 1e-6f) ? infinity : BlockSize / glm::abs(direction.x),
+            (glm::abs(direction.y) < 1e-6f) ? infinity : BlockSize / glm::abs(direction.y),
+            (glm::abs(direction.z) < 1e-6f) ? infinity : BlockSize / glm::abs(direction.z),
+        };
+
+        // Helper lambda to calculate initial t_max for one axis
+        const auto calculate_initial_t = [&](const float origin_comp,
+            const float direction_comp, const int step_comp, const float grid_ref_comp) -> float
+        {
+            if (glm::abs(direction_comp) < 1e-6f) return max_t;
+
+            const float rel_origin_comp = origin_comp - grid_ref_comp;
+            const float cell_start = glm::floor(rel_origin_comp / BlockSize) * BlockSize;
+            // Next boundary world coordinate
+            const float boundary = (step_comp > 0) ? (cell_start + BlockSize) : cell_start;
+            const float t = (boundary - rel_origin_comp) / direction_comp;
+            // Correction for starting exactly on a boundary
+            if (t < 1e-6f && step_comp < 0)
+            {
+                return BlockSize / glm::abs(direction_comp);
+            }
+            return glm::max(t, 0.0f);
+        };
+
+        // Calculate initial t_max for X, Y, Z
+        // t_max: parametric distance 't' to the first grid plane intersection for each axis
+        glm::vec3 t_max{
+            calculate_initial_t(origin.x, direction.x, step.x, grid_origin_reference.x),
+            calculate_initial_t(origin.y, direction.y, step.y, grid_origin_reference.y),
+            calculate_initial_t(origin.z, direction.z, step.z, grid_origin_reference.z),
+        };
+
+        glm::ivec3 current_cell = glm::ivec3(glm::floor(relative_origin / BlockSize));
+
+        // Initial cell is recorded at t=0 with a (0,0,0) normal (since no face was hit yet)
+        traversed_voxels.emplace_back(current_cell, 0.0f, glm::ivec3(0));
+
+        while (glm::gtx::compMin(t_max) < max_t)
+        {
+            glm::ivec3 normal(0); // Face normal for the plane being crossed
+            // Determine the axis (and thus the plane) that will be crossed next
+            if (t_max.x < t_max.y)
+            {
+                if (t_max.x < t_max.z)
+                {
+                    // X-axis is the shortest step
+                    current_cell.x += step.x;
+                    normal.x = -step.x; // Normal points opposite to the ray step direction
+                    traversed_voxels.emplace_back(current_cell, t_max.x, normal);
+                    t_max.x += t_delta.x;
+                }
+                else
+                {
+                    // Z-axis is the shortest step (or equal to X)
+                    current_cell.z += step.z;
+                    normal.z = -step.z;
+                    traversed_voxels.emplace_back(current_cell, t_max.z, normal);
+                    t_max.z += t_delta.z;
+                }
+            }
+            else
+            {
+                if (t_max.y < t_max.z)
+                {
+                    // Y-axis is the shortest step
+                    current_cell.y += step.y;
+                    normal.y = -step.y;
+                    traversed_voxels.emplace_back(current_cell, t_max.y, normal);
+                    t_max.y += t_delta.y;
+                }
+                else
+                {
+                    // Z-axis is the shortest step (or equal to Y)
+                    current_cell.z += step.z;
+                    normal.z = -step.z;
+                    traversed_voxels.emplace_back(current_cell, t_max.z, normal);
+                    t_max.z += t_delta.z;
+                }
+            }
+        }
+
+        return traversed_voxels;
+    }
     void break_block(const glm::vec3& origin, const glm::vec3& direction) noexcept
     {
-        constexpr float step = BlockSize / 2.f;
-        if (const auto hit = trace(origin, direction, 10.0f, step,
+        if (const auto hit = trace_dda(origin, direction, 10.0,
             [](const BlockType b){ return b != BlockType::Air && b != BlockType::Water; }))
         {
-            auto [cell, b, _] = hit.value();
+            const auto [cell, b, p, n] = hit.value();
             const glm::ivec3 sector = glm::floor(glm::vec3(cell) / static_cast<float>(ChunkSize));
-            LOGI("block type %s cell (%d, %d, %d) sector (%d, %d, %d)", to_string(b),
-                cell.x, cell.y, cell.z, sector.x, sector.y, sector.z);
             generator.edit(sector, cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Air);
             if (auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {
@@ -888,31 +1176,31 @@ public:
     }
     void build_block(const glm::vec3& origin, const glm::vec3& direction) noexcept
     {
-        constexpr float step = BlockSize / 2.f;
-        if (const auto hit = trace(origin, direction, 10.0f, step,
-            [](const BlockType b){ return b != BlockType::Air && b != BlockType::Water; }))
+        if (const auto cell = build_block_cell(origin, direction))
         {
-            auto [_, b, p] = hit.value();
-            if (const auto hit_air = trace(p, -direction, 1.0f, step,
-                [](const BlockType b){ return b == BlockType::Air || b == BlockType::Water; }))
+            const glm::ivec3 sector = glm::floor(glm::vec3(*cell) / static_cast<float>(ChunkSize));
+            generator.edit(sector, *cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
+            if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {
-                auto [cell, __, _] = hit_air.value();
-                const glm::ivec3 sector = glm::floor(glm::vec3(cell) / static_cast<float>(ChunkSize));
-                LOGI("block type %s cell (%d, %d, %d) sector (%d, %d, %d)", to_string(b),
-                    cell.x, cell.y, cell.z, sector.x, sector.y, sector.z);
-                generator.edit(sector, cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
-                if (auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
-                {
-                    const auto blocks_data = generator.generate(sector);
-                    auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                    std::lock_guard lock(m_chunks_mutex);
-                    it->mesh = std::move(chunk_data);
-                    it->sector = sector;
-                    it->dirty = true;
-                    needs_update = true;
-                }
+                const auto blocks_data = generator.generate(sector);
+                auto chunk_data = mesher.mesh(blocks_data, BlockSize);
+                std::lock_guard lock(m_chunks_mutex);
+                it->mesh = std::move(chunk_data);
+                it->sector = sector;
+                it->dirty = true;
+                needs_update = true;
             }
         }
+    }
+    std::optional<glm::ivec3> build_block_cell(const glm::vec3& origin, const glm::vec3& direction) const noexcept
+    {
+        if (const auto hit = trace_dda(origin, direction, 10.0,
+            [](const BlockType b){ return b != BlockType::Air && b != BlockType::Water; }))
+        {
+            const auto [_cell, b, p, n] = hit.value();
+            return _cell + n;
+        }
+        return std::nullopt;
     }
     void update_flying_camera_pos(const float dt, const GamepadState& gamepad,
         const xr::TouchControllerState& touch, const glm::mat4& view)
@@ -1020,7 +1308,7 @@ public:
                 update_flying_camera_pos(dt, gamepad, m_xr->touch_controllers(), head_rot * cam_rot);
                 for (uint32_t i = 0; i < 2; i++)
                     frame_fixed.view[i] = frame.view[i] * glm::inverse(cam_rot * glm::gtx::translate(m_player.cam_pos));
-                update(frame_fixed);
+                update(frame_fixed, head_rot * cam_rot);
             },
             [this, dt, &frame_fixed](const vk::utils::FrameContext& frame){
                 frame_fixed.cmd = frame.cmd;
@@ -1049,7 +1337,7 @@ public:
             frame_fixed.projection[0][1][1] *= -1.0f; // flip Y for Vulkan
             frame_fixed.view[0] = glm::inverse(glm::gtx::translate(m_player.cam_pos) * cam_rot);
 
-            update(frame_fixed);
+            update(frame_fixed, frame.view[0] * glm::inverse(cam_rot));
         },
         [this, dt, &frame_fixed](const vk::utils::FrameContext& frame)
         {

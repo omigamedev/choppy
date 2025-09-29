@@ -9,7 +9,7 @@ module;
 #include <vk_mem_alloc.h>
 #include <glm/gtx/compatibility.hpp>
 
-export module ce.shaders.solidflat;
+export module ce.shaders.solidcolor;
 import ce.shaders;
 import ce.vk;
 import ce.vk.shader;
@@ -17,10 +17,10 @@ import glm;
 
 export namespace ce::shaders
 {
-class SolidFlatShader final : public vk::ShaderModule
+class SolidColorShader final : public vk::ShaderModule
 {
 public:
-    #include "solid-flat.h"
+    #include "solid-color.h"
 private:
     bool create_layout()
     {
@@ -31,14 +31,6 @@ private:
                 .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 .descriptorCount = 1,
                 .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-                .pImmutableSamplers = nullptr
-            },
-            // texture + sampler
-            VkDescriptorSetLayoutBinding{
-                .binding = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
                 .pImmutableSamplers = nullptr
             },
             // uniforms (type.PerObjectBuffer)
@@ -55,7 +47,7 @@ private:
             VkDescriptorSetLayoutCreateInfo{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                 .flags = 0,
-                .bindingCount = 2,
+                .bindingCount = 1,
                 .pBindings = set_bindings.data()
             },
             // Per Object set
@@ -63,7 +55,7 @@ private:
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                 .flags = 0,
                 .bindingCount = 1,
-                .pBindings = set_bindings.data() + 2
+                .pBindings = set_bindings.data() + 1
             },
         };
         m_set_layouts.resize(2);
@@ -128,12 +120,6 @@ private:
                 .format = VK_FORMAT_R32G32B32A32_SFLOAT,
                 .offset = offsetof(VertexInput, position)
             },
-            VkVertexInputAttributeDescription{
-                .location = 1,
-                .binding = 0,
-                .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-                .offset = offsetof(VertexInput, color)
-            },
         };
         const VkPipelineVertexInputStateCreateInfo input{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -150,39 +136,32 @@ private:
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
         };
         const VkCullModeFlags cull_mode = double_sided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
-        VkPipelineRasterizationStateCreateInfo rasterization{
+        const VkPipelineRasterizationStateCreateInfo rasterization{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
             .polygonMode = VK_POLYGON_MODE_FILL,
             .cullMode = cull_mode,
             .frontFace = VK_FRONT_FACE_CLOCKWISE,
             .lineWidth = 1,
         };
-        if (enable_blending)
-        {
-            rasterization.depthBiasEnable = true;
-            rasterization.depthBiasConstantFactor = 1;
-            rasterization.depthBiasClamp = 0;
-            rasterization.depthBiasSlopeFactor = -1;
-        }
         const VkPipelineMultisampleStateCreateInfo multisample{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .rasterizationSamples = sample_count,
             .sampleShadingEnable = false
         };
-        const VkPipelineDepthStencilStateCreateInfo depth{
+        constexpr VkPipelineDepthStencilStateCreateInfo depth{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-            .depthTestEnable = true,
-            .depthWriteEnable = !enable_blending,
-            .depthCompareOp = VK_COMPARE_OP_LESS,
+            .depthTestEnable = false,
+            .depthWriteEnable = false,
+            .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
             .stencilTestEnable = false,
         };
         const VkPipelineColorBlendAttachmentState blend_color{
             .blendEnable = enable_blending,
-            .srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR,
-            .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
             .colorBlendOp = VK_BLEND_OP_ADD,
             .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
             .alphaBlendOp = VK_BLEND_OP_ADD,
             .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
@@ -233,7 +212,6 @@ private:
         {
             const std::array descr_pool_sizes{
                 VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, frame_sets },
-                VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, frame_sets },
                 VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, object_sets },
             };
             const VkDescriptorPoolCreateInfo descr_pool_info{
@@ -252,13 +230,13 @@ private:
         return true;
     }
 public:
-    explicit SolidFlatShader(const std::shared_ptr<vk::Context>& vk, const std::string_view name)
-        : ShaderModule(vk, std::format("SolidFlat-{}", name)) { }
-    ~SolidFlatShader() noexcept override = default;
+    explicit SolidColorShader(const std::shared_ptr<vk::Context>& vk, const std::string_view name)
+        : ShaderModule(vk, std::format("SolidColor-{}", name)) { }
+    ~SolidColorShader() noexcept override = default;
     bool create(VkRenderPass renderpass, const uint32_t pools_count, const VkSampleCountFlagBits sample_count,
         const uint32_t frame_sets, const uint32_t object_sets, const bool enable_blending, const bool double_sided) noexcept
     {
-        if (!load_from_file("assets/shaders/solid-flat-vs.spv", "assets/shaders/solid-flat-ps.spv") ||
+        if (!load_from_file("assets/shaders/solid-color-vs.spv", "assets/shaders/solid-color-ps.spv") ||
             !create_layout() || !create_pipeline(renderpass, sample_count, enable_blending, double_sided) ||
             !create_pools(pools_count, frame_sets, object_sets))
         {

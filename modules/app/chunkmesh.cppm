@@ -144,10 +144,10 @@ public:
                     {
                         if (data.blocks[idx].type == BlockType::Water)
                         {
-                            auto CA = glm::vec4{ 0,  1, 0, 0.5f};
-                            auto CB = glm::vec4{ 0, .5, 0, 0.5f};
-                            auto CC = glm::vec4{.5, .5, 0, 0.5f};
-                            auto CD = glm::vec4{.5,  1, 0, 0.5f};
+                            auto CA = glm::vec4{ 0,  1, 0, 0.1f};
+                            auto CB = glm::vec4{ 0, .5, 0, 0.1f};
+                            auto CC = glm::vec4{.5, .5, 0, 0.1f};
+                            auto CD = glm::vec4{.5,  1, 0, 0.1f};
                             m.vertices.emplace_back(vertices[VE].position - glm::vec4(0, .1, 0, 0), CA);
                             m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
                             m.vertices.emplace_back(vertices[VF].position - glm::vec4(0, .1, 0, 0), CB);
