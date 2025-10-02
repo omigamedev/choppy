@@ -1,5 +1,6 @@
 module;
 #include <cstdint>
+#include <fstream>
 #include <PerlinNoise.hpp>
 #include <unordered_map>
 #include <vector>
@@ -82,9 +83,11 @@ class FlatGenerator final : public ChunkGenerator
 {
     uint32_t m_chunk_size = 0;
     uint32_t m_ground_height = 0;
+    uint32_t m_memory_size_bytes = 0;
 	// siv::PerlinNoise perlin{ std::random_device{} };
 	siv::PerlinNoise perlin{ 1 };
     std::unordered_map<glm::ivec3, std::unordered_map<glm::u8vec3, BlockType, U8Vec3Hash>, IVec3Hash> m_edits;
+    bool m_dirty = false;
 
 public:
     explicit FlatGenerator(const uint32_t size, const uint32_t ground_height) noexcept
@@ -115,6 +118,54 @@ public:
     void edit(const glm::ivec3& sector, const glm::u8vec3& local_cell, const BlockType block_type) noexcept
     {
         m_edits[sector][local_cell] = block_type;
+        m_dirty = true;
+    }
+    template<typename T>
+    void write(std::ofstream& file, T value) const noexcept
+    {
+        file.write(reinterpret_cast<const char*>(&value), sizeof(T));
+    }
+    void save() const noexcept
+    {
+        if (!m_dirty)
+            return;
+        std::ofstream file("terrain.bin", std::ios::binary);
+        if (!file.is_open())
+            return;
+        write(file, m_edits.size());
+        for (const auto& [sector, cells] : m_edits)
+        {
+            write(file, sector);
+            write(file, cells.size());
+            for (const auto& [cell, type] : cells)
+            {
+                write(file, cell);
+                write(file, type);
+            }
+        }
+    }
+    template<typename T>
+    T read(std::ifstream& file) const noexcept
+    {
+        T value{};
+        file.read(reinterpret_cast<char*>(&value), sizeof(T));
+        return value;
+    }
+    void load() noexcept
+    {
+        std::ifstream file("terrain.bin", std::ios::binary);
+        if (!file.is_open())
+            return;
+        for (auto i = read<size_t>(file); i > 0 ; --i)
+        {
+            const auto sector = read<glm::ivec3>(file);
+            for (auto j = read<size_t>(file); j > 0 ; --j)
+            {
+                const auto cell = read<glm::u8vec3>(file);
+                const auto type = read<BlockType>(file);
+                m_edits[sector][cell] = type;
+            }
+        }
     }
     [[nodiscard]] ChunkData generate(const glm::ivec3& sector) const noexcept override
     {

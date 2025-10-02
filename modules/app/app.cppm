@@ -168,6 +168,9 @@ class AppBase final
     std::vector<glm::ivec3> m_regenerate_sectors;
     std::atomic_bool needs_update = false;
 
+    bool action_build = false;
+    bool action_break = false;
+
 public:
     ~AppBase()
     {
@@ -176,15 +179,16 @@ public:
         {
             vkDeviceWaitIdle(m_vk->device());
         }
+        if (m_chunks_thread.joinable())
+            m_chunks_thread.join();
         for (auto& c : m_chunks)
         {
             for (auto& [k, b] : c.buffer)
                 m_vertex_buffer.subfree(b);
         }
-        if (m_chunks_thread.joinable())
-            m_chunks_thread.join();
         clear_chunks_state(0);
         garbage_collect(true);
+        generator.save();
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
@@ -316,6 +320,8 @@ public:
             m_sample_count = m_vk->samples_count();
             m_swapchain_count = m_vk->swapchain_count();
         }
+
+        generator.load();
 
         shader_opaque = std::make_shared<shaders::SolidFlatShader>(m_vk, "Opaque");
         shader_opaque->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, false, false);
@@ -1162,11 +1168,11 @@ public:
             const auto [cell, b, p, n] = hit.value();
             const glm::ivec3 sector = glm::floor(glm::vec3(cell) / static_cast<float>(ChunkSize));
             generator.edit(sector, cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Air);
+            std::lock_guard lock(m_chunks_mutex);
             if (auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {
                 const auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                std::lock_guard lock(m_chunks_mutex);
                 it->mesh = std::move(chunk_data);
                 it->sector = sector;
                 it->dirty = true;
@@ -1180,11 +1186,11 @@ public:
         {
             const glm::ivec3 sector = glm::floor(glm::vec3(*cell) / static_cast<float>(ChunkSize));
             generator.edit(sector, *cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
+            std::lock_guard lock(m_chunks_mutex);
             if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {
                 const auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                std::lock_guard lock(m_chunks_mutex);
                 it->mesh = std::move(chunk_data);
                 it->sector = sector;
                 it->dirty = true;
@@ -1213,16 +1219,8 @@ public:
             speed = speed * 0.25f;
         if (m_player.keys[VK_CONTROL])
             speed = speed * 4.f;
-        if (m_player.keys[VK_SPACE] || gamepad.trigger_left > 0.5f)
-        {
-            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            break_block(m_player.cam_pos, forward);
-        }
-        if (m_player.keys['B'] || gamepad.trigger_right > 0.5f)
-        {
-            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            build_block(m_player.cam_pos, forward);
-        }
+        const bool action_build_new = (m_player.keys[VK_SPACE] || gamepad.trigger_left > 0.5f);
+        const bool action_break_new = (m_player.keys['B'] || gamepad.trigger_right > 0.5f);
         speed = speed + 10.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
 #else
         const float speed = 3.f + 10.f * touch.trigger_left;
@@ -1237,6 +1235,24 @@ public:
             build_block(m_player.cam_pos, forward);
         }
 #endif
+        if (action_build_new != action_build)
+        {
+            action_build = action_build_new;
+            if (action_build)
+            {
+                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
+                build_block(m_player.cam_pos, forward);
+            }
+        }
+        if (action_break_new != action_break)
+        {
+            action_break = action_break_new;
+            if (action_break)
+            {
+                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
+                break_block(m_player.cam_pos, forward);
+            }
+        }
         if (m_player.keys['W'])
         {
             const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
@@ -1265,15 +1281,17 @@ public:
         {
             m_player.cam_pos.y += dt * speed;
         }
-        if (fabs(gamepad.thumbstick_left[0]) > dead_zone)
         {
-            const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[0] * speed;
-        }
-        if (fabs(gamepad.thumbstick_left[1]) > dead_zone)
-        {
-            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * gamepad.thumbstick_left[1] * speed;
+            auto fx = fabs(gamepad.thumbstick_left[0]) > dead_zone ? gamepad.thumbstick_left[0] : 0.f;
+            auto fy = fabs(gamepad.thumbstick_left[1]) > dead_zone ? gamepad.thumbstick_left[1] : 0.f;
+            const glm::vec4 forward = glm::vec4{fx, 0, -fy, 1} * view;
+            const auto step = glm::vec3(forward) * dt * speed;
+            const auto hit = trace_dda(m_player.cam_pos + step, forward, glm::length(step),
+                [](const BlockType b){ return b != BlockType::Air && b != BlockType::Water; });
+            if (!hit)
+            {
+                m_player.cam_pos += step;
+            }
         }
         if (fabs(touch.thumbstick_left.x) > dead_zone)
         {
