@@ -119,12 +119,16 @@ public:
             LOGE("Failed to allocate virtual block");
             return std::nullopt;
         }
+        TracyAllocN(static_cast<uint8_t*>(m_allocation_info.pMappedData) + offset, size, m_name.c_str());
         return BufferSuballocation{alloc, offset, size, static_cast<uint8_t*>(m_allocation_info.pMappedData) + offset};
     }
     void subfree(const BufferSuballocation& suballoc) noexcept
     {
         if (m_virtual_block)
+        {
+            TracyFreeN(suballoc.ptr, m_name.c_str());
             vmaVirtualFree(m_virtual_block, suballoc.alloc);
+        }
     }
     bool create_staging(const VkDeviceSize staging_size) noexcept
     {

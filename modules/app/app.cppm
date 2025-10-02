@@ -82,7 +82,7 @@ struct PlayerState
     float cam_fov = 90.f;
     glm::vec2 cam_start = {0, 0};
     glm::vec2 cam_angles = { 0, 0 };
-    glm::vec3 cam_pos = { 6, 2, -21 };
+    glm::vec3 cam_pos = { 6, 5, -21 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
     std::array<bool, 256> keys{false};
 };
@@ -124,7 +124,6 @@ class AppBase final
     std::shared_ptr<shaders::SolidFlatShader> shader_transparent;
     std::shared_ptr<shaders::SolidColorShader> shader_color;
     shaders::SolidFlatShader::PerFrameConstants uniform{};
-	siv::PerlinNoise perlin{ std::random_device{} };
     std::vector<Chunk> m_chunks;
     VkRenderPass m_renderpass = VK_NULL_HANDLE;
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
@@ -157,7 +156,7 @@ class AppBase final
     static constexpr float BlockSize = 0.5f;
     // Number of blocks per chunk
     static constexpr uint32_t ChunkSize = 32;
-    static constexpr uint32_t ChunkRings = 8;
+    static constexpr uint32_t ChunkRings = 1;
 
     FlatGenerator generator{ChunkSize, 20};
     SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
@@ -186,6 +185,10 @@ public:
             for (auto& [k, b] : c.buffer)
                 m_vertex_buffer.subfree(b);
         }
+        if (m_cube.vertex_buffer.alloc)
+            m_vertex_buffer.subfree(m_cube.vertex_buffer);
+        if (m_cube.uniform_buffer.alloc)
+            m_object_buffer.subfree(m_cube.uniform_buffer);
         clear_chunks_state(0);
         garbage_collect(true);
         generator.save();
@@ -387,6 +390,7 @@ public:
             {
                 m_vk->init_resources(cmd);
             }
+            flush_staging_buffer_copies(cmd);
         });
 
         m_texture = load_texture("assets/grass.png").value();
@@ -468,17 +472,6 @@ public:
                 std::ranges::copy(vertices, static_cast<shaders::SolidColorShader::VertexInput*>(sb->ptr));
                 m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
                 cube.vertex_buffer = *dst_sb;
-            }
-            // defer suballocation deletion
-            m_delete_buffers.emplace(1, std::pair(std::ref(m_staging_buffer), *sb));
-        }
-        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
-        {
-            if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
-            {
-                *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = ubo;
-                m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
-                cube.uniform_buffer = *dst_sb;
             }
             // defer suballocation deletion
             m_delete_buffers.emplace(1, std::pair(std::ref(m_staging_buffer), *sb));
@@ -681,6 +674,7 @@ public:
                 batches[k].draw_count++;
             }
             chunk.dirty = false;
+            // chunk.mesh.clear();
         }
         //LOGI("drawing %d polys", polys / 3);
         clear_chunks_state(frame.timeline_value);
@@ -857,7 +851,7 @@ public:
         }
 
         char zone_name[64];
-        snprintf(zone_name, sizeof(zone_name), "RenderPass %llu", (unsigned long long)frame.timeline_value);
+        snprintf(zone_name, sizeof(zone_name), "RenderPass %llu", static_cast<uint64_t>(frame.timeline_value));
         TracyVkZoneTransient(m_vk->tracy(), render_pass_zone, cmd, zone_name, true);
 
         // Renderpass setup
@@ -1214,26 +1208,20 @@ public:
         ZoneScoped;
         constexpr float dead_zone = 0.05;
 #ifdef _WIN32
-        float speed = 1.f;
+        float speed = 10.f;
         if (m_player.keys[VK_SHIFT])
             speed = speed * 0.25f;
         if (m_player.keys[VK_CONTROL])
             speed = speed * 4.f;
-        const bool action_build_new = (m_player.keys[VK_SPACE] || gamepad.trigger_left > 0.5f);
-        const bool action_break_new = (m_player.keys['B'] || gamepad.trigger_right > 0.5f);
+        const bool action_build_new = m_player.keys[VK_SPACE] ||
+            gamepad.buttons[std::to_underlying(GamepadButton::ShoulderLeft)];
+        const bool action_break_new = m_player.keys['B'] ||
+            gamepad.buttons[std::to_underlying(GamepadButton::ShoulderRight)];
         speed = speed + 10.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
 #else
         const float speed = 3.f + 10.f * touch.trigger_left;
-        if (touch.buttons[std::to_underlying(xr::TouchControllerButton::A)])
-        {
-            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            break_block(m_player.cam_pos, forward);
-        }
-        if (touch.buttons[std::to_underlying(xr::TouchControllerButton::B)])
-        {
-            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            build_block(m_player.cam_pos, forward);
-        }
+        const bool action_build_new = touch.buttons[std::to_underlying(xr::TouchControllerButton::A)];
+        const bool action_build_new = touch.buttons[std::to_underlying(xr::TouchControllerButton::B)];
 #endif
         if (action_build_new != action_build)
         {
@@ -1253,55 +1241,41 @@ public:
                 break_block(m_player.cam_pos, forward);
             }
         }
-        if (m_player.keys['W'])
+#ifdef _WIN32
+        const float fx = (fabs(gamepad.thumbstick_left[0]) > dead_zone ? gamepad.thumbstick_left[0] : 0.f) +
+            (m_player.keys['D'] ? 1 : 0) + (m_player.keys['A'] ? -1 : 0);
+        const float fz = (fabs(gamepad.thumbstick_left[1]) > dead_zone ? gamepad.thumbstick_left[1] : 0.f) +
+            (m_player.keys['W'] ? 1 : 0) + (m_player.keys['S'] ? -1 : 0);
+        const float fy = (gamepad.trigger_left * -1.f) + (gamepad.trigger_right) +
+            (m_player.keys['Q'] ? -1 : 0) + (m_player.keys['E'] ? 1 : 0);
+#else
+        const float fx = fabs(touch.thumbstick_left[0]) > dead_zone ? touch.thumbstick_left[0] : 0.f;
+        const float fz = fabs(touch.thumbstick_left[1]) > dead_zone ? touch.thumbstick_left[1] : 0.f;
+        const float fy = 0.f;
+#endif
+        const glm::vec3 forward = glm::vec4{fx, fy, -fz, 1} * view;
+        if (glm::length(forward) > 0)
         {
-            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * speed;
-        }
-        if (m_player.keys['S'])
-        {
-            const glm::vec4 forward = glm::vec4{0, 0, 1, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * speed;
-        }
-        if (m_player.keys['A'])
-        {
-            const glm::vec4 forward = glm::vec4{-1, 0, 0, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * speed;
-        }
-        if (m_player.keys['D'])
-        {
-            const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * speed;
-        }
-        if (m_player.keys['Q'])
-        {
-            m_player.cam_pos.y -= dt * speed;
-        }
-        if (m_player.keys['E'])
-        {
-            m_player.cam_pos.y += dt * speed;
-        }
-        {
-            auto fx = fabs(gamepad.thumbstick_left[0]) > dead_zone ? gamepad.thumbstick_left[0] : 0.f;
-            auto fy = fabs(gamepad.thumbstick_left[1]) > dead_zone ? gamepad.thumbstick_left[1] : 0.f;
-            const glm::vec4 forward = glm::vec4{fx, 0, -fy, 1} * view;
             const auto step = glm::vec3(forward) * dt * speed;
-            const auto hit = trace_dda(m_player.cam_pos + step, forward, glm::length(step),
-                [](const BlockType b){ return b != BlockType::Air && b != BlockType::Water; });
-            if (!hit)
+            if (const auto hit = trace_dda(m_player.cam_pos, glm::normalize(forward), glm::length(step),
+                [](const BlockType b){ return b != BlockType::Air && b != BlockType::Water; }))
+            {
+                const auto& [cell, b, p, n] = *hit;
+                // const glm::vec3 e = glm::normalize(m_player.cam_pos - p); // vector from hit point to start point
+                // const glm::vec3 t = glm::normalize(glm::cross(e, glm::vec3(n))); // tangent vector
+                // const glm::vec3 endp = m_player.cam_pos + step;
+                // const glm::vec3 penetration = glm::normalize(endp - p);
+                // const float slide = glm::dot(penetration, glm::vec3(n));
+                // const glm::vec3 slide_dir = glm::normalize(glm::cross(glm::vec3(n), t));
+                // const glm::vec3 slide_step = slide * slide_dir;
+                // m_player.cam_pos += slide_step + glm::vec3(n) * 0.1;
+                // LOGI("slide [%f, %f, %f]", slide_step.x, slide_step.y, slide_step.z);
+                m_player.cam_pos = p + glm::vec3(n) * 0.1f;
+            }
+            else
             {
                 m_player.cam_pos += step;
             }
-        }
-        if (fabs(touch.thumbstick_left.x) > dead_zone)
-        {
-            const glm::vec4 forward = glm::vec4{1, 0, 0, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * touch.thumbstick_left.x * speed;
-        }
-        if (fabs(touch.thumbstick_left.y) > dead_zone)
-        {
-            const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-            m_player.cam_pos += glm::vec3(forward) * dt * touch.thumbstick_left.y * speed;
         }
     }
     void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
@@ -1389,6 +1363,15 @@ public:
             garbage_collect(false);
             tick_windowed(dt, gamepad);
         }
+    }
+    void flush_staging_buffer_copies(VkCommandBuffer cmd) noexcept
+    {
+        TracyVkZone(m_vk->tracy(), cmd, "Flush Copy Buffers");
+        for (auto& [buffer, sb, dst_offset] : m_copy_buffers)
+        {
+            buffer.copy_from(cmd, m_staging_buffer.buffer(), sb, dst_offset);
+        }
+        m_copy_buffers.clear();
     }
     void garbage_collect(const bool force) noexcept
     {

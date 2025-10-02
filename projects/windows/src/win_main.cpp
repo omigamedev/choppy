@@ -38,7 +38,7 @@ std::string hresult_to_string(const HRESULT hr)
         nullptr,
         hr,
         0, // Default language
-        msgBuffer,
+        reinterpret_cast<LPSTR>(&msgBuffer),
         0,
         nullptr
     );
