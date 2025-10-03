@@ -9,18 +9,28 @@ module;
 #include <thread>
 #include <map>
 #include <mutex>
+
 #include <volk.h>
-#include <PerlinNoise.hpp>
-
+#include <vk_mem_alloc.h>
 #include <tracy/Tracy.hpp>
+#include <tracy/TracyC.h>
 #include <tracy/TracyVulkan.hpp>
-
-#include "vk_mem_alloc.h"
-
-#define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-#include "tracy/TracyC.h"
+#include <Jolt/Jolt.h>
+#include <Jolt/RegisterTypes.h>
+#include <Jolt/Core/Factory.h>
+#include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Core/JobSystemThreadPool.h>
+#include <Jolt/Physics/PhysicsSettings.h>
+#include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyActivationListener.h>
+#include <Jolt/Renderer/DebugRendererRecorder.h>
+#include <Jolt/Core/StreamWrapper.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 
 #ifdef __ANDROID__
 #include <jni.h>
@@ -49,6 +59,19 @@ import ce.app.utils;
 import ce.app.chunkgen;
 import ce.app.chunkmesh;
 import glm;
+
+namespace Layers
+{
+    static constexpr JPH::ObjectLayer NON_MOVING = 0;
+    static constexpr JPH::ObjectLayer MOVING = 1;
+    static constexpr JPH::ObjectLayer NUM_LAYERS = 2;
+};
+namespace BroadPhaseLayers
+{
+    static constexpr JPH::BroadPhaseLayer NON_MOVING(0);
+    static constexpr JPH::BroadPhaseLayer MOVING(1);
+    static constexpr JPH::uint NUM_LAYERS(2);
+};
 
 export namespace ce::app
 {
@@ -116,6 +139,128 @@ struct Geometry
     vk::BufferSuballocation uniform_buffer{};
     uint32_t vertex_count = 0;
 };
+/// Class that determines if two object layers can collide
+class ObjectLayerPairFilterImpl : public JPH::ObjectLayerPairFilter
+{
+public:
+	bool ShouldCollide(JPH::ObjectLayer inObject1, JPH::ObjectLayer inObject2) const override
+	{
+		switch (inObject1)
+		{
+		case Layers::NON_MOVING:
+			return inObject2 == Layers::MOVING; // Non moving only collides with moving
+		case Layers::MOVING:
+			return true; // Moving collides with everything
+		default:
+			JPH_ASSERT(false);
+			return false;
+		}
+	}
+};
+
+// BroadPhaseLayerInterface implementation
+// This defines a mapping between object and broadphase layers.
+class BPLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface
+{
+public:
+    BPLayerInterfaceImpl()
+	{
+		// Create a mapping table from object to broad phase layer
+		mObjectToBroadPhase[Layers::NON_MOVING] = BroadPhaseLayers::NON_MOVING;
+		mObjectToBroadPhase[Layers::MOVING] = BroadPhaseLayers::MOVING;
+	}
+
+	JPH::uint GetNumBroadPhaseLayers() const override
+	{
+		return BroadPhaseLayers::NUM_LAYERS;
+	}
+
+	JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override
+	{
+		JPH_ASSERT(inLayer < Layers::NUM_LAYERS);
+		return mObjectToBroadPhase[inLayer];
+	}
+
+#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
+	const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer inLayer) const override
+	{
+		switch ((JPH::BroadPhaseLayer::Type)inLayer)
+		{
+		case (JPH::BroadPhaseLayer::Type)BroadPhaseLayers::NON_MOVING:	return "NON_MOVING";
+		case (JPH::BroadPhaseLayer::Type)BroadPhaseLayers::MOVING:		return "MOVING";
+		default:													JPH_ASSERT(false); return "INVALID";
+		}
+	}
+#endif // JPH_EXTERNAL_PROFILE || JPH_PROFILE_ENABLED
+
+private:
+	JPH::BroadPhaseLayer mObjectToBroadPhase[Layers::NUM_LAYERS];
+};
+
+/// Class that determines if an object layer can collide with a broadphase layer
+class ObjectVsBroadPhaseLayerFilterImpl : public JPH::ObjectVsBroadPhaseLayerFilter
+{
+public:
+	bool ShouldCollide(JPH::ObjectLayer inLayer1, JPH::BroadPhaseLayer inLayer2) const override
+	{
+		switch (inLayer1)
+		{
+		case Layers::NON_MOVING:
+			return inLayer2 == BroadPhaseLayers::MOVING;
+		case Layers::MOVING:
+			return true;
+		default:
+			JPH_ASSERT(false);
+			return false;
+		}
+	}
+};
+
+// An example contact listener
+class MyContactListener : public JPH::ContactListener
+{
+public:
+	// See: ContactListener
+    JPH::ValidateResult	OnContactValidate(const JPH::Body &inBody1,
+        const JPH::Body &inBody2, JPH::RVec3Arg inBaseOffset, const JPH::CollideShapeResult &inCollisionResult) override
+	{
+		LOGI("Contact validate callback");
+
+		// Allows you to ignore a contact before it is created (using layers to not make objects collide is cheaper!)
+		return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+	}
+
+	void OnContactAdded(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings) override
+	{
+		LOGI("A contact was added");
+	}
+
+	void OnContactPersisted(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings) override
+	{
+		LOGI("A contact was persisted");
+	}
+
+	void OnContactRemoved(const JPH::SubShapeIDPair &inSubShapePair) override
+	{
+		LOGI("A contact was removed");
+	}
+};
+
+// An example activation listener
+class MyBodyActivationListener : public JPH::BodyActivationListener
+{
+public:
+	void OnBodyActivated(const JPH::BodyID &inBodyID, JPH::uint64 inBodyUserData) override
+	{
+		LOGI("A body got activated");
+	}
+
+	void OnBodyDeactivated(const JPH::BodyID &inBodyID, JPH::uint64 inBodyUserData) override
+	{
+		LOGI("A body went to sleep");
+	}
+};
+
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
@@ -140,6 +285,7 @@ class AppBase final
     VkSampler m_sampler = VK_NULL_HANDLE;
 
     Geometry m_cube{};
+    Geometry m_falling_cube{};
     vk::BufferSuballocation shader_flat_frame{};
     vk::BufferSuballocation shader_color_frame{};
     VkDescriptorSet shader_flat_frame_set = VK_NULL_HANDLE;
@@ -156,7 +302,7 @@ class AppBase final
     static constexpr float BlockSize = 0.5f;
     // Number of blocks per chunk
     static constexpr uint32_t ChunkSize = 32;
-    static constexpr uint32_t ChunkRings = 1;
+    static constexpr uint32_t ChunkRings = 4;
 
     FlatGenerator generator{ChunkSize, 20};
     SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
@@ -169,6 +315,28 @@ class AppBase final
 
     bool action_build = false;
     bool action_break = false;
+
+    std::unique_ptr<JPH::JobSystemThreadPool> job_system;
+    std::unique_ptr<JPH::TempAllocatorImpl> temp_allocator;
+    JPH::PhysicsSystem physics_system;
+    BPLayerInterfaceImpl broad_phase_layer_interface;
+    ObjectVsBroadPhaseLayerFilterImpl object_vs_broadphase_layer_filter;
+    ObjectLayerPairFilterImpl object_vs_object_layer_filter;
+    MyBodyActivationListener body_activation_listener;
+    MyContactListener contact_listener;
+    JPH::RefConst<JPH::Shape> shared_box_shape;
+    std::unique_ptr<JPH::DebugRendererRecorder> recorder;
+    std::unique_ptr<JPH::StreamOutWrapper> recorder_stream;
+
+    const uint32_t physMaxBodies = 4096;
+    const uint32_t physNumBodyMutexes = 0;
+    const uint32_t physMaxBodyPairs = 1024;
+    const uint32_t physMaxContactConstraints = 1024;
+    const uint32_t physCollisionSteps = 1;
+    JPH::BodyID sphere_id{};
+    glm::mat4 sphere_transform = glm::gtc::identity<glm::mat4>();
+    std::ofstream log_file;
+    uint32_t recorded_frames = 0;
 
 public:
     ~AppBase()
@@ -324,6 +492,41 @@ public:
             m_swapchain_count = m_vk->swapchain_count();
         }
 
+        JPH::RegisterDefaultAllocator();
+        JPH::Factory::sInstance = new JPH::Factory();
+        JPH::RegisterTypes();
+
+        job_system = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
+            static_cast<int32_t>(std::thread::hardware_concurrency()) - 1);
+        physics_system.Init(physMaxBodies, physMaxBodies, physMaxBodies, physMaxBodies,
+            broad_phase_layer_interface, object_vs_broadphase_layer_filter, object_vs_object_layer_filter);
+        physics_system.SetBodyActivationListener(&body_activation_listener);
+        physics_system.SetContactListener(&contact_listener);
+        temp_allocator = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
+
+        // log_file = std::ofstream("jolt.jor", std::ofstream::binary);
+        // recorder_stream = std::make_unique<JPH::StreamOutWrapper>(log_file);
+        // recorder = std::make_unique<JPH::DebugRendererRecorder>(*recorder_stream);
+
+        JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
+        {
+            using namespace JPH::literals;
+            const JPH::BodyCreationSettings sphere_settings(new JPH::SphereShape(0.25f), JPH::RVec3(8.3695116, 8.0465908, -19.6295547),
+                JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
+            sphere_id = body_interface.CreateAndAddBody(sphere_settings, JPH::EActivation::Activate);
+
+            float hs = BlockSize * 0.5f;
+            const auto box_settings = new JPH::BoxShapeSettings({hs, hs, hs});
+            if (const auto result = box_settings->Create(); result.IsValid())
+            {
+                shared_box_shape = result.Get();
+            }
+        }
+
+        // Now you can interact with the dynamic body, in this case we're going to give it a velocity.
+        // (note that if we had used CreateBody then we could have set the velocity straight on the body before adding it to the physics system)
+        body_interface.SetLinearVelocity(sphere_id, JPH::Vec3(0.1f, 25.0f, 0.0f));
+
         generator.load();
 
         shader_opaque = std::make_shared<shaders::SolidFlatShader>(m_vk, "Opaque");
@@ -380,6 +583,7 @@ public:
         }
 
         m_cube = create_cube();
+        m_falling_cube = create_cube();
 
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             if (xrmode)
@@ -513,7 +717,7 @@ public:
 
         const glm::vec3 cur_sector = glm::floor(m_player.cam_pos / (ChunkSize * BlockSize));
 
-        auto neighbors = generate_neighbors(m_player.cam_sector, ChunkRings);
+        auto neighbors = generate_neighbors(cur_sector, ChunkRings);
         std::ranges::sort(neighbors, [cur_sector](const glm::ivec3 a, const glm::ivec3 b)
         {
             const float dist1 = glm::gtx::distance2(glm::vec3(a), cur_sector);
@@ -564,11 +768,12 @@ public:
             }
             if (m_chunks.size() < chunk_count)
             {
-                const auto blocks_data = generator.generate(sector);
+                auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
                 // m_chunk_updates.emplace_back(m_chunks.size());
                 auto& chunk = m_chunks.emplace_back();
                 chunk.mesh = std::move(chunk_data);
+                chunk.data = std::move(blocks_data);
                 chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 chunk.sector = sector;
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
@@ -579,11 +784,12 @@ public:
             }
             else if (!chunk_indices.empty())
             {
-                const auto blocks_data = generator.generate(sector);
+                auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
                 const uint32_t chunk_index = chunk_indices[chunk_indices_offset++];
                 auto& chunk = m_chunks[chunk_index];
                 chunk.mesh = std::move(chunk_data);
+                chunk.data = std::move(blocks_data);
                 chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                 chunk.sector = sector;
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
@@ -630,6 +836,8 @@ public:
             return dist1 < dist2;
         });
 
+        JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
+
         std::unordered_map<BlockType, BatchDraw> batches;
         for (auto& chunk : sorted_chunks)
         {
@@ -659,6 +867,43 @@ public:
                         }
                         // defer suballocation deletion
                         m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                    }
+                    if (body_interface.IsAdded(chunk.body_id))
+                    {
+                        body_interface.RemoveBody(chunk.body_id);
+                        body_interface.DestroyBody(chunk.body_id);
+                    }
+                    // Create physics body
+                    JPH::StaticCompoundShapeSettings compound_settings;
+                    for (uint32_t y = 0; y < ChunkSize; ++y)
+                    {
+                        for (uint32_t z = 0; z < ChunkSize; ++z)
+                        {
+                            for (uint32_t x = 0; x < ChunkSize; ++x)
+                            {
+                                const auto& b = chunk.data.blocks[y * pow(ChunkSize, 2) + z * ChunkSize + x];
+                                if (b.type != BlockType::Water && b.type != BlockType::Air)
+                                {
+                                    const glm::vec3 p = glm::vec3(x, y, z) * BlockSize;
+                                    const JPH::Vec3 position = JPH::Vec3(p.x, p.y, p.z);
+                                    compound_settings.AddShape(position, JPH::Quat::sIdentity(), shared_box_shape);
+                                }
+                            }
+                        }
+                    }
+                    if (const auto result = compound_settings.Create(); result.IsValid())
+                    {
+                        chunk.shape = result.Get();
+                        const glm::vec3 sector_origin = glm::vec3(chunk.sector) * BlockSize * ChunkSize;
+                        const JPH::Vec3 origin = JPH::Vec3(sector_origin.x, sector_origin.y, sector_origin.z);
+                        const JPH::BodyCreationSettings body_settings(
+                           chunk.shape,
+                           origin,        // world position for the chunk body
+                           JPH::Quat::sIdentity(),
+                           JPH::EMotionType::Static,
+                           Layers::NON_MOVING
+                        );
+                        chunk.body_id = body_interface.CreateAndAddBody(body_settings, JPH::EActivation::DontActivate);
                     }
                 }
                 batches[k].ubo.push_back({
@@ -812,6 +1057,29 @@ public:
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         }
 
+        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+        {
+            if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
+            {
+                *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                    .ObjectTransform = glm::transpose(sphere_transform),
+                    .Color = {1, 0, 0, 1}
+                };
+                m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
+                m_falling_cube.uniform_buffer = *dst_sb;
+                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_object_buffer), *dst_sb));
+            }
+            // defer suballocation deletion
+            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+        }
+        if (const auto set = shader_color->alloc_descriptor(frame.present_index, 1))
+        {
+            m_falling_cube.object_descriptor_set = *set;
+            shader_color->write_buffer(*set, 0, m_object_buffer.buffer(),
+                m_falling_cube.uniform_buffer.offset, m_falling_cube.uniform_buffer.size,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+        }
+
         shader_opaque->update_descriptors();
         shader_transparent->update_descriptors();
         shader_color->update_descriptors();
@@ -928,7 +1196,7 @@ public:
         {
             const std::vector layers{
                 std::pair(shader_opaque, m_chunks_state[BlockType::Dirt]),
-                std::pair(shader_transparent, m_chunks_state[BlockType::Water]),
+                //std::pair(shader_transparent, m_chunks_state[BlockType::Water]),
             };
             for (const auto& [shader, state] : layers)
             {
@@ -962,6 +1230,21 @@ public:
                 shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
             vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+        }
+
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader_color->pipeline());
+
+            const std::array vertex_buffers{m_vertex_buffer.buffer()};
+            const std::array vertex_buffers_offset{m_falling_cube.vertex_buffer.offset};
+            vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
+                vertex_buffers.data(), vertex_buffers_offset.data());
+
+            const std::array sets{shader_color_frame_set, m_falling_cube.object_descriptor_set};
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+
+            vkCmdDraw(cmd, m_falling_cube.vertex_count, 1, 0, 0);
         }
 
         /*
@@ -1165,9 +1448,10 @@ public:
             std::lock_guard lock(m_chunks_mutex);
             if (auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {
-                const auto blocks_data = generator.generate(sector);
+                auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
                 it->mesh = std::move(chunk_data);
+                it->data = std::move(blocks_data);
                 it->sector = sector;
                 it->dirty = true;
                 needs_update = true;
@@ -1183,9 +1467,10 @@ public:
             std::lock_guard lock(m_chunks_mutex);
             if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {
-                const auto blocks_data = generator.generate(sector);
+                auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, BlockSize);
                 it->mesh = std::move(chunk_data);
+                it->data = std::move(blocks_data);
                 it->sector = sector;
                 it->dirty = true;
                 needs_update = true;
@@ -1243,11 +1528,11 @@ public:
         }
 #ifdef _WIN32
         const float fx = (fabs(gamepad.thumbstick_left[0]) > dead_zone ? gamepad.thumbstick_left[0] : 0.f) +
-            (m_player.keys['D'] ? 1 : 0) + (m_player.keys['A'] ? -1 : 0);
+            (m_player.keys['D'] ? 1.f : 0.f) + (m_player.keys['A'] ? -1.f : 0.f);
         const float fz = (fabs(gamepad.thumbstick_left[1]) > dead_zone ? gamepad.thumbstick_left[1] : 0.f) +
-            (m_player.keys['W'] ? 1 : 0) + (m_player.keys['S'] ? -1 : 0);
+            (m_player.keys['W'] ? 1.f : 0.f) + (m_player.keys['S'] ? -1.f : 0.f);
         const float fy = (gamepad.trigger_left * -1.f) + (gamepad.trigger_right) +
-            (m_player.keys['Q'] ? -1 : 0) + (m_player.keys['E'] ? 1 : 0);
+            (m_player.keys['Q'] ? -1.f : 0.f) + (m_player.keys['E'] ? 1.f : 0.f);
 #else
         const float fx = fabs(touch.thumbstick_left[0]) > dead_zone ? touch.thumbstick_left[0] : 0.f;
         const float fz = fabs(touch.thumbstick_left[1]) > dead_zone ? touch.thumbstick_left[1] : 0.f;
@@ -1351,6 +1636,24 @@ public:
     void tick(const float dt, const GamepadState& gamepad) noexcept
     {
         ZoneScoped;
+        physics_system.Update(dt, 1, temp_allocator.get(), job_system.get());
+        // Output current position and velocity of the sphere
+        JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
+        const JPH::RVec3 position = body_interface.GetCenterOfMassPosition(sphere_id);
+        const JPH::Vec3 velocity = body_interface.GetLinearVelocity(sphere_id);
+        LOGI("Step: Position (%f, %f, %f) Velocity (%f, %f, %f)",
+            position.GetX(), position.GetY(), position.GetZ(), velocity.GetX(), velocity.GetY(), velocity.GetZ());
+        const glm::vec3 p = glm::gtc::make_vec3(position.mF32);
+        sphere_transform = glm::gtx::translate(p);
+
+        // if (++recorded_frames < 1000)
+        // {
+        //     const JPH::BodyManager::DrawSettings settings{};
+        //     recorder->NextFrame();
+        //     physics_system.DrawBodies(settings, recorder.get());
+        //     recorder->EndFrame();
+        // }
+
         if (xrmode)
         {
             m_timeline_value = m_xr->timeline_value().value_or(0);

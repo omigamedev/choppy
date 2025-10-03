@@ -8,7 +8,11 @@ module;
 #include <unordered_map>
 #include <volk.h>
 
-#include "glm/gtx/compatibility.hpp"
+#include <Jolt/Jolt.h>
+#include <Jolt/Physics/Body/BodyID.h>
+
+#include "Jolt/Core/Reference.h"
+#include "Jolt/Physics/Collision/Shape/Shape.h"
 
 #ifdef __ANDROID__
 #include <jni.h>
@@ -212,6 +216,9 @@ struct Chunk final
     std::unordered_map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> mesh;
     std::unordered_map<BlockType, vk::BufferSuballocation> buffer{};
     bool dirty = false;
+    ChunkData data;
+    JPH::RefConst<JPH::Shape> shape;
+    JPH::BodyID body_id;
     //uint32_t size = 0;
     //uint32_t height = 0;
     //uint32_t descriptor_set_index = 0;

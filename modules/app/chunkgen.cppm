@@ -34,8 +34,13 @@ struct Block final
     BlockType type;
     enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, R = 16, L = 32 } face_mask;
 };
-struct ChunkData final : NoCopy
+struct ChunkData final
 {
+    ChunkData() = default;
+    ChunkData(const ChunkData& other) = delete;
+    ChunkData(ChunkData&& other) noexcept = default;
+    ChunkData& operator=(const ChunkData& other) = delete;
+    ChunkData& operator=(ChunkData&& other) noexcept = default;
     uint32_t size{0};
     glm::ivec3 sector{0};
     std::vector<Block> blocks;
@@ -222,7 +227,12 @@ public:
             }
         }
 
-        return ChunkData{.size = m_chunk_size, .sector = sector, .blocks = std::move(blocks), .empty = !full};
+        ChunkData ret;
+        ret.size = m_chunk_size;
+        ret.sector = sector;
+        ret.blocks = std::move(blocks);
+        ret.empty = !full;
+        return ret;
     }
 };
 }
