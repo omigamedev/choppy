@@ -357,6 +357,10 @@ public:
             m_vertex_buffer.subfree(m_cube.vertex_buffer);
         if (m_cube.uniform_buffer.alloc)
             m_object_buffer.subfree(m_cube.uniform_buffer);
+        if (m_falling_cube.vertex_buffer.alloc)
+            m_vertex_buffer.subfree(m_cube.vertex_buffer);
+        if (m_falling_cube.uniform_buffer.alloc)
+            m_object_buffer.subfree(m_cube.uniform_buffer);
         clear_chunks_state(0);
         garbage_collect(true);
         generator.save();
@@ -689,6 +693,7 @@ public:
         {
             if (generate_chunks())
                 needs_update.store(true);
+            std::this_thread::yield();
         }
     }
     [[nodiscard]] std::vector<glm::ivec3> generate_neighbors(const glm::ivec3 origin, const int32_t size) const noexcept
@@ -756,7 +761,7 @@ public:
         ZoneScoped;
 
         size_t chunk_indices_offset = 0;
-        uint32_t chunks_to_generate = 8;
+        uint32_t chunks_to_generate = 1;
         std::lock_guard lock(m_chunks_mutex);
         for (const auto& sector : neighbors)
         {
@@ -884,7 +889,7 @@ public:
                                 const auto& b = chunk.data.blocks[y * pow(ChunkSize, 2) + z * ChunkSize + x];
                                 if (b.type != BlockType::Water && b.type != BlockType::Air)
                                 {
-                                    const glm::vec3 p = glm::vec3(x, y, z) * BlockSize;
+                                    const glm::vec3 p = glm::vec3(x, y, z) * BlockSize + BlockSize * 0.5f;
                                     const JPH::Vec3 position = JPH::Vec3(p.x, p.y, p.z);
                                     compound_settings.AddShape(position, JPH::Quat::sIdentity(), shared_box_shape);
                                 }
@@ -1196,7 +1201,7 @@ public:
         {
             const std::vector layers{
                 std::pair(shader_opaque, m_chunks_state[BlockType::Dirt]),
-                //std::pair(shader_transparent, m_chunks_state[BlockType::Water]),
+                std::pair(shader_transparent, m_chunks_state[BlockType::Water]),
             };
             for (const auto& [shader, state] : layers)
             {
@@ -1232,20 +1237,20 @@ public:
             vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
         }
 
-        {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader_color->pipeline());
-
-            const std::array vertex_buffers{m_vertex_buffer.buffer()};
-            const std::array vertex_buffers_offset{m_falling_cube.vertex_buffer.offset};
-            vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
-                vertex_buffers.data(), vertex_buffers_offset.data());
-
-            const std::array sets{shader_color_frame_set, m_falling_cube.object_descriptor_set};
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
-
-            vkCmdDraw(cmd, m_falling_cube.vertex_count, 1, 0, 0);
-        }
+        // {
+        //     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader_color->pipeline());
+        //
+        //     const std::array vertex_buffers{m_vertex_buffer.buffer()};
+        //     const std::array vertex_buffers_offset{m_falling_cube.vertex_buffer.offset};
+        //     vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
+        //         vertex_buffers.data(), vertex_buffers_offset.data());
+        //
+        //     const std::array sets{shader_color_frame_set, m_falling_cube.object_descriptor_set};
+        //     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        //         shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+        //
+        //     vkCmdDraw(cmd, m_falling_cube.vertex_count, 1, 0, 0);
+        // }
 
         /*
         if (xrmode)
@@ -1493,7 +1498,7 @@ public:
         ZoneScoped;
         constexpr float dead_zone = 0.05;
 #ifdef _WIN32
-        float speed = 10.f;
+        float speed = 1.f;
         if (m_player.keys[VK_SHIFT])
             speed = speed * 0.25f;
         if (m_player.keys[VK_CONTROL])
@@ -1506,7 +1511,7 @@ public:
 #else
         const float speed = 3.f + 10.f * touch.trigger_left;
         const bool action_build_new = touch.buttons[std::to_underlying(xr::TouchControllerButton::A)];
-        const bool action_build_new = touch.buttons[std::to_underlying(xr::TouchControllerButton::B)];
+        const bool action_break_new = touch.buttons[std::to_underlying(xr::TouchControllerButton::B)];
 #endif
         if (action_build_new != action_build)
         {
@@ -1531,36 +1536,24 @@ public:
             (m_player.keys['D'] ? 1.f : 0.f) + (m_player.keys['A'] ? -1.f : 0.f);
         const float fz = (fabs(gamepad.thumbstick_left[1]) > dead_zone ? gamepad.thumbstick_left[1] : 0.f) +
             (m_player.keys['W'] ? 1.f : 0.f) + (m_player.keys['S'] ? -1.f : 0.f);
-        const float fy = (gamepad.trigger_left * -1.f) + (gamepad.trigger_right) +
-            (m_player.keys['Q'] ? -1.f : 0.f) + (m_player.keys['E'] ? 1.f : 0.f);
+        float fy = (gamepad.trigger_left * -1.f) + (gamepad.trigger_right);
+        if (m_player.keys['E'])
+        {
+            m_player.keys['E'] = false;
+            fy += 5.f;
+        }
 #else
         const float fx = fabs(touch.thumbstick_left[0]) > dead_zone ? touch.thumbstick_left[0] : 0.f;
         const float fz = fabs(touch.thumbstick_left[1]) > dead_zone ? touch.thumbstick_left[1] : 0.f;
         const float fy = 0.f;
 #endif
-        const glm::vec3 forward = glm::vec4{fx, fy, -fz, 1} * view;
-        if (glm::length(forward) > 0)
+        const glm::vec3 forward = glm::vec4{fx, 0, -fz, 1} * view;
+        if (glm::length(forward) > 0.f || fy > 0.f)
         {
-            const auto step = glm::vec3(forward) * dt * speed;
-            if (const auto hit = trace_dda(m_player.cam_pos, glm::normalize(forward), glm::length(step),
-                [](const BlockType b){ return b != BlockType::Air && b != BlockType::Water; }))
-            {
-                const auto& [cell, b, p, n] = *hit;
-                // const glm::vec3 e = glm::normalize(m_player.cam_pos - p); // vector from hit point to start point
-                // const glm::vec3 t = glm::normalize(glm::cross(e, glm::vec3(n))); // tangent vector
-                // const glm::vec3 endp = m_player.cam_pos + step;
-                // const glm::vec3 penetration = glm::normalize(endp - p);
-                // const float slide = glm::dot(penetration, glm::vec3(n));
-                // const glm::vec3 slide_dir = glm::normalize(glm::cross(glm::vec3(n), t));
-                // const glm::vec3 slide_step = slide * slide_dir;
-                // m_player.cam_pos += slide_step + glm::vec3(n) * 0.1;
-                // LOGI("slide [%f, %f, %f]", slide_step.x, slide_step.y, slide_step.z);
-                m_player.cam_pos = p + glm::vec3(n) * 0.1f;
-            }
-            else
-            {
-                m_player.cam_pos += step;
-            }
+            const auto step = glm::vec3(forward) + glm::vec3(0, fy, 0) * speed;
+            JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
+            const auto current_velocity = body_interface.GetLinearVelocity(sphere_id);
+            body_interface.SetLinearVelocity(sphere_id, JPH::Vec3(step.x, current_velocity.GetY() + step.y, step.z));
         }
     }
     void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
@@ -1641,10 +1634,11 @@ public:
         JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
         const JPH::RVec3 position = body_interface.GetCenterOfMassPosition(sphere_id);
         const JPH::Vec3 velocity = body_interface.GetLinearVelocity(sphere_id);
-        LOGI("Step: Position (%f, %f, %f) Velocity (%f, %f, %f)",
-            position.GetX(), position.GetY(), position.GetZ(), velocity.GetX(), velocity.GetY(), velocity.GetZ());
+        // LOGI("Step: Position (%f, %f, %f) Velocity (%f, %f, %f)",
+        //     position.GetX(), position.GetY(), position.GetZ(), velocity.GetX(), velocity.GetY(), velocity.GetZ());
         const glm::vec3 p = glm::gtc::make_vec3(position.mF32);
         sphere_transform = glm::gtx::translate(p);
+        m_player.cam_pos = p;
 
         // if (++recorded_frames < 1000)
         // {
