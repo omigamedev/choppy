@@ -121,6 +121,10 @@ class Context final
     std::array<XrAction, TouchControllerButtonCount> m_action_buttons{XR_NULL_HANDLE};
     XrAction m_action_left_thumb = XR_NULL_HANDLE;
     XrAction m_action_right_thumb = XR_NULL_HANDLE;
+    XrAction m_action_left_trigger = XR_NULL_HANDLE;
+    XrAction m_action_right_trigger = XR_NULL_HANDLE;
+    XrAction m_action_left_grip = XR_NULL_HANDLE;
+    XrAction m_action_right_grip = XR_NULL_HANDLE;
     XrAction m_action_haptic = XR_NULL_HANDLE;
     XrAction m_action_pose = XR_NULL_HANDLE;
     XrPath m_hands_path[2] = {XR_NULL_PATH, XR_NULL_PATH};
@@ -1510,6 +1514,10 @@ public:
         m_action_set = create_action_set("gameplay");
         m_action_left_thumb = create_action("left_thumb", XR_ACTION_TYPE_VECTOR2F_INPUT);
         m_action_right_thumb = create_action("right_thumb", XR_ACTION_TYPE_VECTOR2F_INPUT);
+        m_action_left_trigger = create_action("left_trigger", XR_ACTION_TYPE_FLOAT_INPUT);
+        m_action_right_trigger = create_action("right_trigger", XR_ACTION_TYPE_FLOAT_INPUT);
+        m_action_left_grip = create_action("left_grip", XR_ACTION_TYPE_FLOAT_INPUT);
+        m_action_right_grip = create_action("right_grip", XR_ACTION_TYPE_FLOAT_INPUT);
         m_hands_path[0] = create_path("/user/hand/left");
         m_hands_path[1] = create_path("/user/hand/right");
         m_action_haptic = create_action("vibration", XR_ACTION_TYPE_VIBRATION_OUTPUT, m_hands_path);
@@ -1520,6 +1528,10 @@ public:
         std::vector bindings{
             XrActionSuggestedBinding{m_action_left_thumb, create_path("/user/hand/left/input/thumbstick")},
             XrActionSuggestedBinding{m_action_right_thumb, create_path("/user/hand/right/input/thumbstick")},
+            XrActionSuggestedBinding{m_action_left_trigger, create_path("/user/hand/left/input/trigger/value")},
+            XrActionSuggestedBinding{m_action_right_trigger, create_path("/user/hand/right/input/trigger/value")},
+            XrActionSuggestedBinding{m_action_left_grip, create_path("/user/hand/left/input/squeeze/value")},
+            XrActionSuggestedBinding{m_action_right_grip, create_path("/user/hand/right/input/squeeze/value")},
             XrActionSuggestedBinding{m_action_haptic, create_path("/user/hand/right/output/haptic")},
             XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/left/input/aim/pose")},
             XrActionSuggestedBinding{m_action_pose, create_path("/user/hand/right/input/aim/pose")},
@@ -1579,6 +1591,19 @@ public:
             result != XR_SUCCESS)
         {
             LOGE("xrGetActionStateBoolean failed: %s", to_string(result));
+            return std::nullopt;
+        }
+        return state;
+    }
+    [[nodiscard]] std::optional<XrActionStateFloat> action_state_float(XrAction action) const noexcept
+    {
+        XrActionStateFloat state{XR_TYPE_ACTION_STATE_BOOLEAN};
+        XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+        info.action = action;
+        if (const XrResult result = xrGetActionStateFloat(m_session, &info, &state);
+            result != XR_SUCCESS)
+        {
+            LOGE("xrGetActionStateFloat failed: %s", to_string(result));
             return std::nullopt;
         }
         return state;
@@ -1685,6 +1710,34 @@ public:
             {
                 m_controller.thumbstick_right.x = thumb.value().currentState.x;
                 m_controller.thumbstick_right.y = thumb.value().currentState.y;
+            }
+        }
+        if (const auto trigger = action_state_float(m_action_left_trigger))
+        {
+            if (trigger.value().isActive)
+            {
+                m_controller.trigger_left = trigger.value().currentState;
+            }
+        }
+        if (const auto trigger = action_state_float(m_action_right_trigger))
+        {
+            if (trigger.value().isActive)
+            {
+                m_controller.trigger_right = trigger.value().currentState;
+            }
+        }
+        if (const auto grip = action_state_float(m_action_left_grip))
+        {
+            if (grip.value().isActive)
+            {
+                m_controller.grip_left = grip.value().currentState;
+            }
+        }
+        if (const auto grip = action_state_float(m_action_right_grip))
+        {
+            if (grip.value().isActive)
+            {
+                m_controller.grip_right = grip.value().currentState;
             }
         }
         return true;
