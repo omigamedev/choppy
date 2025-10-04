@@ -32,6 +32,9 @@ module;
 #include <Jolt/Core/StreamWrapper.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 
+#include "Jolt/Physics/Character/Character.h"
+#include "Jolt/Physics/Collision/Shape/CapsuleShape.h"
+
 #ifdef __ANDROID__
 #include <jni.h>
 #include <android/log.h>
@@ -108,6 +111,7 @@ struct PlayerState
     glm::vec3 cam_pos = { 6, 5, -21 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
     std::array<bool, 256> keys{false};
+    JPH::Ref<JPH::Character> character;
 };
 struct ChunkUpdate : NoCopy
 {
@@ -215,7 +219,7 @@ public:
 		}
 	}
 };
-
+/*
 // An example contact listener
 class MyContactListener : public JPH::ContactListener
 {
@@ -224,7 +228,7 @@ public:
     JPH::ValidateResult	OnContactValidate(const JPH::Body &inBody1,
         const JPH::Body &inBody2, JPH::RVec3Arg inBaseOffset, const JPH::CollideShapeResult &inCollisionResult) override
 	{
-		LOGI("Contact validate callback");
+		// LOGI("Contact validate callback");
 
 		// Allows you to ignore a contact before it is created (using layers to not make objects collide is cheaper!)
 		return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
@@ -232,17 +236,17 @@ public:
 
 	void OnContactAdded(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings) override
 	{
-		LOGI("A contact was added");
+		// LOGI("A contact was added");
 	}
 
 	void OnContactPersisted(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings) override
 	{
-		LOGI("A contact was persisted");
+		// LOGI("A contact was persisted");
 	}
 
 	void OnContactRemoved(const JPH::SubShapeIDPair &inSubShapePair) override
 	{
-		LOGI("A contact was removed");
+		// LOGI("A contact was removed");
 	}
 };
 
@@ -260,6 +264,7 @@ public:
 		LOGI("A body went to sleep");
 	}
 };
+*/
 
 class AppBase final
 {
@@ -285,7 +290,6 @@ class AppBase final
     VkSampler m_sampler = VK_NULL_HANDLE;
 
     Geometry m_cube{};
-    Geometry m_falling_cube{};
     vk::BufferSuballocation shader_flat_frame{};
     vk::BufferSuballocation shader_color_frame{};
     VkDescriptorSet shader_flat_frame_set = VK_NULL_HANDLE;
@@ -313,30 +317,26 @@ class AppBase final
     std::vector<glm::ivec3> m_regenerate_sectors;
     std::atomic_bool needs_update = false;
 
-    bool action_build = false;
-    bool action_break = false;
-
     std::unique_ptr<JPH::JobSystemThreadPool> job_system;
     std::unique_ptr<JPH::TempAllocatorImpl> temp_allocator;
     JPH::PhysicsSystem physics_system;
     BPLayerInterfaceImpl broad_phase_layer_interface;
     ObjectVsBroadPhaseLayerFilterImpl object_vs_broadphase_layer_filter;
     ObjectLayerPairFilterImpl object_vs_object_layer_filter;
-    MyBodyActivationListener body_activation_listener;
-    MyContactListener contact_listener;
+    // MyBodyActivationListener body_activation_listener;
+    // MyContactListener contact_listener;
     JPH::RefConst<JPH::Shape> shared_box_shape;
+
+    bool is_recording = false;
     std::unique_ptr<JPH::DebugRendererRecorder> recorder;
     std::unique_ptr<JPH::StreamOutWrapper> recorder_stream;
+    std::ofstream recorder_file;
 
     const uint32_t physMaxBodies = 4096;
     const uint32_t physNumBodyMutexes = 0;
     const uint32_t physMaxBodyPairs = 1024;
     const uint32_t physMaxContactConstraints = 1024;
     const uint32_t physCollisionSteps = 1;
-    JPH::BodyID sphere_id{};
-    glm::mat4 sphere_transform = glm::gtc::identity<glm::mat4>();
-    std::ofstream log_file;
-    uint32_t recorded_frames = 0;
 
 public:
     ~AppBase()
@@ -356,10 +356,6 @@ public:
         if (m_cube.vertex_buffer.alloc)
             m_vertex_buffer.subfree(m_cube.vertex_buffer);
         if (m_cube.uniform_buffer.alloc)
-            m_object_buffer.subfree(m_cube.uniform_buffer);
-        if (m_falling_cube.vertex_buffer.alloc)
-            m_vertex_buffer.subfree(m_cube.vertex_buffer);
-        if (m_falling_cube.uniform_buffer.alloc)
             m_object_buffer.subfree(m_cube.uniform_buffer);
         clear_chunks_state(0);
         garbage_collect(true);
@@ -504,32 +500,40 @@ public:
             static_cast<int32_t>(std::thread::hardware_concurrency()) - 1);
         physics_system.Init(physMaxBodies, physMaxBodies, physMaxBodies, physMaxBodies,
             broad_phase_layer_interface, object_vs_broadphase_layer_filter, object_vs_object_layer_filter);
-        physics_system.SetBodyActivationListener(&body_activation_listener);
-        physics_system.SetContactListener(&contact_listener);
+        // physics_system.SetBodyActivationListener(&body_activation_listener);
+        // physics_system.SetContactListener(&contact_listener);
         temp_allocator = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
-
-        // log_file = std::ofstream("jolt.jor", std::ofstream::binary);
-        // recorder_stream = std::make_unique<JPH::StreamOutWrapper>(log_file);
-        // recorder = std::make_unique<JPH::DebugRendererRecorder>(*recorder_stream);
 
         JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
         {
-            using namespace JPH::literals;
-            const JPH::BodyCreationSettings sphere_settings(new JPH::SphereShape(0.25f), JPH::RVec3(8.3695116, 8.0465908, -19.6295547),
-                JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
-            sphere_id = body_interface.CreateAndAddBody(sphere_settings, JPH::EActivation::Activate);
-
             float hs = BlockSize * 0.5f;
             const auto box_settings = new JPH::BoxShapeSettings({hs, hs, hs});
             if (const auto result = box_settings->Create(); result.IsValid())
             {
                 shared_box_shape = result.Get();
             }
-        }
 
-        // Now you can interact with the dynamic body, in this case we're going to give it a velocity.
-        // (note that if we had used CreateBody then we could have set the velocity straight on the body before adding it to the physics system)
-        body_interface.SetLinearVelocity(sphere_id, JPH::Vec3(0.1f, 25.0f, 0.0f));
+            // Constants for the character
+            constexpr float cCharacterHeight = 1.7f; // Total character height
+            constexpr float cCharacterRadius = 0.3f;
+            constexpr float cMaxSlopeAngle = glm::radians(45.0f);
+            const JPH::RefConst character_shape = new JPH::CapsuleShape(
+                cCharacterHeight / 2.0f - cCharacterRadius, cCharacterRadius);
+
+            // 2. Create the CharacterSettings
+            const JPH::Ref settings = new JPH::CharacterSettings();
+            settings->mMass = 80.0f; // Player mass
+            settings->mShape = character_shape;
+            settings->mMaxSlopeAngle = cMaxSlopeAngle;
+            settings->mLayer = Layers::MOVING; // Your custom object layer for players
+            settings->mUp = JPH::Vec3::sAxisY(); // Gravity direction is always Y-axis for Jolt characters
+
+            // Optional settings:
+            // settings->mMaxStrength = 100.0f;
+            settings->mFriction = 0.5f;
+            m_player.character = new JPH::Character(settings, {0, 20, 0}, JPH::Quat::sIdentity(), 0, &physics_system);
+            m_player.character->AddToPhysicsSystem(JPH::EActivation::Activate);
+        }
 
         generator.load();
 
@@ -587,7 +591,6 @@ public:
         }
 
         m_cube = create_cube();
-        m_falling_cube = create_cube();
 
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             if (xrmode)
@@ -625,9 +628,11 @@ public:
         {
             LOGE("Failed to create sampler");
         }
+        if (generate_chunks())
+            needs_update.store(true);
         m_chunks_thread = std::thread(&AppBase::generate_thread, this);
     }
-    Geometry create_cube() noexcept
+    [[nodiscard]] Geometry create_cube() noexcept
     {
         Geometry cube;
         // Define the 8 vertices of the cube with unique colors for interpolation
@@ -693,7 +698,6 @@ public:
         {
             if (generate_chunks())
                 needs_update.store(true);
-            std::this_thread::yield();
         }
     }
     [[nodiscard]] std::vector<glm::ivec3> generate_neighbors(const glm::ivec3 origin, const int32_t size) const noexcept
@@ -1059,29 +1063,6 @@ public:
             m_cube.object_descriptor_set = *set;
             shader_color->write_buffer(*set, 0, m_object_buffer.buffer(),
                 m_cube.uniform_buffer.offset, m_cube.uniform_buffer.size,
-                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-        }
-
-        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
-        {
-            if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
-            {
-                *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
-                    .ObjectTransform = glm::transpose(sphere_transform),
-                    .Color = {1, 0, 0, 1}
-                };
-                m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
-                m_falling_cube.uniform_buffer = *dst_sb;
-                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_object_buffer), *dst_sb));
-            }
-            // defer suballocation deletion
-            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
-        }
-        if (const auto set = shader_color->alloc_descriptor(frame.present_index, 1))
-        {
-            m_falling_cube.object_descriptor_set = *set;
-            shader_color->write_buffer(*set, 0, m_object_buffer.buffer(),
-                m_falling_cube.uniform_buffer.offset, m_falling_cube.uniform_buffer.size,
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         }
 
@@ -1498,21 +1479,33 @@ public:
         ZoneScoped;
         constexpr float dead_zone = 0.05;
 #ifdef _WIN32
-        float speed = 1.f;
+        float speed = 2.f;
         if (m_player.keys[VK_SHIFT])
             speed = speed * 0.25f;
         if (m_player.keys[VK_CONTROL])
-            speed = speed * 4.f;
+            speed = speed * 2.f;
         const bool action_build_new = m_player.keys[VK_SPACE] ||
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderLeft)];
         const bool action_break_new = m_player.keys['B'] ||
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderRight)];
         speed = speed + 10.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
+        if (m_player.keys['R'] && !is_recording)
+        {
+            recorder_file = std::ofstream("jolt.jor", std::ofstream::binary);
+            recorder_stream = std::make_unique<JPH::StreamOutWrapper>(recorder_file);
+            recorder = std::make_unique<JPH::DebugRendererRecorder>(*recorder_stream);
+            is_recording = true;
+        }
 #else
-        const float speed = 3.f + 10.f * touch.trigger_left;
-        const bool action_build_new = touch.buttons[std::to_underlying(xr::TouchControllerButton::A)];
-        const bool action_break_new = touch.buttons[std::to_underlying(xr::TouchControllerButton::B)];
+        const float speed = 3.f;
+        const bool action_build_new = touch.trigger_right > 0.5f;
+        const bool action_break_new = touch.trigger_left > 0.5f;
+        if (touch.buttons[std::to_underlying(GamepadButton::Menu)])
+        {
+            m_player.character->SetPosition({0, 0, 20});
+        }
 #endif
+        static bool action_build = false;
         if (action_build_new != action_build)
         {
             action_build = action_build_new;
@@ -1522,6 +1515,7 @@ public:
                 build_block(m_player.cam_pos, forward);
             }
         }
+        static bool action_break = false;
         if (action_break_new != action_break)
         {
             action_break = action_break_new;
@@ -1536,24 +1530,28 @@ public:
             (m_player.keys['D'] ? 1.f : 0.f) + (m_player.keys['A'] ? -1.f : 0.f);
         const float fz = (fabs(gamepad.thumbstick_left[1]) > dead_zone ? gamepad.thumbstick_left[1] : 0.f) +
             (m_player.keys['W'] ? 1.f : 0.f) + (m_player.keys['S'] ? -1.f : 0.f);
-        float fy = (gamepad.trigger_left * -1.f) + (gamepad.trigger_right);
-        if (m_player.keys['E'])
-        {
-            m_player.keys['E'] = false;
-            fy += 5.f;
-        }
+        const bool action_jump_new = m_player.keys['E'] ||
+            gamepad.buttons[std::to_underlying(xr::TouchControllerButton::A)];
 #else
         const float fx = fabs(touch.thumbstick_left[0]) > dead_zone ? touch.thumbstick_left[0] : 0.f;
         const float fz = fabs(touch.thumbstick_left[1]) > dead_zone ? touch.thumbstick_left[1] : 0.f;
-        const float fy = 0.f;
+        bool action_jump_new = touch.buttons[std::to_underlying(xr::TouchControllerButton::A)];
 #endif
-        const glm::vec3 forward = glm::vec4{fx, 0, -fz, 1} * view;
-        if (glm::length(forward) > 0.f || fy > 0.f)
+        float fy = 0.f;
+        static bool action_jump = false;
+        if (action_jump_new != action_jump)
         {
-            const auto step = glm::vec3(forward) + glm::vec3(0, fy, 0) * speed;
-            JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
-            const auto current_velocity = body_interface.GetLinearVelocity(sphere_id);
-            body_interface.SetLinearVelocity(sphere_id, JPH::Vec3(step.x, current_velocity.GetY() + step.y, step.z));
+            action_jump = action_jump_new;
+            if (action_jump && m_player.character->IsSupported())
+                fy += 5.f;
+        }
+        const glm::vec3 forward = glm::vec4{fx, 0, -fz, 1} * view;
+        if (glm::abs(glm::length(forward)) > 0.f || fy > 0.f)
+        {
+            const auto step = glm::vec3(forward) * speed;
+            const auto current_velocity = m_player.character->GetLinearVelocity();
+            const auto velocity = JPH::Vec3(step.x, current_velocity.GetY() + fy, step.z);
+            m_player.character->SetLinearVelocity(velocity);
         }
     }
     void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
@@ -1630,23 +1628,22 @@ public:
     {
         ZoneScoped;
         physics_system.Update(dt, 1, temp_allocator.get(), job_system.get());
-        // Output current position and velocity of the sphere
-        JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
-        const JPH::RVec3 position = body_interface.GetCenterOfMassPosition(sphere_id);
-        const JPH::Vec3 velocity = body_interface.GetLinearVelocity(sphere_id);
-        // LOGI("Step: Position (%f, %f, %f) Velocity (%f, %f, %f)",
-        //     position.GetX(), position.GetY(), position.GetZ(), velocity.GetX(), velocity.GetY(), velocity.GetZ());
-        const glm::vec3 p = glm::gtc::make_vec3(position.mF32);
-        sphere_transform = glm::gtx::translate(p);
-        m_player.cam_pos = p;
+        m_player.character->PostSimulation(0.1);
+        m_player.cam_pos = glm::gtc::make_vec3(m_player.character->GetPosition().mF32);
 
-        // if (++recorded_frames < 1000)
-        // {
-        //     const JPH::BodyManager::DrawSettings settings{};
-        //     recorder->NextFrame();
-        //     physics_system.DrawBodies(settings, recorder.get());
-        //     recorder->EndFrame();
-        // }
+        if (is_recording)
+        {
+            static float recorder_timer = 0;
+            recorder_timer += dt;
+            if (recorder_timer >= 1.0f)
+            {
+                constexpr JPH::BodyManager::DrawSettings settings{};
+                recorder->NextFrame();
+                physics_system.DrawBodies(settings, recorder.get());
+                recorder->EndFrame();
+                recorder_timer = 0;
+            }
+        }
 
         if (xrmode)
         {
