@@ -487,4 +487,4 @@ add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES app.cppm grid.cppm cube.cppm utils.cppm chunkgen.cppm chunkmesh.cppm)
+    FILES app.cppm grid.cppm cube.cppm utils.cppm chunkgen.cppm chunkmesh.cppm frustum.cppm)

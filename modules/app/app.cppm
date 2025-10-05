@@ -31,9 +31,8 @@ module;
 #include <Jolt/Renderer/DebugRendererRecorder.h>
 #include <Jolt/Core/StreamWrapper.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
-
-#include "Jolt/Physics/Character/Character.h"
-#include "Jolt/Physics/Collision/Shape/CapsuleShape.h"
+#include <Jolt/Physics/Character/Character.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 
 #ifdef __ANDROID__
 #include <jni.h>
@@ -59,6 +58,7 @@ import ce.shaders.solidcolor;
 import ce.app.grid;
 import ce.app.cube;
 import ce.app.utils;
+import ce.app.frustum;
 import ce.app.chunkgen;
 import ce.app.chunkmesh;
 import glm;
@@ -308,7 +308,7 @@ class AppBase final
     static constexpr uint32_t ChunkSize = 32;
     static constexpr uint32_t ChunkRings = 4;
 
-    FlatGenerator generator{ChunkSize, 20};
+    FlatGenerator generator{ChunkSize, 10};
     SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
     // std::vector<uint32_t> m_chunk_updates;
     TracyLockable(std::mutex, m_chunks_mutex);
@@ -316,6 +316,9 @@ class AppBase final
     std::unordered_map<BlockType, ChunksState> m_chunks_state;
     std::vector<glm::ivec3> m_regenerate_sectors;
     std::atomic_bool needs_update = false;
+
+    Frustum m_frustum;
+    bool update_frustum = true;
 
     std::unique_ptr<JPH::JobSystemThreadPool> job_system;
     std::unique_ptr<JPH::TempAllocatorImpl> temp_allocator;
@@ -837,6 +840,13 @@ public:
         std::unique_lock lock(m_chunks_mutex, std::try_to_lock);
         if (!lock.owns_lock())
             return;
+        
+        // Update the frustum with the latest camera matrix for the primary view
+        if (update_frustum)
+        {
+            const auto vp = frame.projection[0] * frame.view[0];
+            m_frustum.update(vp);
+        }
 
         auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
         {
@@ -850,6 +860,17 @@ public:
         std::unordered_map<BlockType, BatchDraw> batches;
         for (auto& chunk : sorted_chunks)
         {
+            // AABB Culling Check
+            const float chunk_world_size = ChunkSize * BlockSize;
+            const glm::vec3 min_corner = glm::vec3(chunk.sector) * chunk_world_size;
+            const AABB chunk_aabb{
+                .min = min_corner,
+                .max = min_corner + glm::vec3(chunk_world_size),
+            };
+
+            // if (!m_frustum.is_box_visible(chunk_aabb))
+            //     continue; // Skip this chunk, it's not visible
+
             for (const auto& [k, m] : chunk.mesh)
             {
                 if (m.vertices.empty())
@@ -915,17 +936,20 @@ public:
                         chunk.body_id = body_interface.CreateAndAddBody(body_settings, JPH::EActivation::DontActivate);
                     }
                 }
-                batches[k].ubo.push_back({
-                    .ObjectTransform = glm::transpose(chunk.transform),
-                });
-                const auto vertex_offset = chunk.buffer[k].offset / sizeof(shaders::SolidFlatShader::VertexInput);
-                batches[k].draw_args.push_back({
-                    .vertexCount = static_cast<uint32_t>(m.vertices.size()),
-                    .instanceCount = 1,
-                    .firstVertex = static_cast<uint32_t>(vertex_offset),
-                    .firstInstance = 0
-                });
-                batches[k].draw_count++;
+                if (m_frustum.is_box_visible(chunk_aabb))
+                {
+                    batches[k].ubo.push_back({
+                        .ObjectTransform = glm::transpose(chunk.transform),
+                    });
+                    const auto vertex_offset = chunk.buffer[k].offset / sizeof(shaders::SolidFlatShader::VertexInput);
+                    batches[k].draw_args.push_back({
+                        .vertexCount = static_cast<uint32_t>(m.vertices.size()),
+                        .instanceCount = 1,
+                        .firstVertex = static_cast<uint32_t>(vertex_offset),
+                        .firstInstance = 0
+                    });
+                    batches[k].draw_count++;
+                }
             }
             chunk.dirty = false;
             // chunk.mesh.clear();
@@ -1488,6 +1512,8 @@ public:
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderLeft)];
         const bool action_break_new = m_player.keys['B'] ||
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderRight)];
+        const bool action_respawn_new = m_player.keys['F'];
+        const bool action_frustum_new = m_player.keys['C'];
         speed = speed + 10.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
         if (m_player.keys['R'] && !is_recording)
         {
@@ -1500,11 +1526,27 @@ public:
         const float speed = 3.f;
         const bool action_build_new = touch.trigger_right > 0.5f;
         const bool action_break_new = touch.trigger_left > 0.5f;
-        if (touch.buttons[std::to_underlying(GamepadButton::Menu)])
-        {
-            m_player.character->SetPosition({0, 0, 20});
-        }
+        const bool action_respawn_new = touch.buttons[std::to_underlying(GamepadButton::Menu)];
+        const bool action_frustum_new = touch.buttons[std::to_underlying(GamepadButton::X)];
 #endif
+        static bool action_frustum = false;
+        if (action_frustum != action_frustum_new)
+        {
+            action_frustum = action_frustum_new;
+            if (action_frustum)
+            {
+                update_frustum = !update_frustum;
+            }
+        }
+        static bool action_respawn = false;
+        if (action_respawn != action_respawn_new)
+        {
+            action_respawn = action_respawn_new;
+            if (action_respawn)
+            {
+                m_player.character->SetPosition({0, 20, 0});
+            }
+        }
         static bool action_build = false;
         if (action_build_new != action_build)
         {
