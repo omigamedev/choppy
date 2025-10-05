@@ -41,13 +41,13 @@ concept VertexType = requires(T t)
     { t.position } -> std::same_as<glm::vec4&>;
 };
 
-template<VertexType T>
+template<typename T>
 struct ChunkMesh final
 {
     using VertexType = T;
     std::vector<VertexType> vertices;
 };
-template<VertexType T>
+template<typename T>
 class ChunkMesher
 {
 public:
@@ -61,7 +61,21 @@ bool operator&(Block::Mask lhs, Block::Mask rhs)
     return static_cast<uint8_t>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
 }
 
-template<VertexType T>
+/// @brief Packs vertex data into a single 32-bit integer.
+/// Layout: [2b face_id | 6b v | 6b u | 6b z | 6b y | 6b x]
+uint32_t pack_vertex(const glm::uvec3& pos, const glm::uvec2& uv, const uint32_t face_id)
+{
+    const uint32_t px = pos.x & 0x3F; // 6 bits
+    const uint32_t py = pos.y & 0x3F; // 6 bits
+    const uint32_t pz = pos.z & 0x3F; // 6 bits
+    const uint32_t u = uv.x & 0x3F;   // 6 bits
+    const uint32_t v = uv.y & 0x3F;   // 6 bits
+    const uint32_t fid = face_id & 0x03; // 2 bits
+
+    return (px) | (py << 6) | (pz << 12) | (u << 18) | (v << 24) | (fid << 30);
+}
+
+template<typename T>
 class SimpleMesher final : public ChunkMesher<T>
 {
 public:
@@ -70,7 +84,7 @@ public:
     {
         const uint32_t size = data.size;
 
-        std::vector<T> vertices;
+        std::vector<glm::vec4> vertices;
         vertices.reserve(pow(size + 1, 3));
         for (uint32_t y = 0; y < size + 1; ++y)
         {
@@ -78,12 +92,10 @@ public:
             {
                 for (uint32_t x = 0; x < size + 1; ++x)
                 {
-                    const float nx = static_cast<float>(x) * block_size;
-                    const float nz = static_cast<float>(z) * block_size;
-                    const float ny = static_cast<float>(y) * block_size;
-                    vertices.push_back({
-                        .position = {nx, ny, nz, 1.0f},
-                    });
+                    const float nx = static_cast<float>(x);
+                    const float nz = static_cast<float>(z);
+                    const float ny = static_cast<float>(y);
+                    vertices.push_back({nx, ny, nz, 1.0f});
                 }
             }
         }
@@ -127,21 +139,21 @@ public:
 
                     if (data.blocks[idx].face_mask & Block::Mask::B)
                     {
-                        m.vertices.emplace_back(vertices[VA].position, CA);
-                        m.vertices.emplace_back(vertices[VH].position, CC);
-                        m.vertices.emplace_back(vertices[VE].position, CB);
-                        m.vertices.emplace_back(vertices[VA].position, CA);
-                        m.vertices.emplace_back(vertices[VD].position, CD);
-                        m.vertices.emplace_back(vertices[VH].position, CC);
+                        m.vertices.emplace_back(pack_vertex(vertices[VA], CA * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VH], CC * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CB * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VA], CA * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CD * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VH], CC * 63, 0));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::F)
                     {
-                        m.vertices.emplace_back(vertices[VC].position, CA);
-                        m.vertices.emplace_back(vertices[VF].position, CC);
-                        m.vertices.emplace_back(vertices[VG].position, CB);
-                        m.vertices.emplace_back(vertices[VC].position, CA);
-                        m.vertices.emplace_back(vertices[VB].position, CD);
-                        m.vertices.emplace_back(vertices[VF].position, CC);
+                        m.vertices.emplace_back(pack_vertex(vertices[VC], CA * 63, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VF], CC * 63, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CB * 63, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VC], CA * 63, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CD * 63, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VF], CC * 63, 1));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::U)
                     {
@@ -151,12 +163,12 @@ public:
                             auto CB = glm::vec4{ 0, .5, 0, 0.1f};
                             auto CC = glm::vec4{.5, .5, 0, 0.1f};
                             auto CD = glm::vec4{.5,  1, 0, 0.1f};
-                            m.vertices.emplace_back(vertices[VE].position - glm::vec4(0, .1, 0, 0), CA);
-                            m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
-                            m.vertices.emplace_back(vertices[VF].position - glm::vec4(0, .1, 0, 0), CB);
-                            m.vertices.emplace_back(vertices[VE].position - glm::vec4(0, .1, 0, 0), CA);
-                            m.vertices.emplace_back(vertices[VH].position - glm::vec4(0, .1, 0, 0), CD);
-                            m.vertices.emplace_back(vertices[VG].position - glm::vec4(0, .1, 0, 0), CC);
+                            m.vertices.emplace_back(pack_vertex((vertices[VE] - glm::vec4(0, .1, 0, 0)), CA * 63, 0));
+                            m.vertices.emplace_back(pack_vertex((vertices[VG] - glm::vec4(0, .1, 0, 0)), CC * 63, 0));
+                            m.vertices.emplace_back(pack_vertex((vertices[VF] - glm::vec4(0, .1, 0, 0)), CB * 63, 0));
+                            m.vertices.emplace_back(pack_vertex((vertices[VE] - glm::vec4(0, .1, 0, 0)), CA * 63, 0));
+                            m.vertices.emplace_back(pack_vertex((vertices[VH] - glm::vec4(0, .1, 0, 0)), CD * 63, 0));
+                            m.vertices.emplace_back(pack_vertex((vertices[VG] - glm::vec4(0, .1, 0, 0)), CC * 63, 0));
                         }
                         else
                         {
@@ -164,40 +176,40 @@ public:
                             auto CB = glm::vec4{.5,  0, 1, 1};
                             auto CC = glm::vec4{ 1,  0, 0, 1};
                             auto CD = glm::vec4{ 1, .5, 0, 1};
-                            m.vertices.emplace_back(vertices[VE].position, CA);
-                            m.vertices.emplace_back(vertices[VG].position, CC);
-                            m.vertices.emplace_back(vertices[VF].position, CB);
-                            m.vertices.emplace_back(vertices[VE].position, CA);
-                            m.vertices.emplace_back(vertices[VH].position, CD);
-                            m.vertices.emplace_back(vertices[VG].position, CC);
+                            m.vertices.emplace_back(pack_vertex(vertices[VE], CA * 63, 0));
+                            m.vertices.emplace_back(pack_vertex(vertices[VG], CC * 63, 0));
+                            m.vertices.emplace_back(pack_vertex(vertices[VF], CB * 63, 0));
+                            m.vertices.emplace_back(pack_vertex(vertices[VE], CA * 63, 0));
+                            m.vertices.emplace_back(pack_vertex(vertices[VH], CD * 63, 0));
+                            m.vertices.emplace_back(pack_vertex(vertices[VG], CC * 63, 0));
                         }
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::D)
                     {
-                        m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VD].position, CC);
-                        m.vertices.emplace_back(vertices[VA].position, CB);
-                        m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VC].position, CD);
-                        m.vertices.emplace_back(vertices[VD].position, CC);
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CC * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VA], CB * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VC], CD * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CC * 63, 0));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::R)
                     {
-                        m.vertices.emplace_back(vertices[VD].position, CA);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
-                        m.vertices.emplace_back(vertices[VH].position, CB);
-                        m.vertices.emplace_back(vertices[VD].position, CA);
-                        m.vertices.emplace_back(vertices[VC].position, CD);
-                        m.vertices.emplace_back(vertices[VG].position, CC);
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CA * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VH], CB * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CA * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VC], CD * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC * 63, 0));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::L)
                     {
-                        m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VE].position, CC);
-                        m.vertices.emplace_back(vertices[VF].position, CB);
-                        m.vertices.emplace_back(vertices[VB].position, CA);
-                        m.vertices.emplace_back(vertices[VA].position, CD);
-                        m.vertices.emplace_back(vertices[VE].position, CC);
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CC * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VF], CB * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VA], CD * 63, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CC * 63, 0));
                     }
                 }
             }

@@ -125,15 +125,15 @@ private:
             VkVertexInputAttributeDescription{
                 .location = 0,
                 .binding = 0,
-                .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-                .offset = offsetof(VertexInput, position)
+                .format = VK_FORMAT_R32_UINT,
+                .offset = offsetof(VertexInput, data)
             },
-            VkVertexInputAttributeDescription{
-                .location = 1,
-                .binding = 0,
-                .format = VK_FORMAT_R32G32_SFLOAT,
-                .offset = offsetof(VertexInput, uvs)
-            },
+            // VkVertexInputAttributeDescription{
+            //     .location = 1,
+            //     .binding = 0,
+            //     .format = VK_FORMAT_R32G32_SFLOAT,
+            //     .offset = offsetof(VertexInput, uvs)
+            // },
         };
         const VkPipelineVertexInputStateCreateInfo input{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,

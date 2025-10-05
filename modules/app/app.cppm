@@ -938,6 +938,7 @@ public:
                 }
                 if (m_frustum.is_box_visible(chunk_aabb))
                 {
+                    const glm::vec3 chunk_pos = glm::vec3(chunk.sector);
                     batches[k].ubo.push_back({
                         .ObjectTransform = glm::transpose(chunk.transform),
                     });

@@ -7,10 +7,20 @@ PixelInput VSMain(VertexInput input,
     uint ViewIndex : SV_ViewID,
     [[vk::builtin("DrawIndex")]] uint drawIndex : SV_InstanceID)
 {
-    PixelInput output;
+    // Unpack the 32-bit integer
+    float x = float(input.data & 0x3F);
+    float y = float((input.data >> 6) & 0x3F);
+    float z = float((input.data >> 12) & 0x3F);
+    float u = float((input.data >> 18) & 0x3F) / 63.0f;
+    float v = float((input.data >> 24) & 0x3F) / 63.0f;
+    uint face_id = (input.data >> 30) & 0x03;
+
     const float4x4 WorldViewProjection = mul(ObjectsData[drawIndex].ObjectTransform, Frame.ViewProjection[ViewIndex]);
-    output.position = mul(input.position, WorldViewProjection);
-    output.uvs = input.uvs;
+    const float3 Position = float3(x, y, z) * 0.5;
+
+    PixelInput output;
+    output.position = mul(float4(Position, 1.0), WorldViewProjection);
+    output.uvs = float2(u, v);
     return output;
 }
 
