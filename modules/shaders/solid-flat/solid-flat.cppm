@@ -131,8 +131,8 @@ private:
             VkVertexInputAttributeDescription{
                 .location = 1,
                 .binding = 0,
-                .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-                .offset = offsetof(VertexInput, color)
+                .format = VK_FORMAT_R32G32_SFLOAT,
+                .offset = offsetof(VertexInput, uvs)
             },
         };
         const VkPipelineVertexInputStateCreateInfo input{

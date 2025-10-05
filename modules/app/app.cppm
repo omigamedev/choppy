@@ -108,7 +108,7 @@ struct PlayerState
     float cam_fov = 90.f;
     glm::vec2 cam_start = {0, 0};
     glm::vec2 cam_angles = { 0, 0 };
-    glm::vec3 cam_pos = { 6, 5, -21 };
+    glm::vec3 cam_pos = { 0, 100, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
     std::array<bool, 256> keys{false};
     JPH::Ref<JPH::Character> character;
@@ -306,7 +306,7 @@ class AppBase final
     static constexpr float BlockSize = 0.5f;
     // Number of blocks per chunk
     static constexpr uint32_t ChunkSize = 32;
-    static constexpr uint32_t ChunkRings = 4;
+    static constexpr uint32_t ChunkRings = 7;
 
     FlatGenerator generator{ChunkSize, 10};
     SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
@@ -534,7 +534,7 @@ public:
             // Optional settings:
             // settings->mMaxStrength = 100.0f;
             settings->mFriction = 0.5f;
-            m_player.character = new JPH::Character(settings, {0, 20, 0}, JPH::Quat::sIdentity(), 0, &physics_system);
+            m_player.character = new JPH::Character(settings, {0, 100, 0}, JPH::Quat::sIdentity(), 0, &physics_system);
             m_player.character->AddToPhysicsSystem(JPH::EActivation::Activate);
         }
 
@@ -1128,9 +1128,10 @@ public:
                 0, 0, nullptr, static_cast<uint32_t>(barriers.size()), barriers.data(), 0, nullptr);
         }
 
-        char zone_name[64];
-        snprintf(zone_name, sizeof(zone_name), "RenderPass %llu", static_cast<uint64_t>(frame.timeline_value));
-        TracyVkZoneTransient(m_vk->tracy(), render_pass_zone, cmd, zone_name, true);
+        // char zone_name[64];
+        // snprintf(zone_name, sizeof(zone_name), "RenderPass %llu", static_cast<uint64_t>(frame.timeline_value));
+        // TracyVkZoneTransient(m_vk->tracy(), render_pass_zone, cmd, zone_name, true);
+        TracyVkZone(m_vk->tracy(), cmd, "RenderPass");
 
         // Renderpass setup
         constexpr std::array rgb{.27f, .37f, .5f};

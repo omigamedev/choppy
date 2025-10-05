@@ -10,7 +10,7 @@ PixelInput VSMain(VertexInput input,
     PixelInput output;
     const float4x4 WorldViewProjection = mul(ObjectsData[drawIndex].ObjectTransform, Frame.ViewProjection[ViewIndex]);
     output.position = mul(input.position, WorldViewProjection);
-    output.color = input.color;
+    output.uvs = input.uvs;
     return output;
 }
 
@@ -19,6 +19,6 @@ PixelInput VSMain(VertexInput input,
 
 float4 PSMain(PixelInput input) : SV_TARGET
 {
-    const float4 c = myTexture.Sample(mySampler, input.color.xy);
-    return float4(c.x, c.y, c.z, input.color.a);
+    const float4 c = myTexture.Sample(mySampler, input.uvs);
+    return float4(c.x, c.y, c.z, 1.0);
 }

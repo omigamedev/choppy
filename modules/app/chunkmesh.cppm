@@ -83,7 +83,6 @@ public:
                     const float ny = static_cast<float>(y) * block_size;
                     vertices.push_back({
                         .position = {nx, ny, nz, 1.0f},
-                        .color = {x, y, z, 1.0f},
                     });
                 }
             }

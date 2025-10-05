@@ -38,10 +38,10 @@ public:
     {
         // Define the 8 vertices of the cube with unique colors for interpolation
         constexpr std::array<shaders::SolidFlatShader::VertexInput, 4> vertices = {{
-            {{0, -2, 0, 1}, {0, 0, 0, 1}},
-            {{0, -2, -1, 1}, {0, 0, 1, 1}},
-            {{1, -2, -1, 1}, {1, 0, 1, 1}},
-            {{1, -2, 0, 1}, {1, 0, 0, 1}},
+            //{{0, -2, 0, 1}, {0, 0, 0, 1}},
+            //{{0, -2, -1, 1}, {0, 0, 1, 1}},
+            //{{1, -2, -1, 1}, {1, 0, 1, 1}},
+            //{{1, -2, 0, 1}, {1, 0, 0, 1}},
         }};
 
         // Define the 36 indices for the 12 triangles of the cube

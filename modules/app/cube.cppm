@@ -40,14 +40,14 @@ public:
         // Define the 8 vertices of the cube with unique colors for interpolation
         constexpr std::array<shaders::SolidFlatShader::VertexInput, 8> vertices = {{
             // {position},                {color}
-            {{-0.5f, -0.5f,  0.5f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}, // 0: Front-Bottom-Left,  Red
-            {{ 0.5f, -0.5f,  0.5f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f}}, // 1: Front-Bottom-Right, Green
-            {{ 0.5f,  0.5f,  0.5f, 1.0f}, {0.0f, 0.0f, 1.0f, 1.0f}}, // 2: Front-Top-Right,    Blue
-            {{-0.5f,  0.5f,  0.5f, 1.0f}, {1.0f, 1.0f, 0.0f, 1.0f}}, // 3: Front-Top-Left,     Yellow
-            {{-0.5f, -0.5f, -0.5f, 1.0f}, {1.0f, 0.0f, 1.0f, 1.0f}}, // 4: Back-Bottom-Left,   Magenta
-            {{ 0.5f, -0.5f, -0.5f, 1.0f}, {0.0f, 1.0f, 1.0f, 1.0f}}, // 5: Back-Bottom-Right,  Cyan
-            {{ 0.5f,  0.5f, -0.5f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}}, // 6: Back-Top-Right,     White
-            {{-0.5f,  0.5f, -0.5f, 1.0f}, {0.5f, 0.5f, 0.5f, 1.0f}}, // 7: Back-Top-Left,      Gray
+            //{{-0.5f, -0.5f,  0.5f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}, // 0: Front-Bottom-Left,  Red
+            //{{ 0.5f, -0.5f,  0.5f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f}}, // 1: Front-Bottom-Right, Green
+            //{{ 0.5f,  0.5f,  0.5f, 1.0f}, {0.0f, 0.0f, 1.0f, 1.0f}}, // 2: Front-Top-Right,    Blue
+            //{{-0.5f,  0.5f,  0.5f, 1.0f}, {1.0f, 1.0f, 0.0f, 1.0f}}, // 3: Front-Top-Left,     Yellow
+            //{{-0.5f, -0.5f, -0.5f, 1.0f}, {1.0f, 0.0f, 1.0f, 1.0f}}, // 4: Back-Bottom-Left,   Magenta
+            //{{ 0.5f, -0.5f, -0.5f, 1.0f}, {0.0f, 1.0f, 1.0f, 1.0f}}, // 5: Back-Bottom-Right,  Cyan
+            //{{ 0.5f,  0.5f, -0.5f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}}, // 6: Back-Top-Right,     White
+            //{{-0.5f,  0.5f, -0.5f, 1.0f}, {0.5f, 0.5f, 0.5f, 1.0f}}, // 7: Back-Top-Left,      Gray
         }};
 
         // Define the 36 indices for the 12 triangles of the cube
