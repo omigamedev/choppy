@@ -306,14 +306,14 @@ class AppBase final
     static constexpr float BlockSize = 0.5f;
     // Number of blocks per chunk
     static constexpr uint32_t ChunkSize = 32;
-    static constexpr uint32_t ChunkRings = 7;
+    static constexpr uint32_t ChunkRings = 4;
 
     FlatGenerator generator{ChunkSize, 10};
     SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
     // std::vector<uint32_t> m_chunk_updates;
     TracyLockable(std::mutex, m_chunks_mutex);
     std::thread m_chunks_thread;
-    std::unordered_map<BlockType, ChunksState> m_chunks_state;
+    std::unordered_map<BlockLayer, ChunksState> m_chunks_state;
     std::vector<glm::ivec3> m_regenerate_sectors;
     std::atomic_bool needs_update = false;
 
@@ -857,7 +857,7 @@ public:
 
         JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
 
-        std::unordered_map<BlockType, BatchDraw> batches;
+        std::unordered_map<BlockLayer, BatchDraw> batches;
         for (auto& chunk : sorted_chunks)
         {
             // AABB Culling Check
@@ -938,7 +938,6 @@ public:
                 }
                 if (m_frustum.is_box_visible(chunk_aabb))
                 {
-                    const glm::vec3 chunk_pos = glm::vec3(chunk.sector);
                     batches[k].ubo.push_back({
                         .ObjectTransform = glm::transpose(chunk.transform),
                     });
@@ -1045,7 +1044,7 @@ public:
 
         for (auto& [k, state] : m_chunks_state)
         {
-            const auto& shader = (k == BlockType::Water) ? shader_transparent : shader_opaque;
+            const auto& shader = (k == BlockLayer::Transparent) ? shader_transparent : shader_opaque;
             if (const auto set = shader->alloc_descriptor(frame.present_index, 1))
             {
                 state.object_descriptor_set = *set;
@@ -1207,8 +1206,8 @@ public:
         if (m_chunks_state.size() > 1)
         {
             const std::vector layers{
-                std::pair(shader_opaque, m_chunks_state[BlockType::Dirt]),
-                std::pair(shader_transparent, m_chunks_state[BlockType::Water]),
+                std::pair(shader_opaque, m_chunks_state[BlockLayer::Solid]),
+                std::pair(shader_transparent, m_chunks_state[BlockLayer::Transparent]),
             };
             for (const auto& [shader, state] : layers)
             {
@@ -1456,7 +1455,7 @@ public:
         {
             const auto [cell, b, p, n] = hit.value();
             const glm::ivec3 sector = glm::floor(glm::vec3(cell) / static_cast<float>(ChunkSize));
-            generator.edit(sector, cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Air);
+            generator.remove(sector, cell - sector * static_cast<int32_t>(ChunkSize));
             std::lock_guard lock(m_chunks_mutex);
             if (auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {

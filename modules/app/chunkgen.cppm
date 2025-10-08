@@ -11,12 +11,28 @@ import glm;
 
 export namespace ce::app
 {
+enum class BlockLayer : uint8_t
+{
+    Transparent,
+    Solid,
+};
+const char* to_string(const BlockLayer b)
+{
+    switch (b)
+    {
+    case BlockLayer::Transparent: return  "Transparent";
+    case BlockLayer::Solid: return "Solid";
+    default: return "Unknown";
+    }
+}
 enum class BlockType : uint8_t
 {
     Air,
     Water,
     Grass,
     Dirt,
+    Sand,
+    Rock,
 };
 const char* to_string(const BlockType b)
 {
@@ -26,6 +42,8 @@ const char* to_string(const BlockType b)
     case BlockType::Water: return "Water";
     case BlockType::Grass: return "Grass";
     case BlockType::Dirt: return "Dirt";
+    case BlockType::Sand: return "Sand";
+    case BlockType::Rock: return "Rock";
     default: return "Unknown";
     }
 }
@@ -33,6 +51,7 @@ struct Block final
 {
     BlockType type;
     enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, R = 16, L = 32 } face_mask;
+    enum class FaceIndex : uint8_t { U, D, F, B, R, L };
 };
 struct ChunkData final
 {
@@ -93,6 +112,7 @@ class FlatGenerator final : public ChunkGenerator
 	siv::PerlinNoise perlin{ 1 };
     std::unordered_map<glm::ivec3, std::unordered_map<glm::u8vec3, BlockType, U8Vec3Hash>, IVec3Hash> m_edits;
     bool m_dirty = false;
+    std::unordered_map<glm::ivec3, std::vector<BlockType>, IVec3Hash> m_blocks;
 
 public:
     explicit FlatGenerator(const uint32_t size, const uint32_t ground_height) noexcept
@@ -112,17 +132,51 @@ public:
             }
         }
         const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
-        const float terrain_height = perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height);
+        const float rand = perlin.noise2D_01(nc.x * 10.f, nc.y * 10.f);
+        const float mountains = perlin.noise2D_01(nc.x * 0.1f, nc.y * 0.1f);
+        const int32_t terrain_height = std::floor(perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height) * mountains * 5.f);
         BlockType block = BlockType::Air;
         if (cell.y < 0)
+        {
             block = BlockType::Water;
-        if (cell.y <= terrain_height)
-            block = BlockType::Dirt;
+            if (cell.y <= terrain_height)
+                block = BlockType::Sand;
+            if (cell.y < (terrain_height - 3))
+                block = BlockType::Rock;
+        }
+        else
+        {
+            if (cell.y <= terrain_height)
+            {
+                block = BlockType::Grass;
+                if (cell.y > m_ground_height / 2 && rand < 0.5f)
+                    block = BlockType::Rock;
+            }
+            if (cell.y < (terrain_height - 1))
+                block = BlockType::Dirt;
+        }
         return block;
     }
     void edit(const glm::ivec3& sector, const glm::u8vec3& local_cell, const BlockType block_type) noexcept
     {
         m_edits[sector][local_cell] = block_type;
+        m_dirty = true;
+    }
+    void remove(const glm::ivec3& sector, const glm::u8vec3& local_cell) noexcept
+    {
+        const auto neighbours = std::to_array<glm::ivec3>({
+            {-1, 0, 0}, {+1, 0, 0}, {0, +1, 0}, {0, 0, -1}, {0, 0, +1},
+        });
+        // water floods into blocks that are next to other water blocks
+        if (std::ranges::any_of(neighbours, [this, cell=sector*static_cast<int32_t>(m_chunk_size)+glm::ivec3(local_cell)](const glm::ivec3& offset)
+            { return peek(cell+offset) == BlockType::Water; }))
+        {
+            m_edits[sector][local_cell] = BlockType::Water;
+        }
+        else
+        {
+            m_edits[sector][local_cell] = BlockType::Air;
+        }
         m_dirty = true;
     }
     template<typename T>
