@@ -5,9 +5,9 @@ module;
 #include <vector>
 #include <cstddef>
 #include <numeric>
-export module ce.app.utils;
+export module ce.app:utils;
 
-export namespace ce::app
+export namespace ce::app::utils
 {
 constexpr int32_t pow(const int32_t base, const uint32_t exp)
 {

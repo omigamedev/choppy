@@ -31,8 +31,8 @@ add_library(vk OBJECT vma.cpp)
 target_sources(vk PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES vk.cppm utils.cppm buffer.cppm shader.cppm)
-target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator platform glmcppm Tracy::TracyClient)
+    FILES vk.cppm utils.cppm buffer.cppm shader.cppm texture.cppm)
+target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator platform glmcppm Tracy::TracyClient stb)
 if(WIN32)
     target_compile_definitions(vk PUBLIC NOMINMAX)
 else()

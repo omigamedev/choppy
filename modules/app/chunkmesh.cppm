@@ -26,9 +26,9 @@ module;
 #define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #endif
 
-export module ce.app.chunkmesh;
-import ce.app.utils;
-import ce.app.chunkgen;
+export module ce.app:chunkmesh;
+import :utils;
+import :chunkgen;
 import ce.shaders.solidflat;
 import ce.vk;
 import ce.vk.buffer;
@@ -88,6 +88,52 @@ const std::unordered_map<BlockType, BlockMaterial> materials {
     {BlockType::Sand, {BlockLayer::Solid, std::to_array<glm::uvec2>({{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 2}})}},
     {BlockType::Rock, {BlockLayer::Solid, std::to_array<glm::uvec2>({{1, 2},{1, 2},{1, 2},{1, 2},{1, 2},{1, 2}})}},
     {BlockType::Water, {BlockLayer::Transparent, std::to_array<glm::uvec2>({{0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}})}},
+};
+
+template<typename T>
+class GreedyMesher final : public ChunkMesher<T>
+{
+public:
+    [[nodiscard]] std::unordered_map<BlockLayer, ChunkMesh<T>> mesh(
+        const ChunkData& data, const float block_size) const noexcept override
+    {
+        struct Slice
+        {
+            Block::Mask mask;
+            // uses glm::vec3[i] component index
+            uint8_t main_comp;
+            uint8_t dir;
+            uint8_t u_comp;
+            uint8_t v_comp;
+        };
+        const auto slices = std::to_array<Slice>({
+            {Block::Mask::U, 1, -1, 0, 2},
+            {Block::Mask::D, 1,  1, 0, 2},
+            {Block::Mask::F, 2,  1, 0, 1},
+            {Block::Mask::B, 2, -1, 0, 1},
+            {Block::Mask::L, 0,  1, 1, 2},
+            {Block::Mask::R, 0, -1, 1, 2}
+        });
+        const uint32_t size = data.size;
+        std::vector<glm::vec3> vertices;
+        vertices.reserve(pow(size + 1, 3));
+        for (const auto& [m, sc, d, uc, vc]  : slices)
+        {
+            for (uint32_t slice = 0; slice < size + 1; ++slice)
+            {
+                std::vector<glm::uvec2> points;
+                points.reserve(pow(size + 1, 2));
+                for (uint32_t y = 0; y < size + 1; ++y)
+                {
+                    for (uint32_t x = 0; x < size + 1; ++x)
+                    {
+                        points.emplace_back(x, y);
+                    }
+                }
+
+            }
+        }
+    }
 };
 
 template<typename T>
@@ -153,6 +199,15 @@ public:
                     glm::uvec2 CC{1, 0};
                     glm::uvec2 CD{1, 1};
 
+                    if (data.blocks[idx].face_mask & Block::Mask::U)
+                    {
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CA + mat[std::to_underlying(Block::FaceIndex::U)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::U)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VF], CB + mat[std::to_underlying(Block::FaceIndex::U)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CA + mat[std::to_underlying(Block::FaceIndex::U)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VH], CD + mat[std::to_underlying(Block::FaceIndex::U)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::U)], 0));
+                    }
                     if (data.blocks[idx].face_mask & Block::Mask::B)
                     {
                         m.vertices.emplace_back(pack_vertex(vertices[VA], CA + mat[std::to_underlying(Block::FaceIndex::B)], 0));
@@ -170,15 +225,6 @@ public:
                         m.vertices.emplace_back(pack_vertex(vertices[VC], CA + mat[std::to_underlying(Block::FaceIndex::F)], 1));
                         m.vertices.emplace_back(pack_vertex(vertices[VB], CD + mat[std::to_underlying(Block::FaceIndex::F)], 1));
                         m.vertices.emplace_back(pack_vertex(vertices[VF], CC + mat[std::to_underlying(Block::FaceIndex::F)], 1));
-                    }
-                    if (data.blocks[idx].face_mask & Block::Mask::U)
-                    {
-                        m.vertices.emplace_back(pack_vertex(vertices[VE], CA + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VF], CB + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VE], CA + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VH], CD + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::U)], 0));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::D)
                     {

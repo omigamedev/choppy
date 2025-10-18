@@ -87,7 +87,7 @@ private:
         return true;
     }
     bool create_pipeline(VkRenderPass renderpass, const VkSampleCountFlagBits sample_count,
-        const bool enable_blending, const bool double_sided) noexcept
+        const bool enable_blending, const bool double_sided, const bool wireframe) noexcept
     {
         // Pipeline
         const std::array stages{
@@ -136,9 +136,10 @@ private:
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
         };
         const VkCullModeFlags cull_mode = double_sided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+        const VkPolygonMode poly_mode = wireframe ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
         const VkPipelineRasterizationStateCreateInfo rasterization{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-            .polygonMode = VK_POLYGON_MODE_FILL,
+            .polygonMode = poly_mode,
             .cullMode = cull_mode,
             .frontFace = VK_FRONT_FACE_CLOCKWISE,
             .lineWidth = 1,
@@ -174,6 +175,8 @@ private:
         constexpr std::array dynamic_states{
             VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT,
             VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT,
+            VK_DYNAMIC_STATE_LINE_WIDTH,
+            VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
             // VK_DYNAMIC_STATE_POLYGON_MODE_EXT,
         };
         const VkPipelineDynamicStateCreateInfo dynamics{
@@ -234,10 +237,10 @@ public:
         : ShaderModule(vk, std::format("SolidColor-{}", name)) { }
     ~SolidColorShader() noexcept override = default;
     bool create(VkRenderPass renderpass, const uint32_t pools_count, const VkSampleCountFlagBits sample_count,
-        const uint32_t frame_sets, const uint32_t object_sets, const bool enable_blending, const bool double_sided) noexcept
+        const uint32_t frame_sets, const uint32_t object_sets, const bool enable_blending, const bool double_sided, const bool wireframe) noexcept
     {
         if (!load_from_file("assets/shaders/solid-color-vs.spv", "assets/shaders/solid-color-ps.spv") ||
-            !create_layout() || !create_pipeline(renderpass, sample_count, enable_blending, double_sided) ||
+            !create_layout() || !create_pipeline(renderpass, sample_count, enable_blending, double_sided, wireframe) ||
             !create_pools(pools_count, frame_sets, object_sets))
         {
             return false;

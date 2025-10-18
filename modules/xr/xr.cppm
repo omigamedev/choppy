@@ -770,7 +770,9 @@ public:
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
             .pNext = &enable_features11,
             .features = {
-                .multiDrawIndirect = true
+                .multiDrawIndirect = true,
+                .fillModeNonSolid = true,
+                .wideLines = true,
             }
         };
         const VkDeviceCreateInfo device_info{

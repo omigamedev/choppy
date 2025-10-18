@@ -15,24 +15,7 @@ module;
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 #include <tracy/TracyVulkan.hpp>
-#include <stb_image.h>
-
 #include <Jolt/Jolt.h>
-#include <Jolt/RegisterTypes.h>
-#include <Jolt/Core/Factory.h>
-#include <Jolt/Core/TempAllocator.h>
-#include <Jolt/Core/JobSystemThreadPool.h>
-#include <Jolt/Physics/PhysicsSettings.h>
-#include <Jolt/Physics/PhysicsSystem.h>
-#include <Jolt/Physics/Collision/Shape/BoxShape.h>
-#include <Jolt/Physics/Collision/Shape/SphereShape.h>
-#include <Jolt/Physics/Body/BodyCreationSettings.h>
-#include <Jolt/Physics/Body/BodyActivationListener.h>
-#include <Jolt/Renderer/DebugRendererRecorder.h>
-#include <Jolt/Core/StreamWrapper.h>
-#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
-#include <Jolt/Physics/Character/Character.h>
-#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 
 #ifdef __ANDROID__
 #include <jni.h>
@@ -51,30 +34,17 @@ import ce.platform.globals;
 import ce.xr;
 import ce.vk;
 import ce.vk.buffer;
+import ce.vk.texture;
 import ce.vk.shader;
 import ce.vk.utils;
 import ce.shaders.solidflat;
 import ce.shaders.solidcolor;
-import ce.app.grid;
-import ce.app.cube;
-import ce.app.utils;
-import ce.app.frustum;
-import ce.app.chunkgen;
-import ce.app.chunkmesh;
 import glm;
-
-namespace Layers
-{
-    static constexpr JPH::ObjectLayer NON_MOVING = 0;
-    static constexpr JPH::ObjectLayer MOVING = 1;
-    static constexpr JPH::ObjectLayer NUM_LAYERS = 2;
-};
-namespace BroadPhaseLayers
-{
-    static constexpr JPH::BroadPhaseLayer NON_MOVING(0);
-    static constexpr JPH::BroadPhaseLayer MOVING(1);
-    static constexpr JPH::uint NUM_LAYERS(2);
-};
+import :utils;
+import :frustum;
+import :chunkgen;
+import :chunkmesh;
+import :player;
 
 export namespace ce::app
 {
@@ -101,32 +71,12 @@ struct GamepadState
     float trigger_left{0};
     float trigger_right{0};
 };
-struct PlayerState
-{
-    bool dragging = false;
-    glm::ivec2 drag_start = { 0, 0 };
-    float cam_fov = 90.f;
-    glm::vec2 cam_start = {0, 0};
-    glm::vec2 cam_angles = { 0, 0 };
-    glm::vec3 cam_pos = { 0, 100, 0 };
-    glm::ivec3 cam_sector = { 0, 0, 0 };
-    std::array<bool, 256> keys{false};
-    JPH::Ref<JPH::Character> character;
-};
-struct ChunkUpdate : NoCopy
+struct ChunkUpdate : utils::NoCopy
 {
     std::map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> data;
     size_t chunk_index = 0;
     glm::vec4 color{};
     glm::ivec3 sector{};
-};
-struct Texture
-{
-    VkImage image = VK_NULL_HANDLE;
-    VmaAllocation allocation = VK_NULL_HANDLE;
-    VmaAllocationInfo allocation_info{};
-    VkImageView image_view = VK_NULL_HANDLE;
-    glm::uvec2 size{};
 };
 struct ChunksState
 {
@@ -143,128 +93,17 @@ struct Geometry
     vk::BufferSuballocation uniform_buffer{};
     uint32_t vertex_count = 0;
 };
-/// Class that determines if two object layers can collide
-class ObjectLayerPairFilterImpl : public JPH::ObjectLayerPairFilter
+struct TransformComponent
 {
-public:
-	bool ShouldCollide(JPH::ObjectLayer inObject1, JPH::ObjectLayer inObject2) const override
-	{
-		switch (inObject1)
-		{
-		case Layers::NON_MOVING:
-			return inObject2 == Layers::MOVING; // Non moving only collides with moving
-		case Layers::MOVING:
-			return true; // Moving collides with everything
-		default:
-			JPH_ASSERT(false);
-			return false;
-		}
-	}
+    glm::vec3 translation{};
+    glm::vec3 rotation{};
+    glm::vec3 scale{};
+    glm::mat4 transform{};
 };
-
-// BroadPhaseLayerInterface implementation
-// This defines a mapping between object and broadphase layers.
-class BPLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface
+struct StaticMeshComponent
 {
-public:
-    BPLayerInterfaceImpl()
-	{
-		// Create a mapping table from object to broad phase layer
-		mObjectToBroadPhase[Layers::NON_MOVING] = BroadPhaseLayers::NON_MOVING;
-		mObjectToBroadPhase[Layers::MOVING] = BroadPhaseLayers::MOVING;
-	}
-
-	JPH::uint GetNumBroadPhaseLayers() const override
-	{
-		return BroadPhaseLayers::NUM_LAYERS;
-	}
-
-	JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override
-	{
-		JPH_ASSERT(inLayer < Layers::NUM_LAYERS);
-		return mObjectToBroadPhase[inLayer];
-	}
-
-#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
-	const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer inLayer) const override
-	{
-		switch ((JPH::BroadPhaseLayer::Type)inLayer)
-		{
-		case (JPH::BroadPhaseLayer::Type)BroadPhaseLayers::NON_MOVING:	return "NON_MOVING";
-		case (JPH::BroadPhaseLayer::Type)BroadPhaseLayers::MOVING:		return "MOVING";
-		default:													JPH_ASSERT(false); return "INVALID";
-		}
-	}
-#endif // JPH_EXTERNAL_PROFILE || JPH_PROFILE_ENABLED
-
-private:
-	JPH::BroadPhaseLayer mObjectToBroadPhase[Layers::NUM_LAYERS];
+    Geometry geometry;
 };
-
-/// Class that determines if an object layer can collide with a broadphase layer
-class ObjectVsBroadPhaseLayerFilterImpl : public JPH::ObjectVsBroadPhaseLayerFilter
-{
-public:
-	bool ShouldCollide(JPH::ObjectLayer inLayer1, JPH::BroadPhaseLayer inLayer2) const override
-	{
-		switch (inLayer1)
-		{
-		case Layers::NON_MOVING:
-			return inLayer2 == BroadPhaseLayers::MOVING;
-		case Layers::MOVING:
-			return true;
-		default:
-			JPH_ASSERT(false);
-			return false;
-		}
-	}
-};
-/*
-// An example contact listener
-class MyContactListener : public JPH::ContactListener
-{
-public:
-	// See: ContactListener
-    JPH::ValidateResult	OnContactValidate(const JPH::Body &inBody1,
-        const JPH::Body &inBody2, JPH::RVec3Arg inBaseOffset, const JPH::CollideShapeResult &inCollisionResult) override
-	{
-		// LOGI("Contact validate callback");
-
-		// Allows you to ignore a contact before it is created (using layers to not make objects collide is cheaper!)
-		return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
-	}
-
-	void OnContactAdded(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings) override
-	{
-		// LOGI("A contact was added");
-	}
-
-	void OnContactPersisted(const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings) override
-	{
-		// LOGI("A contact was persisted");
-	}
-
-	void OnContactRemoved(const JPH::SubShapeIDPair &inSubShapePair) override
-	{
-		// LOGI("A contact was removed");
-	}
-};
-
-// An example activation listener
-class MyBodyActivationListener : public JPH::BodyActivationListener
-{
-public:
-	void OnBodyActivated(const JPH::BodyID &inBodyID, JPH::uint64 inBodyUserData) override
-	{
-		LOGI("A body got activated");
-	}
-
-	void OnBodyDeactivated(const JPH::BodyID &inBodyID, JPH::uint64 inBodyUserData) override
-	{
-		LOGI("A body went to sleep");
-	}
-};
-*/
 
 class AppBase final
 {
@@ -286,7 +125,7 @@ class AppBase final
     vk::Buffer m_frame_buffer;
     vk::Buffer m_object_buffer;
 
-    Texture m_texture;
+    vk::texture::Texture m_texture;
     VkSampler m_sampler = VK_NULL_HANDLE;
 
     Geometry m_cube{};
@@ -297,7 +136,7 @@ class AppBase final
 
     vk::Buffer m_args_buffer;
     bool m_running = true;
-    PlayerState m_player{};
+    player::PlayerState m_player{};
     bool xrmode = false;
     uint32_t m_swapchain_count = 0;
     uint64_t m_timeline_value = 0;
@@ -306,7 +145,7 @@ class AppBase final
     static constexpr float BlockSize = 0.5f;
     // Number of blocks per chunk
     static constexpr uint32_t ChunkSize = 32;
-    static constexpr uint32_t ChunkRings = 4;
+    static constexpr uint32_t ChunkRings = 1;
 
     FlatGenerator generator{ChunkSize, 10};
     SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
@@ -317,29 +156,10 @@ class AppBase final
     std::vector<glm::ivec3> m_regenerate_sectors;
     std::atomic_bool needs_update = false;
 
+    physics::PhysicsSystem m_physics_system;
+
     Frustum m_frustum;
     bool update_frustum = true;
-
-    std::unique_ptr<JPH::JobSystemThreadPool> job_system;
-    std::unique_ptr<JPH::TempAllocatorImpl> temp_allocator;
-    JPH::PhysicsSystem physics_system;
-    BPLayerInterfaceImpl broad_phase_layer_interface;
-    ObjectVsBroadPhaseLayerFilterImpl object_vs_broadphase_layer_filter;
-    ObjectLayerPairFilterImpl object_vs_object_layer_filter;
-    // MyBodyActivationListener body_activation_listener;
-    // MyContactListener contact_listener;
-    JPH::RefConst<JPH::Shape> shared_box_shape;
-
-    bool is_recording = false;
-    std::unique_ptr<JPH::DebugRendererRecorder> recorder;
-    std::unique_ptr<JPH::StreamOutWrapper> recorder_stream;
-    std::ofstream recorder_file;
-
-    const uint32_t physMaxBodies = 4096;
-    const uint32_t physNumBodyMutexes = 0;
-    const uint32_t physMaxBodyPairs = 1024;
-    const uint32_t physMaxContactConstraints = 1024;
-    const uint32_t physCollisionSteps = 1;
 
 public:
     ~AppBase()
@@ -367,117 +187,6 @@ public:
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
 
-    [[nodiscard]] std::optional<Texture> load_texture(const std::string& path)
-    {
-        const auto& p = platform::GetPlatform();
-        const auto file_content = p.read_file(path);
-        if (!file_content)
-        {
-            LOGE("Failed to read shader code: %s", path.c_str());
-            return std::nullopt;
-        }
-
-        int32_t width, height, channels;
-        if (const uint8_t* rgb = stbi_load_from_memory(file_content->data(), file_content->size(),
-            &width, &height, &channels, STBI_rgb_alpha); rgb)
-        {
-            const VkImageCreateInfo create_info{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .imageType = VK_IMAGE_TYPE_2D,
-                .format = VK_FORMAT_R8G8B8A8_SRGB,
-                .extent = VkExtent3D(width, height, 1),
-                .mipLevels = 1,
-                .arrayLayers = 1,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                .tiling = VK_IMAGE_TILING_OPTIMAL,
-                .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            };
-            VkImage image = VK_NULL_HANDLE;
-            constexpr VmaAllocationCreateInfo vma_create_info{
-                .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            };
-            VmaAllocation allocation = VK_NULL_HANDLE;
-            VmaAllocationInfo allocation_info{};
-            if (const VkResult r = vmaCreateImage(m_vk->vma(), &create_info, &vma_create_info, &image, &allocation,
-                &allocation_info); r != VK_SUCCESS)
-            {
-                LOGE("Could not create image. Error: %s", vk::utils::to_string(r));
-                return std::nullopt;
-            }
-            const VkImageViewCreateInfo image_view_info{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image = image,
-                .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format = create_info.format,
-                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
-            };
-            VkImageView image_view = VK_NULL_HANDLE;
-            if (const VkResult r = vkCreateImageView(m_vk->device(), &image_view_info, nullptr, &image_view);
-                r != VK_SUCCESS)
-            {
-                LOGE("Could not create image view. Error: %s", vk::utils::to_string(r));
-                return std::nullopt;
-            }
-
-            if (const auto sb = m_staging_buffer.suballoc(width * height * 4, 64); sb)
-            {
-                const std::span src(rgb, width * height * 4);
-                std::ranges::copy(src, static_cast<uint8_t*>(sb->ptr));
-                m_vk->exec_immediate("init texture", [&](VkCommandBuffer cmd)
-                {
-                    const VkImageMemoryBarrier barrier_transfer{
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                        .srcAccessMask = 0,
-                        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        .image = image,
-                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
-                    };
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        0, 0, nullptr, 0, nullptr, 1, &barrier_transfer);
-
-                    const VkBufferImageCopy copy_info{
-                        .bufferOffset = sb->offset,
-                        .bufferRowLength = static_cast<uint32_t>(width),
-                        .bufferImageHeight = static_cast<uint32_t>(height),
-                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                        .imageOffset = VkOffset3D{0, 0, 0},
-                        .imageExtent = VkExtent3D{static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1},
-                    };
-                    vkCmdCopyBufferToImage(cmd, m_staging_buffer.buffer(), image,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_info);
-
-                    const VkImageMemoryBarrier barrier_sampling{
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        .image = image,
-                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}
-                    };
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                        0, 0, nullptr, 0, nullptr, 1, &barrier_sampling);
-                });
-                m_staging_buffer.subfree(*sb);
-                LOGI("Image Loaded");
-                return Texture{
-                    .image = image,
-                    .allocation = allocation,
-                    .allocation_info = allocation_info,
-                    .image_view = image_view,
-                    .size = {width, height},
-                };
-            }
-        }
-        return std::nullopt;
-    }
-
     void init(const bool xr_mode) noexcept
     {
         xrmode = xr_mode;
@@ -495,48 +204,9 @@ public:
             m_swapchain_count = m_vk->swapchain_count();
         }
 
-        JPH::RegisterDefaultAllocator();
-        JPH::Factory::sInstance = new JPH::Factory();
-        JPH::RegisterTypes();
-
-        job_system = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
-            static_cast<int32_t>(std::thread::hardware_concurrency()) - 1);
-        physics_system.Init(physMaxBodies, physMaxBodies, physMaxBodies, physMaxBodies,
-            broad_phase_layer_interface, object_vs_broadphase_layer_filter, object_vs_object_layer_filter);
-        // physics_system.SetBodyActivationListener(&body_activation_listener);
-        // physics_system.SetContactListener(&contact_listener);
-        temp_allocator = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
-
-        JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
-        {
-            float hs = BlockSize * 0.5f;
-            const auto box_settings = new JPH::BoxShapeSettings({hs, hs, hs});
-            if (const auto result = box_settings->Create(); result.IsValid())
-            {
-                shared_box_shape = result.Get();
-            }
-
-            // Constants for the character
-            constexpr float cCharacterHeight = 1.7f; // Total character height
-            constexpr float cCharacterRadius = 0.3f;
-            constexpr float cMaxSlopeAngle = glm::radians(45.0f);
-            const JPH::RefConst character_shape = new JPH::CapsuleShape(
-                cCharacterHeight / 2.0f - cCharacterRadius, cCharacterRadius);
-
-            // 2. Create the CharacterSettings
-            const JPH::Ref settings = new JPH::CharacterSettings();
-            settings->mMass = 80.0f; // Player mass
-            settings->mShape = character_shape;
-            settings->mMaxSlopeAngle = cMaxSlopeAngle;
-            settings->mLayer = Layers::MOVING; // Your custom object layer for players
-            settings->mUp = JPH::Vec3::sAxisY(); // Gravity direction is always Y-axis for Jolt characters
-
-            // Optional settings:
-            // settings->mMaxStrength = 100.0f;
-            settings->mFriction = 0.5f;
-            m_player.character = new JPH::Character(settings, {0, 100, 0}, JPH::Quat::sIdentity(), 0, &physics_system);
-            m_player.character->AddToPhysicsSystem(JPH::EActivation::Activate);
-        }
+        m_physics_system.create_system();
+        m_physics_system.create_shared_box(BlockSize);
+        m_player.character = m_physics_system.create_character();
 
         generator.load();
 
@@ -545,7 +215,7 @@ public:
         shader_transparent = std::make_shared<shaders::SolidFlatShader>(m_vk, "Transparent");
         shader_transparent->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, true, true);
         shader_color = std::make_shared<shaders::SolidColorShader>(m_vk, "Color");
-        shader_color->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, true, false);
+        shader_color->create(m_renderpass, m_swapchain_count, m_sample_count, 1, 100, true, true, true);
 
         // Create the grid object
         //m_grid = std::make_shared<Grid>();
@@ -607,7 +277,7 @@ public:
             flush_staging_buffer_copies(cmd);
         });
 
-        m_texture = load_texture("assets/grass.png").value();
+        m_texture = vk::texture::load_texture(m_vk, "assets/grass.png", m_staging_buffer).value();
 
         const VkSamplerCreateInfo sampler_info{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -848,14 +518,12 @@ public:
             m_frustum.update(vp);
         }
 
-        auto sorted_chunks = sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
+        auto sorted_chunks = utils::sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
         {
             const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
             const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
             return dist1 < dist2;
         });
-
-        JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
 
         std::unordered_map<BlockLayer, BatchDraw> batches;
         for (auto& chunk : sorted_chunks)
@@ -898,42 +566,10 @@ public:
                         // defer suballocation deletion
                         m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
                     }
-                    if (body_interface.IsAdded(chunk.body_id))
+                    m_physics_system.remove_body(chunk.body_id);
+                    if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, chunk.data, chunk.sector))
                     {
-                        body_interface.RemoveBody(chunk.body_id);
-                        body_interface.DestroyBody(chunk.body_id);
-                    }
-                    // Create physics body
-                    JPH::StaticCompoundShapeSettings compound_settings;
-                    for (uint32_t y = 0; y < ChunkSize; ++y)
-                    {
-                        for (uint32_t z = 0; z < ChunkSize; ++z)
-                        {
-                            for (uint32_t x = 0; x < ChunkSize; ++x)
-                            {
-                                const auto& b = chunk.data.blocks[y * pow(ChunkSize, 2) + z * ChunkSize + x];
-                                if (b.type != BlockType::Water && b.type != BlockType::Air)
-                                {
-                                    const glm::vec3 p = glm::vec3(x, y, z) * BlockSize + BlockSize * 0.5f;
-                                    const JPH::Vec3 position = JPH::Vec3(p.x, p.y, p.z);
-                                    compound_settings.AddShape(position, JPH::Quat::sIdentity(), shared_box_shape);
-                                }
-                            }
-                        }
-                    }
-                    if (const auto result = compound_settings.Create(); result.IsValid())
-                    {
-                        chunk.shape = result.Get();
-                        const glm::vec3 sector_origin = glm::vec3(chunk.sector) * BlockSize * ChunkSize;
-                        const JPH::Vec3 origin = JPH::Vec3(sector_origin.x, sector_origin.y, sector_origin.z);
-                        const JPH::BodyCreationSettings body_settings(
-                           chunk.shape,
-                           origin,        // world position for the chunk body
-                           JPH::Quat::sIdentity(),
-                           JPH::EMotionType::Static,
-                           Layers::NON_MOVING
-                        );
-                        chunk.body_id = body_interface.CreateAndAddBody(body_settings, JPH::EActivation::DontActivate);
+                        std::tie(chunk.body_id, chunk.shape) = result.value();
                     }
                 }
                 if (m_frustum.is_box_visible(chunk_aabb))
@@ -1230,6 +866,7 @@ public:
         // draw cube
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader_color->pipeline());
+            vkCmdSetLineWidth(cmd, 2.f);
 
             const std::array vertex_buffers{m_vertex_buffer.buffer()};
             const std::array vertex_buffers_offset{m_cube.vertex_buffer.offset};
@@ -1515,21 +1152,25 @@ public:
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderRight)];
         const bool action_respawn_new = m_player.keys['F'];
         const bool action_frustum_new = m_player.keys['C'];
+        const bool action_physics_record_new = m_player.keys['R'];
         speed = speed + 10.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
-        if (m_player.keys['R'] && !is_recording)
-        {
-            recorder_file = std::ofstream("jolt.jor", std::ofstream::binary);
-            recorder_stream = std::make_unique<JPH::StreamOutWrapper>(recorder_file);
-            recorder = std::make_unique<JPH::DebugRendererRecorder>(*recorder_stream);
-            is_recording = true;
-        }
 #else
         const float speed = 3.f;
         const bool action_build_new = touch.trigger_right > 0.5f;
         const bool action_break_new = touch.trigger_left > 0.5f;
         const bool action_respawn_new = touch.buttons[std::to_underlying(GamepadButton::Menu)];
         const bool action_frustum_new = touch.buttons[std::to_underlying(GamepadButton::X)];
+        const bool action_physics_record_new = false;
 #endif
+        static bool action_physics_record = false;
+        if (action_physics_record != action_physics_record_new)
+        {
+            action_physics_record = action_physics_record_new;
+            if (action_physics_record)
+            {
+                m_physics_system.start_recording();
+            }
+        }
         static bool action_frustum = false;
         if (action_frustum != action_frustum_new)
         {
@@ -1592,9 +1233,16 @@ public:
         if (glm::abs(glm::length(forward)) > 0.f || fy > 0.f)
         {
             const auto step = glm::vec3(forward) * speed;
-            const auto current_velocity = m_player.character->GetLinearVelocity();
-            const auto velocity = JPH::Vec3(step.x, current_velocity.GetY() + fy, step.z);
-            m_player.character->SetLinearVelocity(velocity);
+            const auto current_velocity = glm::gtc::make_vec3(m_player.character->GetLinearVelocity().mF32);
+            const auto velocity = glm::vec3(step.x, current_velocity.y, step.z);
+            const auto v = glm::gtc::lerp(current_velocity, velocity, dt * 3.f);
+            m_player.character->SetLinearVelocity(JPH::Vec3(v.x, fy + v.y, v.z));
+        }
+        else
+        {
+            const auto current_velocity = glm::gtc::make_vec3(m_player.character->GetLinearVelocity().mF32);
+            const auto v = glm::gtc::lerp(current_velocity, glm::vec3(0, current_velocity.y, 0), dt * 3.f);
+            m_player.character->SetLinearVelocity(JPH::Vec3(v.x, v.y, v.z));
         }
     }
     void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
@@ -1670,23 +1318,9 @@ public:
     void tick(const float dt, const GamepadState& gamepad) noexcept
     {
         ZoneScoped;
-        physics_system.Update(dt, 1, temp_allocator.get(), job_system.get());
+        m_physics_system.tick(dt);
         m_player.character->PostSimulation(0.1);
         m_player.cam_pos = glm::gtc::make_vec3(m_player.character->GetPosition().mF32);
-
-        if (is_recording)
-        {
-            static float recorder_timer = 0;
-            recorder_timer += dt;
-            if (recorder_timer >= 1.0f)
-            {
-                constexpr JPH::BodyManager::DrawSettings settings{};
-                recorder->NextFrame();
-                physics_system.DrawBodies(settings, recorder.get());
-                recorder->EndFrame();
-                recorder_timer = 0;
-            }
-        }
 
         if (xrmode)
         {

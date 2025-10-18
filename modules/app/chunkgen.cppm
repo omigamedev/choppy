@@ -5,8 +5,8 @@ module;
 #include <unordered_map>
 #include <vector>
 
-export module ce.app.chunkgen;
-import ce.app.utils;
+export module ce.app:chunkgen;
+import :utils;
 import glm;
 
 export namespace ce::app
@@ -50,8 +50,8 @@ const char* to_string(const BlockType b)
 struct Block final
 {
     BlockType type;
-    enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, R = 16, L = 32 } face_mask;
-    enum class FaceIndex : uint8_t { U, D, F, B, R, L };
+    enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, L = 16, R = 32 } face_mask;
+    enum class FaceIndex : uint8_t { U, D, F, B, L, R };
 };
 struct ChunkData final
 {
@@ -134,7 +134,7 @@ public:
         const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
         const float rand = perlin.noise2D_01(nc.x * 10.f, nc.y * 10.f);
         const float mountains = perlin.noise2D_01(nc.x * 0.1f, nc.y * 0.1f);
-        const int32_t terrain_height = std::floor(perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height) * mountains * 5.f);
+        const int32_t terrain_height = std::floor(perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height) + mountains * 5.f);
         BlockType block = BlockType::Air;
         if (cell.y < 0)
         {
@@ -262,8 +262,8 @@ public:
                         mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
                         mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
                         mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air) << 4;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air) << 5;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air) << 4;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air) << 5;
                     }
                     else
                     {
@@ -271,8 +271,8 @@ public:
                         mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] != C) << 1;
                         mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] != C) << 2;
                         mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] != C) << 3;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] != C) << 4;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] != C) << 5;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] != C) << 4;
+                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] != C) << 5;
                     }
                     const BlockType type = mask == 0 ? BlockType::Air : C;
                     blocks.emplace_back(type, static_cast<Block::Mask>(mask));

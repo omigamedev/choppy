@@ -439,6 +439,8 @@ public:
             .pNext = &imageless_feature,
             .features = {
                 .multiDrawIndirect = true,
+                .fillModeNonSolid = true,
+                .wideLines = true,
             }
         };
         constexpr std::array queue_priority{1.f};

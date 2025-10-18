@@ -1,7 +1,7 @@
 module;
 #include <array>
 
-export module ce.app.frustum;
+export module ce.app:frustum;
 import glm;
 
 export namespace ce::app

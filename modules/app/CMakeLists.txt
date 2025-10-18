@@ -15,10 +15,6 @@ FetchContent_Declare(tracy
 FetchContent_Declare(jolt
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
     GIT_TAG 036ea7b1d717b3e713ac9d8cbd47118fb9cd5d60) # v5.4.0
-# set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF)
-# set(OVERRIDE_CXX_FLAGS OFF)
-# set(GENERATE_DEBUG_SYMBOLS OFF)
-# set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(perlin glm stb tracy jolt)
 
 set(JOLT_PHYSICS_ROOT ${jolt_SOURCE_DIR}/Jolt)
@@ -449,12 +445,15 @@ set(JOLT_PHYSICS_SRC_FILES
     ${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterMean.cpp
     ${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterMean.h
 )
-add_library(MyJolt ${JOLT_PHYSICS_SRC_FILES})
-target_compile_definitions(MyJolt PUBLIC JPH_DEBUG_RENDERER)
-target_include_directories(MyJolt PUBLIC ${jolt_SOURCE_DIR})
+add_library(jolt ${JOLT_PHYSICS_SRC_FILES})
+target_compile_definitions(jolt PUBLIC JPH_DEBUG_RENDERER)
+target_include_directories(jolt PUBLIC ${jolt_SOURCE_DIR})
 
 add_library(perlin INTERFACE)
 target_include_directories(perlin INTERFACE ${perlin_SOURCE_DIR})
+
+add_library(stb INTERFACE)
+target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
 
 add_library(glmcppm OBJECT)
 target_link_libraries(glmcppm PUBLIC glm::glm)
@@ -481,10 +480,18 @@ else()
 endif()
 
 add_library(app OBJECT stb.cpp)
-target_link_libraries(app PUBLIC platform xr vk glmcppm shaders perlin MyJolt)
-target_include_directories(app PUBLIC ${jolt_SOURCE_DIR} ${stb_SOURCE_DIR})
+target_link_libraries(app PUBLIC platform xr vk glmcppm shaders perlin jolt)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES app.cppm grid.cppm cube.cppm utils.cppm chunkgen.cppm chunkmesh.cppm frustum.cppm)
+    FILES
+        app.cppm
+        utils.cppm
+        chunkgen.cppm
+        chunkmesh.cppm
+        frustum.cppm
+        player.cppm
+        physics.cppm
+        ecs.cppm
+)
