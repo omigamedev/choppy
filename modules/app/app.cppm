@@ -380,7 +380,7 @@ public:
         const uint32_t chunk_count = pow(size * 2 + 1, 3);
         neighbors.reserve(chunk_count);
         const int32_t side = size;
-        for (int32_t y = -1; y < 1 + 1; ++y)
+        for (int32_t y = -1; y < 10 + 1; ++y)
         {
             for (int32_t z = -side; z < side + 1; ++z)
             {
@@ -648,11 +648,25 @@ public:
         if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidFlatShader::PerFrameConstants), 64))
         {
             const auto dst_sb = m_frame_buffer.suballoc(sb->size, 64);
+
+            auto fogColor = glm::vec4(.27f, .37f, .5f, 1.f);
+            auto fogStart = 20.f;
+            auto fogEnd = 50.f;
+            const glm::ivec3 cell = glm::floor(m_player.cam_pos / BlockSize);
+            if (generator.peek(cell) == BlockType::Water)
+            {
+                fogColor = glm::vec4(0.f, 0.f, 0.05f, 1.f);
+                fogStart = .0f;
+                fogEnd = 10.f;
+            }
             *static_cast<shaders::SolidFlatShader::PerFrameConstants*>(sb->ptr) = {
                 .ViewProjection = {
                     glm::transpose(frame.projection[0] * frame.view[0]),
                     glm::transpose(frame.projection[1] * frame.view[1]),
-                }
+                },
+                .fogColor = fogColor,
+                .fogStart = fogStart,
+                .fogEnd = fogEnd,
             };
             // defer copy
             m_copy_buffers.emplace_back(m_frame_buffer, *sb, dst_sb->offset);

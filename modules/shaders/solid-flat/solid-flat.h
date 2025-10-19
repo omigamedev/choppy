@@ -4,6 +4,9 @@
 struct alignas(64) PerFrameConstants
 {
     float4x4 ViewProjection[2];
+    float4 fogColor; // x, y, z = color, w = enabled
+    float fogStart;
+    float fogEnd;
 };
 
 struct alignas(16) PerObjectBuffer
@@ -21,4 +24,5 @@ struct PixelInput
 {
     float4 position SEM(SV_POSITION);
     [[vk::location(1)]] float2 uvs SEM(UV0);
+    [[vk::location(2)]] float viewDepth SEM(TEXCOORD0);
 };

@@ -21,6 +21,10 @@ PixelInput VSMain(VertexInput input,
     PixelInput output;
     output.position = mul(float4(Position, 1.0), WorldViewProjection);
     output.uvs = float2(u, v);
+
+    // Pass the view-space depth (stored in the w component of clip-space position) to the pixel shader.
+    output.viewDepth = output.position.w;
+
     return output;
 }
 
@@ -29,6 +33,17 @@ PixelInput VSMain(VertexInput input,
 
 float4 PSMain(PixelInput input) : SV_TARGET
 {
-    const float4 c = myTexture.Sample(mySampler, input.uvs);
-    return float4(c.x, c.y, c.z, 1.0);
+    const float4 textureColor = myTexture.Sample(mySampler, input.uvs);
+    float4 finalColor = float4(textureColor.xyz, 1.0);
+
+    if (Frame.fogColor.w > 0.0) // Check if fog is enabled
+    {
+        // Calculate fog factor (0 = no fog, 1 = full fog)
+        float fogFactor = saturate((input.viewDepth - Frame.fogStart) / (Frame.fogEnd - Frame.fogStart));
+
+        // Blend the texture color with the fog color
+        finalColor.rgb = lerp(finalColor.rgb, Frame.fogColor.rgb, fogFactor);
+    }
+
+    return finalColor;
 }
