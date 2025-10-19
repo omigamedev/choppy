@@ -9,7 +9,7 @@ PixelInput VSMain(VertexInput input,
 {
     // Unpack the 32-bit integer
     float x = float(input.data & 0x3F);
-    float y = float((input.data >> 6) & 0x3F);
+    float y = float((input.data >> 6) & 0x3F) + ObjectsData[drawIndex].y_offset;
     float z = float((input.data >> 12) & 0x3F);
     float u = float((input.data >> 18) & 0x3F) / 2.0;
     float v = float((input.data >> 24) & 0x3F) / 4.0;

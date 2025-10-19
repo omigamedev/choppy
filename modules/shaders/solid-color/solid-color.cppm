@@ -176,7 +176,7 @@ private:
             VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT,
             VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT,
             VK_DYNAMIC_STATE_LINE_WIDTH,
-            VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
+            //VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
             // VK_DYNAMIC_STATE_POLYGON_MODE_EXT,
         };
         const VkPipelineDynamicStateCreateInfo dynamics{

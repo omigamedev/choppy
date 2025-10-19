@@ -145,10 +145,10 @@ class AppBase final
     static constexpr float BlockSize = 0.5f;
     // Number of blocks per chunk
     static constexpr uint32_t ChunkSize = 32;
-    static constexpr uint32_t ChunkRings = 1;
+    static constexpr uint32_t ChunkRings = 4;
 
     FlatGenerator generator{ChunkSize, 10};
-    SimpleMesher<shaders::SolidFlatShader::VertexInput> mesher{};
+    GreedyMesher<shaders::SolidFlatShader::VertexInput> mesher{};
     // std::vector<uint32_t> m_chunk_updates;
     TracyLockable(std::mutex, m_chunks_mutex);
     std::thread m_chunks_thread;
@@ -411,7 +411,7 @@ public:
         chunk_indices.reserve(chunk_count);
         for (size_t i = 0; i < m_chunks.size(); ++i)
         {
-            if (auto it = std::ranges::find(neighbors, m_chunks[i].sector); it == neighbors.end())
+            if (auto it = std::ranges::find(neighbors, m_chunks[i].sector); it == neighbors.end() || m_chunks[i].regenerate)
             {
                 chunk_indices.emplace_back(i);
             }
@@ -446,7 +446,8 @@ public:
             if (auto it = std::ranges::find(m_chunks, sector,
                 [](auto& p){ return p.sector; }); it != m_chunks.end())
             {
-                continue;
+                if (!it->regenerate)
+                    continue;
             }
             if (m_chunks.size() < chunk_count)
             {
@@ -460,6 +461,12 @@ public:
                 chunk.sector = sector;
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
                 chunk.dirty = true;
+                chunk.regenerate = false;
+                m_physics_system.remove_body(chunk.body_id);
+                if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, chunk.data, chunk.sector))
+                {
+                    std::tie(chunk.body_id, chunk.shape) = result.value();
+                }
                 needs_update = true;
                 if (!--chunks_to_generate)
                     break;
@@ -476,6 +483,12 @@ public:
                 chunk.sector = sector;
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
                 chunk.dirty = true;
+                chunk.regenerate = false;
+                m_physics_system.remove_body(chunk.body_id);
+                if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, chunk.data, chunk.sector))
+                {
+                    std::tie(chunk.body_id, chunk.shape) = result.value();
+                }
                 needs_update = true;
                 if (!--chunks_to_generate)
                     break;
@@ -488,7 +501,7 @@ public:
         ZoneScoped;
         //if (m_chunks_state.vertex_buffer.alloc)
         //    m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_vertex_buffer), m_chunks_state.vertex_buffer));
-        for (const auto& [k, state] : m_chunks_state)
+        for (const auto& [layer, state] : m_chunks_state)
         {
             if (state.uniform_buffer.alloc)
                 m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_object_buffer), state.uniform_buffer));
@@ -529,7 +542,7 @@ public:
         for (auto& chunk : sorted_chunks)
         {
             // AABB Culling Check
-            const float chunk_world_size = ChunkSize * BlockSize;
+            constexpr float chunk_world_size = ChunkSize * BlockSize;
             const glm::vec3 min_corner = glm::vec3(chunk.sector) * chunk_world_size;
             const AABB chunk_aabb{
                 .min = min_corner,
@@ -539,13 +552,13 @@ public:
             // if (!m_frustum.is_box_visible(chunk_aabb))
             //     continue; // Skip this chunk, it's not visible
 
-            for (const auto& [k, m] : chunk.mesh)
+            for (const auto& [layer, m] : chunk.mesh)
             {
                 if (m.vertices.empty())
                 {
-                    if (chunk.buffer[k].alloc)
-                        m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer[k]));
-                    chunk.buffer.erase(k);
+                    if (chunk.buffer[layer].alloc)
+                        m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer[layer]));
+                    chunk.buffer.erase(layer);
                     continue;
                 }
                 if (chunk.dirty)
@@ -559,32 +572,27 @@ public:
                             m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
                             //m_chunks_state.vertex_buffer = *dst_sb;
 
-                            if (chunk.buffer[k].alloc)
-                                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer[k]));
-                            chunk.buffer[k] = *dst_sb;
+                            if (chunk.buffer[layer].alloc)
+                                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer[layer]));
+                            chunk.buffer[layer] = *dst_sb;
                         }
                         // defer suballocation deletion
                         m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
                     }
-                    m_physics_system.remove_body(chunk.body_id);
-                    if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, chunk.data, chunk.sector))
-                    {
-                        std::tie(chunk.body_id, chunk.shape) = result.value();
-                    }
                 }
                 if (m_frustum.is_box_visible(chunk_aabb))
                 {
-                    batches[k].ubo.push_back({
+                    batches[layer].ubo.push_back({
                         .ObjectTransform = glm::transpose(chunk.transform),
                     });
-                    const auto vertex_offset = chunk.buffer[k].offset / sizeof(shaders::SolidFlatShader::VertexInput);
-                    batches[k].draw_args.push_back({
+                    const auto vertex_offset = chunk.buffer[layer].offset / sizeof(shaders::SolidFlatShader::VertexInput);
+                    batches[layer].draw_args.push_back({
                         .vertexCount = static_cast<uint32_t>(m.vertices.size()),
                         .instanceCount = 1,
                         .firstVertex = static_cast<uint32_t>(vertex_offset),
                         .firstInstance = 0
                     });
-                    batches[k].draw_count++;
+                    batches[layer].draw_count++;
                 }
             }
             chunk.dirty = false;
@@ -592,16 +600,22 @@ public:
         }
         //LOGI("drawing %d polys", polys / 3);
         clear_chunks_state(frame.timeline_value);
-        for (const auto& [k, batch] : batches)
+        for (const auto& [layer, batch] : batches)
         {
             if (const auto sb = m_staging_buffer.suballoc(batch.ubo.size() *
                 sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64))
             {
                 if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
                 {
-                    std::ranges::copy(batch.ubo, static_cast<shaders::SolidFlatShader::PerObjectBuffer*>(sb->ptr));
+                    auto ubo_copy = batch.ubo;
+                    if (layer == BlockLayer::Transparent)
+                    {
+                        for (auto& ubo : ubo_copy)
+                            ubo.y_offset = -0.1f;
+                    }
+                    std::ranges::copy(ubo_copy, static_cast<shaders::SolidFlatShader::PerObjectBuffer*>(sb->ptr));
                     m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
-                    m_chunks_state[k].uniform_buffer = *dst_sb;
+                    m_chunks_state[layer].uniform_buffer = *dst_sb;
                 }
                 // defer suballocation deletion
                 m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
@@ -613,12 +627,12 @@ public:
                 {
                     std::ranges::copy(batch.draw_args, static_cast<VkDrawIndirectCommand*>(sb->ptr));
                     m_copy_buffers.emplace_back(m_args_buffer, *sb, dst_sb->offset);
-                    m_chunks_state[k].args_buffer = *dst_sb;
+                    m_chunks_state[layer].args_buffer = *dst_sb;
                 }
                 // defer suballocation deletion
                 m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
             }
-            m_chunks_state[k].draw_count = batch.draw_count;
+            m_chunks_state[layer].draw_count = batch.draw_count;
         }
         needs_update = false;
     }
@@ -867,6 +881,7 @@ public:
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader_color->pipeline());
             vkCmdSetLineWidth(cmd, 2.f);
+            //vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_LINE);
 
             const std::array vertex_buffers{m_vertex_buffer.buffer()};
             const std::array vertex_buffers_offset{m_cube.vertex_buffer.offset};
@@ -1096,13 +1111,19 @@ public:
             std::lock_guard lock(m_chunks_mutex);
             if (auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {
-                auto blocks_data = generator.generate(sector);
-                auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                it->mesh = std::move(chunk_data);
-                it->data = std::move(blocks_data);
-                it->sector = sector;
-                it->dirty = true;
-                needs_update = true;
+                // auto blocks_data = generator.generate(sector);
+                // auto chunk_data = mesher.mesh(blocks_data, BlockSize);
+                // it->mesh = std::move(chunk_data);
+                // it->data = std::move(blocks_data);
+                // it->sector = sector;
+                // it->dirty = true;
+                // m_physics_system.remove_body(it->body_id);
+                // if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, it->data, it->sector))
+                // {
+                //     std::tie(it->body_id, it->shape) = result.value();
+                // }
+                // needs_update = true;
+                it->regenerate = true;
             }
         }
     }
@@ -1115,13 +1136,19 @@ public:
             std::lock_guard lock(m_chunks_mutex);
             if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
             {
-                auto blocks_data = generator.generate(sector);
-                auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                it->mesh = std::move(chunk_data);
-                it->data = std::move(blocks_data);
-                it->sector = sector;
-                it->dirty = true;
-                needs_update = true;
+                // auto blocks_data = generator.generate(sector);
+                // auto chunk_data = mesher.mesh(blocks_data, BlockSize);
+                // it->mesh = std::move(chunk_data);
+                // it->data = std::move(blocks_data);
+                // it->sector = sector;
+                // it->dirty = true;
+                // m_physics_system.remove_body(it->body_id);
+                // if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, it->data, it->sector))
+                // {
+                //     std::tie(it->body_id, it->shape) = result.value();
+                // }
+                // needs_update = true;
+                it->regenerate = true;
             }
         }
     }
@@ -1150,7 +1177,8 @@ public:
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderLeft)];
         const bool action_break_new = m_player.keys['B'] ||
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderRight)];
-        const bool action_respawn_new = m_player.keys['F'];
+        const bool action_respawn_new = m_player.keys['F'] ||
+            gamepad.buttons[std::to_underlying(GamepadButton::Menu)];
         const bool action_frustum_new = m_player.keys['C'];
         const bool action_physics_record_new = m_player.keys['R'];
         speed = speed + 10.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
@@ -1186,7 +1214,9 @@ public:
             action_respawn = action_respawn_new;
             if (action_respawn)
             {
-                m_player.character->SetPosition({0, 20, 0});
+                const auto p = m_player.character->GetPosition();
+                m_player.character->SetPosition({p.GetX(), 20, p.GetZ()});
+                m_player.character->SetLinearVelocity(JPH::Vec3::sZero());
             }
         }
         static bool action_build = false;

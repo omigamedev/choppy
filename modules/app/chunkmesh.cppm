@@ -76,20 +76,6 @@ uint32_t pack_vertex(const glm::uvec3& pos, const glm::uvec2& uv, const uint32_t
     return (px) | (py << 6) | (pz << 12) | (u << 18) | (v << 24) | (fid << 30);
 }
 
-struct BlockMaterial
-{
-    BlockLayer layer;
-    std::array<glm::uvec2, 6> uvs;
-};
-// Face order: U, D, F, B, R, L
-const std::unordered_map<BlockType, BlockMaterial> materials {
-    {BlockType::Grass, {BlockLayer::Solid, std::to_array<glm::uvec2>({{1, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}})}},
-    {BlockType::Dirt, {BlockLayer::Solid, std::to_array<glm::uvec2>({{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}})}},
-    {BlockType::Sand, {BlockLayer::Solid, std::to_array<glm::uvec2>({{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 2}})}},
-    {BlockType::Rock, {BlockLayer::Solid, std::to_array<glm::uvec2>({{1, 2},{1, 2},{1, 2},{1, 2},{1, 2},{1, 2}})}},
-    {BlockType::Water, {BlockLayer::Transparent, std::to_array<glm::uvec2>({{0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}})}},
-};
-
 template<typename T>
 class GreedyMesher final : public ChunkMesher<T>
 {
@@ -101,38 +87,99 @@ public:
         {
             Block::Mask mask;
             // uses glm::vec3[i] component index
-            uint8_t main_comp;
-            uint8_t dir;
-            uint8_t u_comp;
-            uint8_t v_comp;
+            int8_t main_comp;
+            int8_t dir;
+            int8_t u_comp;
+            int8_t v_comp;
+            bool flip;
         };
         const auto slices = std::to_array<Slice>({
-            {Block::Mask::U, 1, -1, 0, 2},
-            {Block::Mask::D, 1,  1, 0, 2},
-            {Block::Mask::F, 2,  1, 0, 1},
-            {Block::Mask::B, 2, -1, 0, 1},
-            {Block::Mask::L, 0,  1, 1, 2},
-            {Block::Mask::R, 0, -1, 1, 2}
+            {Block::Mask::U, 1, -1, 0, 2, false},
+            {Block::Mask::D, 1,  1, 0, 2, false},
+            {Block::Mask::F, 2, -1, 0, 1, true},
+            {Block::Mask::B, 2,  1, 0, 1, true},
+            {Block::Mask::L, 0,  1, 2, 1, false},
+            {Block::Mask::R, 0, -1, 2, 1, false}
         });
+
         const uint32_t size = data.size;
-        std::vector<glm::vec3> vertices;
-        vertices.reserve(pow(size + 1, 3));
-        for (const auto& [m, sc, d, uc, vc]  : slices)
+        std::unordered_map<BlockLayer, ChunkMesh<T>> meshes;
+        for (int face_index = 0; face_index < slices.size(); ++face_index)
         {
-            for (uint32_t slice = 0; slice < size + 1; ++slice)
+            const auto& [m, sc, d, uc, vc, flip] = slices[face_index];
+            for (uint32_t slice = 0; slice < size; ++slice)
             {
-                std::vector<glm::uvec2> points;
-                points.reserve(pow(size + 1, 2));
-                for (uint32_t y = 0; y < size + 1; ++y)
+                //std::vector<glm::uvec2> points;
+                //points.reserve(utils::pow(size + 1, 2));
+                //for (uint32_t y = 0; y < size + 1; ++y)
+                //{
+                //    for (uint32_t x = 0; x < size + 1; ++x)
+                //    {
+                //        points.emplace_back(x, y);
+                //    }
+                //}
+                for (uint32_t y = 0; y < size; ++y)
                 {
-                    for (uint32_t x = 0; x < size + 1; ++x)
+                    for (uint32_t x = 0; x < size; ++x)
                     {
-                        points.emplace_back(x, y);
+                        auto slice_cell = d < 0 ? (size-1)-slice : slice;
+                        const auto to_cell = [sc, uc, vc, slice_cell](const glm::uvec2& pos)
+                        {
+                            glm::uvec3 v;
+                            v[sc] = slice_cell;
+                            v[uc] = pos.x;
+                            v[vc] = pos.y;
+                            return v;
+                        };
+                        auto slice_plane = d < 0 ? (size)-slice : slice;
+                        const auto to_plane = [sc, uc, vc, slice_plane](const glm::uvec2& pos)
+                        {
+                            glm::uvec3 v;
+                            v[sc] = slice_plane;
+                            v[uc] = pos.x;
+                            v[vc] = pos.y;
+                            return v;
+                        };
+                        const glm::uvec3 cell = to_cell({x, y});
+                        const uint32_t idx = cell.x + cell.z * size + cell.y * size * size;
+                        if (data.blocks[idx].type == BlockType::Air)
+                            continue;
+                        const auto& [layer, mat] = materials.at(data.blocks[idx].type);
+                        auto& mesh = meshes[layer];
+                        const auto A = to_plane(glm::uvec2(x, y));
+                        const auto B = to_plane(glm::uvec2(x, y+1));
+                        const auto C = to_plane(glm::uvec2(x+1, y+1));
+                        const auto D = to_plane(glm::uvec2(x+1, y));
+                        constexpr auto CA = glm::uvec2{0, 1};
+                        constexpr auto CB = glm::uvec2{0, 0};
+                        constexpr auto CC = glm::uvec2{1, 0};
+                        constexpr auto CD = glm::uvec2{1, 1};
+                        if (data.blocks[idx].face_mask & m)
+                        {
+                            if (flip ? d > 0 : d < 0)
+                            {
+                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(B, CB + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(D, CD + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], 0));
+                            }
+                            else
+                            {
+                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(B, CB + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(D, CD + mat[face_index], 0));
+                            }
+                        }
                     }
                 }
-
             }
         }
+        return std::move(meshes);
     }
 };
 
@@ -146,7 +193,7 @@ public:
         const uint32_t size = data.size;
 
         std::vector<glm::vec4> vertices;
-        vertices.reserve(pow(size + 1, 3));
+        vertices.reserve(utils::pow(size + 1, 3));
         for (uint32_t y = 0; y < size + 1; ++y)
         {
             for (uint32_t z = 0; z < size + 1; ++z)
@@ -269,6 +316,7 @@ struct Chunk final
     std::unordered_map<BlockLayer, ChunkMesh<shaders::SolidFlatShader::VertexInput>> mesh;
     std::unordered_map<BlockLayer, vk::BufferSuballocation> buffer{};
     bool dirty = false;
+    bool regenerate = false;
     ChunkData data;
     JPH::RefConst<JPH::Shape> shape;
     JPH::BodyID body_id;

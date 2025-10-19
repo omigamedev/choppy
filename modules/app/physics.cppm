@@ -223,7 +223,7 @@ public:
 	{
 		// Constants for the character
 		constexpr float cCharacterHeight = 1.7f; // Total character height
-		constexpr float cCharacterRadius = 0.2f;
+		constexpr float cCharacterRadius = 0.15f;
 		constexpr float cMaxSlopeAngle = glm::radians(45.0f);
 		const JPH::RefConst character_shape = new JPH::CapsuleShape(
 			cCharacterHeight / 2.0f - cCharacterRadius, cCharacterRadius);
@@ -239,7 +239,7 @@ public:
 		// Optional settings:
 		// settings->mMaxStrength = 100.0f;
 		settings->mFriction = 0.0f;
-		JPH::Ref character = new JPH::Character(settings, {0, 100, 0}, JPH::Quat::sIdentity(), 0, &physics_system);
+		JPH::Ref character = new JPH::Character(settings, {10, 100, 10}, JPH::Quat::sIdentity(), 0, &physics_system);
 		character->AddToPhysicsSystem(JPH::EActivation::Activate);
 		return character;
 	}

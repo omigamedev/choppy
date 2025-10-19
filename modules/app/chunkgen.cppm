@@ -47,6 +47,22 @@ const char* to_string(const BlockType b)
     default: return "Unknown";
     }
 }
+
+struct BlockMaterial
+{
+    BlockLayer layer;
+    std::array<glm::uvec2, 6> uvs;
+};
+// Face order: U, D, F, B, R, L
+const std::unordered_map<BlockType, BlockMaterial> materials {
+    {BlockType::Air, {BlockLayer::Transparent, std::to_array<glm::uvec2>({{0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}})}},
+    {BlockType::Grass, {BlockLayer::Solid, std::to_array<glm::uvec2>({{1, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}})}},
+    {BlockType::Dirt, {BlockLayer::Solid, std::to_array<glm::uvec2>({{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}})}},
+    {BlockType::Sand, {BlockLayer::Solid, std::to_array<glm::uvec2>({{0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 2}, {0, 2}})}},
+    {BlockType::Rock, {BlockLayer::Solid, std::to_array<glm::uvec2>({{1, 2},{1, 2},{1, 2},{1, 2},{1, 2},{1, 2}})}},
+    {BlockType::Water, {BlockLayer::Transparent, std::to_array<glm::uvec2>({{0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}})}},
+};
+
 struct Block final
 {
     BlockType type;
@@ -230,7 +246,7 @@ public:
     {
         const int32_t ssz = static_cast<int32_t>(m_chunk_size);
         std::vector<BlockType> tmp;
-        tmp.reserve(pow(ssz + 2, 3));
+        tmp.reserve(utils::pow(ssz + 2, 3));
         for (int32_t y = -1; y < ssz + 1; ++y)
         {
             for (int32_t z = -1; z < ssz + 1; ++z)
@@ -246,7 +262,7 @@ public:
 
         bool full = false;
         std::vector<Block> blocks;
-        blocks.reserve(pow(ssz, 3));
+        blocks.reserve(utils::pow(ssz, 3));
         for (uint32_t y = 0; y < m_chunk_size; ++y)
         {
             for (uint32_t z = 0; z < m_chunk_size; ++z)
@@ -254,29 +270,34 @@ public:
                 for (uint32_t x = 0; x < m_chunk_size; ++x)
                 {
                     const int32_t sz = static_cast<int32_t>(m_chunk_size + 2);
-                    const auto C = tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 1];
+                    const auto C = tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 1];
                     uint8_t mask = 0;
-                    if (C == BlockType::Water)
+                    if (C != BlockType::Air)
                     {
-                        mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
-                        mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air) << 4;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air) << 5;
+                        const auto C_layer = materials.at(C).layer;
+                        if (C == BlockType::Water)
+                        {
+                            mask |= (tmp[(y + 2) * utils::pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 0;
+                            mask |= (tmp[(y + 0) * utils::pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Air) << 1;
+                            mask |= (tmp[(y + 1) * utils::pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Air) << 2;
+                            mask |= (tmp[(y + 1) * utils::pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Air) << 3;
+                            mask |= (tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Air) << 4;
+                            mask |= (tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Air) << 5;
+                        }
+                        else
+                        {
+                            auto is_visible = [C_layer](const BlockType b){ return C_layer != materials.at(b).layer; };
+                            mask |= is_visible(tmp[(y + 2) * utils::pow(sz, 2) + (z + 1) * sz + x + 1]) << 0;
+                            mask |= is_visible(tmp[(y + 0) * utils::pow(sz, 2) + (z + 1) * sz + x + 1]) << 1;
+                            mask |= is_visible(tmp[(y + 1) * utils::pow(sz, 2) + (z + 2) * sz + x + 1]) << 2;
+                            mask |= is_visible(tmp[(y + 1) * utils::pow(sz, 2) + (z + 0) * sz + x + 1]) << 3;
+                            mask |= is_visible(tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 0]) << 4;
+                            mask |= is_visible(tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 2]) << 5;
+                        }
                     }
-                    else
-                    {
-                        mask |= (tmp[(y + 2) * pow(sz, 2) + (z + 1) * sz + x + 1] != C) << 0;
-                        mask |= (tmp[(y + 0) * pow(sz, 2) + (z + 1) * sz + x + 1] != C) << 1;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 2) * sz + x + 1] != C) << 2;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 0) * sz + x + 1] != C) << 3;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 0] != C) << 4;
-                        mask |= (tmp[(y + 1) * pow(sz, 2) + (z + 1) * sz + x + 2] != C) << 5;
-                    }
-                    const BlockType type = mask == 0 ? BlockType::Air : C;
-                    blocks.emplace_back(type, static_cast<Block::Mask>(mask));
-                    full |= type != BlockType::Air;
+                    // const BlockType type = mask == 0 ? BlockType::Air : C;
+                    blocks.emplace_back(C, static_cast<Block::Mask>(mask));
+                    full |= C != BlockType::Air;
                 }
             }
         }
