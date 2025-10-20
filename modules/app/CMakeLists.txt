@@ -9,13 +9,16 @@ FetchContent_Declare(perlin
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG fede005abaf93d9d7f3a679d1999b2db341b360f) # Sep 7, 2025
+FetchContent_Declare(miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG f40cf03f80cdb7e741d43e53b7e706e8c1394bcf) # 0.11.23
 FetchContent_Declare(tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
     GIT_TAG c556831ddc6fe26d2fce01c14c97205a9dad46d5) # v0.12.2
 FetchContent_Declare(jolt
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
     GIT_TAG 036ea7b1d717b3e713ac9d8cbd47118fb9cd5d60) # v5.4.0
-FetchContent_MakeAvailable(perlin glm stb tracy jolt)
+FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio)
 
 set(JOLT_PHYSICS_ROOT ${jolt_SOURCE_DIR}/Jolt)
 set(JOLT_PHYSICS_SRC_FILES
@@ -480,7 +483,7 @@ else()
 endif()
 
 add_library(app OBJECT stb.cpp)
-target_link_libraries(app PUBLIC platform xr vk glmcppm shaders perlin jolt)
+target_link_libraries(app PUBLIC platform xr vk glmcppm shaders perlin jolt miniaudio)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES
@@ -494,4 +497,5 @@ target_sources(app PUBLIC
         player.cppm
         physics.cppm
         ecs.cppm
+        audio.cppm
 )

@@ -4,6 +4,7 @@
 struct alignas(64) PerFrameConstants
 {
     float4x4 ViewProjection[2];
+    float4 tint;
     float4 fogColor; // x, y, z = color, w = enabled
     float fogStart;
     float fogEnd;

@@ -21,6 +21,8 @@ struct PlayerState
     glm::ivec3 cam_sector = { 0, 0, 0 };
     std::array<bool, 256> keys{false};
     JPH::Ref<JPH::Character> character;
+    glm::vec3 walk_start{};
+    bool on_ground = false;
 };
 
 }

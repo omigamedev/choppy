@@ -45,5 +45,5 @@ float4 PSMain(PixelInput input) : SV_TARGET
         finalColor.rgb = lerp(finalColor.rgb, Frame.fogColor.rgb, fogFactor);
     }
 
-    return finalColor;
+    return finalColor * Frame.tint;
 }

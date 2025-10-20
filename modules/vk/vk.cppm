@@ -23,7 +23,6 @@ module;
 #elifdef _WIN32
 #define LOGE(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
-// #include <vulkan/vulkan_win32.h>
 #endif
 
 export module ce.vk;

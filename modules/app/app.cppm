@@ -1,4 +1,5 @@
 module;
+#include <format>
 #include <array>
 #include <span>
 #include <vector>
@@ -18,7 +19,6 @@ module;
 #include <Jolt/Jolt.h>
 
 #ifdef __ANDROID__
-#include <jni.h>
 #include <android/log.h>
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
@@ -45,6 +45,7 @@ import :frustum;
 import :chunkgen;
 import :chunkmesh;
 import :player;
+import :audio;
 
 export namespace ce::app
 {
@@ -157,6 +158,7 @@ class AppBase final
     std::atomic_bool needs_update = false;
 
     physics::PhysicsSystem m_physics_system;
+    audio::AudioSystem m_audio_system;
 
     Frustum m_frustum;
     bool update_frustum = true;
@@ -207,6 +209,8 @@ public:
         m_physics_system.create_system();
         m_physics_system.create_shared_box(BlockSize);
         m_player.character = m_physics_system.create_character();
+
+        m_audio_system.create_system();
 
         generator.load();
 
@@ -649,12 +653,14 @@ public:
         {
             const auto dst_sb = m_frame_buffer.suballoc(sb->size, 64);
 
+            auto tint = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
             auto fogColor = glm::vec4(.27f, .37f, .5f, 1.f);
             auto fogStart = 20.f;
             auto fogEnd = 50.f;
             const glm::ivec3 cell = glm::floor(m_player.cam_pos / BlockSize);
             if (generator.peek(cell) == BlockType::Water)
             {
+                tint = glm::vec4(.1f, .1f, .2f, 1.0f);
                 fogColor = glm::vec4(0.f, 0.f, 0.05f, 1.f);
                 fogStart = .0f;
                 fogEnd = 10.f;
@@ -664,6 +670,7 @@ public:
                     glm::transpose(frame.projection[0] * frame.view[0]),
                     glm::transpose(frame.projection[1] * frame.view[1]),
                 },
+                .tint = tint,
                 .fogColor = fogColor,
                 .fogStart = fogStart,
                 .fogEnd = fogEnd,
@@ -1365,6 +1372,32 @@ public:
         m_physics_system.tick(dt);
         m_player.character->PostSimulation(0.1);
         m_player.cam_pos = glm::gtc::make_vec3(m_player.character->GetPosition().mF32);
+        const bool new_on_ground = m_player.character->GetGroundState() == JPH::Character::EGroundState::OnGround;
+        if (m_player.on_ground != new_on_ground)
+        {
+            m_player.on_ground = new_on_ground;
+            if (m_player.on_ground)
+            {
+                // play landing sound only when falling
+                if (m_player.character->GetLinearVelocity().GetY() < 0)
+                    m_audio_system.play_sound(std::format("walk/Sound {:02d}.wav", glm::gtc::linearRand(22, 23)));
+                m_player.walk_start = glm::gtc::make_vec3(m_player.character->GetGroundPosition().mF32);
+            }
+        }
+        else
+        {
+            if (m_player.on_ground)
+            {
+                const auto current_pos = glm::gtc::make_vec3(m_player.character->GetGroundPosition().mF32);
+                const auto distance_walked = glm::distance(m_player.walk_start, current_pos);
+                if (distance_walked > 0.5f)
+                {
+                    m_player.walk_start = current_pos;
+                    // play step sound
+                    m_audio_system.play_sound(std::format("walk/Sound {:02d}.wav", glm::gtc::linearRand(1, 21)));
+                }
+            }
+        }
 
         if (xrmode)
         {
