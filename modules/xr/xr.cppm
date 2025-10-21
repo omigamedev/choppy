@@ -1,12 +1,10 @@
 module;
 
 #ifdef __ANDROID__
-#include <jni.h>
 #include <android/log.h>
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
 #elifdef _WIN32
-#include <windows.h>
 #define LOGE(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #endif
@@ -651,11 +649,12 @@ public:
             VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
             VK_KHR_MULTIVIEW_EXTENSION_NAME,
             VK_KHR_IMAGELESS_FRAMEBUFFER_EXTENSION_NAME,
+            VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
             VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
             VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
             VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
             VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
-            // VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
+            VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
         };
         constexpr std::array vk_device_optional_extensions{
             VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
@@ -768,11 +767,11 @@ public:
         };
         const VkPhysicalDeviceFeatures2 enabled_features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-            .pNext = &enable_features11,
+            //.pNext = &enable_features11,
             .features = {
                 .multiDrawIndirect = true,
-                .fillModeNonSolid = true,
-                .wideLines = true,
+//                .fillModeNonSolid = true,
+//                .wideLines = true,
             }
         };
         const VkDeviceCreateInfo device_info{

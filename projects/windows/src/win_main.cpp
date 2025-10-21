@@ -66,7 +66,7 @@ class WindowsContext
         return m_window->create(1920, 1080);
     }
 public:
-    bool create()
+    bool create(const std::vector<std::string>& args) noexcept
     {
         const auto& xr = app.xr() = std::make_shared<ce::xr::Context>();
         const auto& vk = app.vk() = std::make_shared<ce::vk::Context>();
@@ -165,7 +165,8 @@ public:
             std::println("Failed to initialize Vulkan and OpenXR");
             return false;
         }
-        app.init(xr_mode);
+        const bool server_mode = std::ranges::contains(args, "server");
+        app.init(xr_mode, server_mode);
         if (!xr_mode)
         {
             app.on_resize(m_window->width(), m_window->height());
@@ -245,10 +246,14 @@ public:
         }
     }
 };
-int main()
+int main(const int argc, const char** argv)
 {
+    std::vector<std::string> args;
+    args.reserve(argc);
+    for (int i = 0; i < argc; ++i)
+        args.emplace_back(argv[i]);
     WindowsContext context;
-    context.create();
+    context.create(args);
     context.main_loop();
     return 0;
 }

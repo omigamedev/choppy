@@ -46,6 +46,8 @@ import :chunkgen;
 import :chunkmesh;
 import :player;
 import :audio;
+import :server;
+import :client;
 
 export namespace ce::app
 {
@@ -159,6 +161,9 @@ class AppBase final
 
     physics::PhysicsSystem m_physics_system;
     audio::AudioSystem m_audio_system;
+    bool m_server_mode = false;
+    server::ServerSystem m_server_system;
+    client::ClientSystem m_client_system;
 
     Frustum m_frustum;
     bool update_frustum = true;
@@ -189,7 +194,7 @@ public:
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
 
-    void init(const bool xr_mode) noexcept
+    void init(const bool xr_mode, const bool server_mode) noexcept
     {
         xrmode = xr_mode;
 
@@ -209,8 +214,16 @@ public:
         m_physics_system.create_system();
         m_physics_system.create_shared_box(BlockSize);
         m_player.character = m_physics_system.create_character();
-
         m_audio_system.create_system();
+        if (server_mode)
+        {
+            m_server_mode = true;
+            m_server_system.create_system();
+        }
+        else
+        {
+            m_client_system.create_system();
+        }
 
         generator.load();
 
@@ -308,6 +321,7 @@ public:
         if (generate_chunks())
             needs_update.store(true);
         m_chunks_thread = std::thread(&AppBase::generate_thread, this);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
     }
     [[nodiscard]] Geometry create_cube() noexcept
     {
@@ -1369,6 +1383,14 @@ public:
     void tick(const float dt, const GamepadState& gamepad) noexcept
     {
         ZoneScoped;
+        if (m_server_mode)
+        {
+            m_server_system.tick(dt);
+        }
+        else
+        {
+            m_client_system.tick(dt);
+        }
         m_physics_system.tick(dt);
         m_player.character->PostSimulation(0.1);
         m_player.cam_pos = glm::gtc::make_vec3(m_player.character->GetPosition().mF32);
