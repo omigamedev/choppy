@@ -15,13 +15,18 @@ module;
 
 export module ce.app:client;
 import :utils;
+import :player;
+import :messages;
+
 export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
 {
     static constexpr std::string_view ServerHost = "localhost";
     static constexpr uint16_t ServerPort = 7777;
+    ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
+    player::PlayerState* player = nullptr;
     std::string address2str(const ENetAddress& address) const noexcept
     {
         char ipStr[INET6_ADDRSTRLEN] = {0};
@@ -31,8 +36,9 @@ class ClientSystem : utils::NoCopy
         return std::format("{}:{}", ipStr, address.port);
     }
 public:
-    bool create_system() noexcept
+    bool create_system(player::PlayerState& player) noexcept
     {
+        this->player = &player;
         if (enet_initialize() != 0)
         {
             LOGE("An error occurred while initializing ENet.");
@@ -67,6 +73,7 @@ public:
         ENetEvent event{};
         if (enet_host_service(client, &event, 1000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)
         {
+            server = event.peer;
             LOGI("Connection to %s succeeded.", address2str(address).c_str());
         }
         else
@@ -79,8 +86,28 @@ public:
         }
         return true;
     }
+    void destroy_system() noexcept
+    {
+    }
     void tick(const float dt) noexcept
     {
+        static float update_timer = 0.0f;
+        update_timer += dt;
+        if (server && update_timer > 0.3f)
+        {
+            update_timer = 0.0f;
+            JPH::Vec3 pos{};
+            JPH::Quat rot{};
+            player->character->GetPositionAndRotation(pos, rot);
+            const auto buffer = messages::serialize(messages::UpdatePosMessage{
+                .position = glm::gtc::make_vec3(pos.mF32),
+                .rotation = glm::gtc::make_quat(rot.mValue.mF32)
+            });
+            ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), 0);
+            enet_peer_send(server, 0, packet);
+            LOGI("send position: %f %f %f", pos.GetX(), pos.GetY(), pos.GetZ());
+        }
+
         ENetEvent event{};
         if (enet_host_service(client, &event, 0) > 0)
         {
@@ -89,7 +116,7 @@ public:
             case ENET_EVENT_TYPE_CONNECT:
                 LOGI("Connected to server %s.", address2str(event.peer->address).c_str());
                 // Store any relevant client information here.
-                event.peer->data = const_cast<char*>("Server information");
+                server = event.peer;
                 break;
             case ENET_EVENT_TYPE_RECEIVE:
                 LOGI("A packet of length %llu containing %s was received from %s on channel %u.",

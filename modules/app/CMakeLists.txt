@@ -504,4 +504,5 @@ target_sources(app PUBLIC
         server.cppm
         client.cppm
         resources.cppm
+        messages.cppm
 )

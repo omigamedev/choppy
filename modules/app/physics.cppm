@@ -1,6 +1,7 @@
 module;
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
@@ -206,6 +207,15 @@ public:
         // physics_system.SetContactListener(&contact_listener);
         temp_allocator = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
 		return true;
+	}
+	void destroy_system() noexcept
+	{
+		//physics_system.~PhysicsSystem(); // or let it go out of scope
+		JPH::UnregisterTypes();
+		delete JPH::Factory::sInstance;
+		JPH::Factory::sInstance = nullptr;
+		job_system.reset();
+		temp_allocator.reset();
 	}
 	bool create_shared_box(const float block_size) noexcept
 	{

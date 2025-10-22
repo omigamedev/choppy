@@ -1,8 +1,10 @@
 module;
+#include <ranges>
 #include <string>
 #include <cstdio>
 #include <enet.h>
 #include <format>
+#include <tracy/Tracy.hpp>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -18,6 +20,9 @@ import :utils;
 import :player;
 import :resources;
 import :physics;
+import :messages;
+import ce.shaders;
+import ce.shaders.solidcolor;
 
 export namespace ce::app::server
 {
@@ -26,7 +31,7 @@ class ServerSystem : utils::NoCopy
     static constexpr uint32_t MaxClients = 32;
     ENetHost* server = nullptr;
     std::unordered_map<ENetPeer*, player::PlayerState> clients;
-    std::shared_ptr<resources::VulkanResources> vkr;
+    std::shared_ptr<resources::VulkanResources> resources;
     std::shared_ptr<physics::PhysicsSystem> physics;
     std::string address2str(const ENetAddress& address) const noexcept
     {
@@ -40,7 +45,7 @@ public:
     bool create_system(const std::shared_ptr<resources::VulkanResources>& vulkan_resources,
         const std::shared_ptr<physics::PhysicsSystem>& physics_system) noexcept
     {
-        vkr = vulkan_resources;
+        resources = vulkan_resources;
         physics = physics_system;
         if (enet_initialize() != 0)
         {
@@ -59,12 +64,39 @@ public:
         }
         return true;
     }
+    void destroy_system() noexcept
+    {
+        if (server)
+        {
+            enet_host_destroy(server);
+            server = nullptr;
+        }
+        enet_deinitialize();
+    }
     void add_player(ENetPeer* peer) noexcept
     {
         player::PlayerState player{
-            .character = physics->create_character()
+            .cube = resources->create_cube<shaders::SolidColorShader>()
         };
         clients.emplace(std::pair(peer, player));
+    }
+    [[nodiscard]] auto get_players() noexcept
+    {
+        return std::views::values(clients);
+    }
+    void parse_message(ENetPeer* peer, const std::span<const uint8_t> message) noexcept
+    {
+        const uint16_t type = *reinterpret_cast<const uint16_t*>(message.data());
+        if (type == 0)
+        {
+            if (auto update = messages::deserialize<messages::UpdatePosMessage>(message))
+            {
+                clients[peer].position = update->position;
+                clients[peer].rotation = update->rotation;
+                LOGI("received position: %f %f %f", update->position.x, update->position.y, update->position.z);
+
+            }
+        }
     }
     void tick(const float dt) noexcept
     {
@@ -85,6 +117,7 @@ public:
                     reinterpret_cast<const char*>(event.packet->data),
                     static_cast<const char*>(event.peer->data),
                     event.channelID);
+                parse_message(event.peer, {event.packet->data, event.packet->dataLength});
                 // Clean up the packet now that we're done using it.
                 enet_packet_destroy(event.packet);
                 break;
@@ -96,21 +129,12 @@ public:
             case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
                 LOGI("%s disconnected due to timeout.", static_cast<const char*>(event.peer->data));
                 // Reset the peer's client information.
-                event.peer->data = nullptr;
+                clients.erase(event.peer);
                 break;
             case ENET_EVENT_TYPE_NONE:
                 break;
             }
         }
-    }
-    void destroy_system() noexcept
-    {
-        if (server)
-        {
-            enet_host_destroy(server);
-            server = nullptr;
-        }
-        enet_deinitialize();
     }
 };
 }

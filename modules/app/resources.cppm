@@ -27,39 +27,14 @@ import :utils;
 export namespace ce::app::resources
 {
 struct VulkanResources;
-struct Geometry : utils::NoCopy
+struct Geometry
 {
     VulkanResources* vkr = nullptr;
     VkDescriptorSet object_descriptor_set = VK_NULL_HANDLE;
     vk::BufferSuballocation vertex_buffer{};
     vk::BufferSuballocation uniform_buffer{};
     uint32_t vertex_count = 0;
-    Geometry() = default;
-    Geometry(const Geometry& other) = delete;
-    Geometry(Geometry&& other) noexcept
-        : vkr(other.vkr),
-          object_descriptor_set(other.object_descriptor_set),
-          vertex_buffer(std::move(other.vertex_buffer)),
-          uniform_buffer(std::move(other.uniform_buffer)),
-          vertex_count(other.vertex_count)
-    {
-    }
-    Geometry& operator=(const Geometry& other) = delete;
-    Geometry& operator=(Geometry&& other) noexcept
-    {
-        if (this == &other)
-            return *this;
-        vkr = other.vkr;
-        object_descriptor_set = other.object_descriptor_set;
-        vertex_buffer = std::move(other.vertex_buffer);
-        uniform_buffer = std::move(other.uniform_buffer);
-        vertex_count = other.vertex_count;
-        other.object_descriptor_set = VK_NULL_HANDLE;
-        other.vertex_count = 0;
-        return *this;
-    }
-    Geometry(VulkanResources* vkr) : vkr(vkr) {}
-    ~Geometry();
+    void destroy() noexcept;
 };
 struct VulkanResources : utils::NoCopy
 {
@@ -122,6 +97,14 @@ struct VulkanResources : utils::NoCopy
             return false;
         }
         return true;
+    }
+    void destroy_buffers() noexcept
+    {
+        staging_buffer.destroy();
+        vertex_buffer.destroy();
+        frame_buffer.destroy();
+        object_buffer.destroy();
+        args_buffer.destroy();
     }
     void garbage_collect(const uint64_t timeline_value) noexcept
     {
@@ -213,11 +196,17 @@ struct VulkanResources : utils::NoCopy
         copy_buffers.clear();
     }
 };
-Geometry::~Geometry()
+void Geometry::destroy() noexcept
 {
     if (vkr && vertex_buffer.alloc)
+    {
         vkr->vertex_buffer.subfree(vertex_buffer);
+        vertex_buffer.alloc = VK_NULL_HANDLE;
+    }
     if (vkr && uniform_buffer.alloc)
+    {
         vkr->object_buffer.subfree(uniform_buffer);
+        uniform_buffer.alloc = VK_NULL_HANDLE;
+    }
 }
 }

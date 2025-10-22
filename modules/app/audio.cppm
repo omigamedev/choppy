@@ -29,6 +29,10 @@ public:
         }
         return true;
     }
+    void destroy_system() noexcept
+    {
+        ma_engine_uninit(&engine);
+    }
     void play_sound(const std::string& name) noexcept
     {
         const std::string path = "assets/audio/" + name;

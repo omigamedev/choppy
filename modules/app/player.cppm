@@ -6,6 +6,7 @@ module;
 export module ce.app:player;
 import glm;
 import :physics;
+import :resources;
 
 export namespace ce::app::player
 {
@@ -22,7 +23,10 @@ struct PlayerCamera
 struct PlayerState
 {
     JPH::Ref<JPH::Character> character;
+    resources::Geometry cube;
     glm::vec3 walk_start{};
     bool on_ground = false;
+    glm::vec3 position{};
+    glm::quat rotation = glm::gtc::identity<glm::quat>();
 };
 }

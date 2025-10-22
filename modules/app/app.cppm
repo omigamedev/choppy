@@ -153,14 +153,26 @@ public:
         }
         if (m_chunks_thread.joinable())
             m_chunks_thread.join();
+        generator.save();
+        m_cube = {};
+        m_player.character->RemoveFromPhysicsSystem();
+        m_player = {};
+        if (m_physics_system) m_physics_system->destroy_system();
+        if (m_audio_system) m_audio_system->destroy_system();
+        if (m_server_system) m_server_system->destroy_system();
+        if (m_client_system) m_client_system->destroy_system();
+        m_physics_system.reset();
+        m_audio_system.reset();
+        m_server_system.reset();
+        m_client_system.reset();
         for (auto& c : m_chunks)
         {
             for (auto& [k, b] : c.buffer)
                 m_resources->vertex_buffer.subfree(b);
         }
         clear_chunks_state(0);
-        m_resources->garbage_collect(0);
-        generator.save();
+        m_resources->garbage_collect(~1ull);
+        m_resources->destroy_buffers();
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
@@ -199,7 +211,7 @@ public:
         else
         {
             m_client_system = std::make_shared<client::ClientSystem>();
-            m_client_system->create_system();
+            m_client_system->create_system(m_player);
         }
 
         generator.load();
@@ -651,6 +663,37 @@ public:
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         }
 
+        if (m_server_mode)
+        {
+            for (auto& player : m_server_system->get_players())
+            {
+                if (const auto sb = m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+                {
+                    if (const auto dst_sb = m_resources->object_buffer.suballoc(sb->size, 64))
+                    {
+                        glm::mat4 transform = glm::gtc::translate(player.position) *
+                            glm::gtc::mat4_cast(player.rotation);
+                        *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                            .ObjectTransform = glm::transpose(transform),
+                            .Color = {1, 0, 0, 1}
+                        };
+                        m_resources->copy_buffers.emplace_back(m_resources->object_buffer, *sb, dst_sb->offset);
+                        player.cube.uniform_buffer = *dst_sb;
+                        m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->object_buffer), *dst_sb));
+                    }
+                    // defer suballocation deletion
+                    m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->staging_buffer), *sb));
+                }
+                if (const auto set = shader_color->alloc_descriptor(frame.present_index, 1))
+                {
+                    player.cube.object_descriptor_set = *set;
+                    shader_color->write_buffer(*set, 0, m_resources->object_buffer.buffer(),
+                        player.cube.uniform_buffer.offset, player.cube.uniform_buffer.size,
+                        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                }
+            }
+        }
+
         shader_opaque->update_descriptors();
         shader_transparent->update_descriptors();
         shader_color->update_descriptors();
@@ -800,6 +843,26 @@ public:
                 shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
             vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+        }
+
+        if (m_server_mode)
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader_color->pipeline());
+            vkCmdSetLineWidth(cmd, 2.f);
+            //vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_LINE);
+            const std::array vertex_buffers{m_resources->vertex_buffer.buffer()};
+            for (auto& player : m_server_system->get_players())
+            {
+                const std::array vertex_buffers_offset{m_cube.vertex_buffer.offset};
+                vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
+                    vertex_buffers.data(), vertex_buffers_offset.data());
+
+                const std::array sets{shader_color_frame_set, player.cube.object_descriptor_set};
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+
+                vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+            }
         }
 
         // {
