@@ -27,13 +27,38 @@ import :utils;
 export namespace ce::app::resources
 {
 struct VulkanResources;
-struct Geometry
+struct Geometry : utils::NoCopy
 {
     VulkanResources* vkr = nullptr;
     VkDescriptorSet object_descriptor_set = VK_NULL_HANDLE;
     vk::BufferSuballocation vertex_buffer{};
     vk::BufferSuballocation uniform_buffer{};
     uint32_t vertex_count = 0;
+    Geometry() = default;
+    Geometry(const Geometry& other) = delete;
+    Geometry(Geometry&& other) noexcept
+        : vkr(other.vkr),
+          object_descriptor_set(other.object_descriptor_set),
+          vertex_buffer(std::move(other.vertex_buffer)),
+          uniform_buffer(std::move(other.uniform_buffer)),
+          vertex_count(other.vertex_count)
+    {
+    }
+    Geometry& operator=(const Geometry& other) = delete;
+    Geometry& operator=(Geometry&& other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        vkr = other.vkr;
+        object_descriptor_set = other.object_descriptor_set;
+        vertex_buffer = std::move(other.vertex_buffer);
+        uniform_buffer = std::move(other.uniform_buffer);
+        vertex_count = other.vertex_count;
+        other.object_descriptor_set = VK_NULL_HANDLE;
+        other.vertex_count = 0;
+        return *this;
+    }
+    Geometry(VulkanResources* vkr) : vkr(vkr) {}
     ~Geometry();
 };
 struct VulkanResources : utils::NoCopy

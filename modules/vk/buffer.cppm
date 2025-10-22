@@ -32,6 +32,39 @@ export namespace ce::vk
 {
 struct BufferSuballocation
 {
+    BufferSuballocation() = default;
+    BufferSuballocation(const VmaVirtualAllocation alloc, const VkDeviceSize offset, const VkDeviceSize size,
+        void* const ptr)
+        : alloc(alloc),
+          offset(offset),
+          size(size),
+          ptr(ptr)
+    {
+    }
+    BufferSuballocation(const BufferSuballocation& other) = default;
+    BufferSuballocation(BufferSuballocation&& other) noexcept
+        : alloc(other.alloc),
+          offset(other.offset),
+          size(other.size),
+          ptr(other.ptr)
+    {
+    }
+    BufferSuballocation& operator=(const BufferSuballocation& other) = default;
+    BufferSuballocation& operator=(BufferSuballocation&& other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        alloc = other.alloc;
+        offset = other.offset;
+        size = other.size;
+        ptr = other.ptr;
+        other.alloc = VK_NULL_HANDLE;
+        other.offset = 0;
+        other.size = 0;
+        other.ptr = nullptr;
+        return *this;
+    }
+
     VmaVirtualAllocation alloc = VK_NULL_HANDLE;
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;

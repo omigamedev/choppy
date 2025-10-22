@@ -16,6 +16,8 @@ module;
 export module ce.app:server;
 import :utils;
 import :player;
+import :resources;
+import :physics;
 
 export namespace ce::app::server
 {
@@ -24,6 +26,8 @@ class ServerSystem : utils::NoCopy
     static constexpr uint32_t MaxClients = 32;
     ENetHost* server = nullptr;
     std::unordered_map<ENetPeer*, player::PlayerState> clients;
+    std::shared_ptr<resources::VulkanResources> vkr;
+    std::shared_ptr<physics::PhysicsSystem> physics;
     std::string address2str(const ENetAddress& address) const noexcept
     {
         char ipStr[INET6_ADDRSTRLEN] = {0};
@@ -33,8 +37,11 @@ class ServerSystem : utils::NoCopy
         return std::format("{}:{}", ipStr, address.port);
     }
 public:
-    bool create_system() noexcept
+    bool create_system(const std::shared_ptr<resources::VulkanResources>& vulkan_resources,
+        const std::shared_ptr<physics::PhysicsSystem>& physics_system) noexcept
     {
+        vkr = vulkan_resources;
+        physics = physics_system;
         if (enet_initialize() != 0)
         {
             LOGE("An error occurred while initializing ENet.");
@@ -52,6 +59,13 @@ public:
         }
         return true;
     }
+    void add_player(ENetPeer* peer) noexcept
+    {
+        player::PlayerState player{
+            .character = physics->create_character()
+        };
+        clients.emplace(std::pair(peer, player));
+    }
     void tick(const float dt) noexcept
     {
         ENetEvent event{};
@@ -63,7 +77,7 @@ public:
                 LOGI("A new client connected from %s.", address2str(event.peer->address).c_str());
                 // Store any relevant client information here.
                 // event.peer->data = new player::PlayerState;
-                clients.emplace(std::pair(event.peer, player::PlayerState{}));
+                add_player(event.peer);
                 break;
             case ENET_EVENT_TYPE_RECEIVE:
                 LOGI("A packet of length %llu containing %s was received from %s on channel %u.",

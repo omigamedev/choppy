@@ -104,8 +104,6 @@ class AppBase final
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
     glm::ivec2 m_size{0, 0};
 
-    resources::VulkanResources m_resources;
-
     resources::Geometry m_cube;
     vk::BufferSuballocation shader_flat_frame{};
     vk::BufferSuballocation shader_color_frame{};
@@ -135,11 +133,12 @@ class AppBase final
     std::vector<glm::ivec3> m_regenerate_sectors;
     std::atomic_bool needs_update = false;
 
-    physics::PhysicsSystem m_physics_system;
-    audio::AudioSystem m_audio_system;
     bool m_server_mode = false;
-    server::ServerSystem m_server_system;
-    client::ClientSystem m_client_system;
+    std::shared_ptr<resources::VulkanResources> m_resources;
+    std::shared_ptr<physics::PhysicsSystem> m_physics_system;
+    std::shared_ptr<audio::AudioSystem> m_audio_system;
+    std::shared_ptr<server::ServerSystem> m_server_system;
+    std::shared_ptr<client::ClientSystem> m_client_system;
 
     Frustum m_frustum;
     bool update_frustum = true;
@@ -157,10 +156,10 @@ public:
         for (auto& c : m_chunks)
         {
             for (auto& [k, b] : c.buffer)
-                m_resources.vertex_buffer.subfree(b);
+                m_resources->vertex_buffer.subfree(b);
         }
         clear_chunks_state(0);
-        m_resources.garbage_collect(0);
+        m_resources->garbage_collect(0);
         generator.save();
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
@@ -183,18 +182,24 @@ public:
             m_swapchain_count = m_vk->swapchain_count();
         }
 
-        m_physics_system.create_system();
-        m_physics_system.create_shared_box(BlockSize);
-        m_player.character = m_physics_system.create_character();
-        m_audio_system.create_system();
+        m_resources = std::make_shared<resources::VulkanResources>();
+        m_resources->create_buffers(m_vk);
+        m_physics_system = std::make_shared<physics::PhysicsSystem>();
+        m_physics_system->create_system();
+        m_physics_system->create_shared_box(BlockSize);
+        m_player.character = m_physics_system->create_character();
+        m_audio_system = std::make_shared<audio::AudioSystem>();
+        m_audio_system->create_system();
         if (server_mode)
         {
             m_server_mode = true;
-            m_server_system.create_system();
+            m_server_system = std::make_shared<server::ServerSystem>();
+            m_server_system->create_system(m_resources, m_physics_system);
         }
         else
         {
-            m_client_system.create_system();
+            m_client_system = std::make_shared<client::ClientSystem>();
+            m_client_system->create_system();
         }
 
         generator.load();
@@ -210,8 +215,7 @@ public:
         //m_grid = std::make_shared<Grid>();
         //m_grid->create(m_vk, 0);
 
-        m_resources.create_buffers(m_vk);
-        m_cube = m_resources.create_cube<shaders::SolidColorShader>();
+        m_cube = m_resources->create_cube<shaders::SolidColorShader>();
 
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             if (xrmode)
@@ -222,10 +226,10 @@ public:
             {
                 m_vk->init_resources(cmd);
             }
-            m_resources.exec_copy_buffers(cmd);
+            m_resources->exec_copy_buffers(cmd);
         });
 
-        m_resources.texture = vk::texture::load_texture(m_vk, "assets/grass.png", m_resources.staging_buffer).value();
+        m_resources->texture = vk::texture::load_texture(m_vk, "assets/grass.png", m_resources->staging_buffer).value();
 
         const VkSamplerCreateInfo sampler_info{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -245,7 +249,7 @@ public:
             .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
             .unnormalizedCoordinates = false,
         };
-        if (const VkResult r = vkCreateSampler(m_vk->device(), &sampler_info, nullptr, &m_resources.sampler); r != VK_SUCCESS)
+        if (const VkResult r = vkCreateSampler(m_vk->device(), &sampler_info, nullptr, &m_resources->sampler); r != VK_SUCCESS)
         {
             LOGE("Failed to create sampler");
         }
@@ -352,8 +356,8 @@ public:
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
                 chunk.dirty = true;
                 chunk.regenerate = false;
-                m_physics_system.remove_body(chunk.body_id);
-                if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, chunk.data, chunk.sector))
+                m_physics_system->remove_body(chunk.body_id);
+                if (auto result = m_physics_system->create_chunk_body(ChunkSize, BlockSize, chunk.data, chunk.sector))
                 {
                     std::tie(chunk.body_id, chunk.shape) = result.value();
                 }
@@ -374,8 +378,8 @@ public:
                 chunk.transform = glm::gtc::translate(glm::vec3(sector) * ChunkSize * BlockSize);
                 chunk.dirty = true;
                 chunk.regenerate = false;
-                m_physics_system.remove_body(chunk.body_id);
-                if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, chunk.data, chunk.sector))
+                m_physics_system->remove_body(chunk.body_id);
+                if (auto result = m_physics_system->create_chunk_body(ChunkSize, BlockSize, chunk.data, chunk.sector))
                 {
                     std::tie(chunk.body_id, chunk.shape) = result.value();
                 }
@@ -394,9 +398,9 @@ public:
         for (const auto& [layer, state] : m_chunks_state)
         {
             if (state.uniform_buffer.alloc)
-                m_resources.delete_buffers.emplace(timeline_value, std::pair(std::ref(m_resources.object_buffer), state.uniform_buffer));
+                m_resources->delete_buffers.emplace(timeline_value, std::pair(std::ref(m_resources->object_buffer), state.uniform_buffer));
             if (state.args_buffer.alloc)
-                m_resources.delete_buffers.emplace(timeline_value, std::pair(std::ref(m_resources.args_buffer), state.args_buffer));
+                m_resources->delete_buffers.emplace(timeline_value, std::pair(std::ref(m_resources->args_buffer), state.args_buffer));
         }
         m_chunks_state.clear();
     }
@@ -447,27 +451,27 @@ public:
                 if (m.vertices.empty())
                 {
                     if (chunk.buffer[layer].alloc)
-                        m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.vertex_buffer), chunk.buffer[layer]));
+                        m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->vertex_buffer), chunk.buffer[layer]));
                     chunk.buffer.erase(layer);
                     continue;
                 }
                 if (chunk.dirty)
                 {
-                    if (const auto sb = m_resources.staging_buffer.suballoc(m.vertices.size() *
+                    if (const auto sb = m_resources->staging_buffer.suballoc(m.vertices.size() *
                         sizeof(shaders::SolidFlatShader::VertexInput), 64))
                     {
-                        if (const auto dst_sb = m_resources.vertex_buffer.suballoc(sb->size, 64))
+                        if (const auto dst_sb = m_resources->vertex_buffer.suballoc(sb->size, 64))
                         {
                             std::ranges::copy(m.vertices, static_cast<shaders::SolidFlatShader::VertexInput*>(sb->ptr));
-                            m_resources.copy_buffers.emplace_back(m_resources.vertex_buffer, *sb, dst_sb->offset);
+                            m_resources->copy_buffers.emplace_back(m_resources->vertex_buffer, *sb, dst_sb->offset);
                             //m_chunks_state.vertex_buffer = *dst_sb;
 
                             if (chunk.buffer[layer].alloc)
-                                m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.vertex_buffer), chunk.buffer[layer]));
+                                m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->vertex_buffer), chunk.buffer[layer]));
                             chunk.buffer[layer] = *dst_sb;
                         }
                         // defer suballocation deletion
-                        m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
+                        m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->staging_buffer), *sb));
                     }
                 }
                 if (m_frustum.is_box_visible(chunk_aabb))
@@ -492,10 +496,10 @@ public:
         clear_chunks_state(frame.timeline_value);
         for (const auto& [layer, batch] : batches)
         {
-            if (const auto sb = m_resources.staging_buffer.suballoc(batch.ubo.size() *
+            if (const auto sb = m_resources->staging_buffer.suballoc(batch.ubo.size() *
                 sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64))
             {
-                if (const auto dst_sb = m_resources.object_buffer.suballoc(sb->size, 64))
+                if (const auto dst_sb = m_resources->object_buffer.suballoc(sb->size, 64))
                 {
                     auto ubo_copy = batch.ubo;
                     if (layer == BlockLayer::Transparent)
@@ -504,23 +508,23 @@ public:
                             ubo.y_offset = -0.1f;
                     }
                     std::ranges::copy(ubo_copy, static_cast<shaders::SolidFlatShader::PerObjectBuffer*>(sb->ptr));
-                    m_resources.copy_buffers.emplace_back(m_resources.object_buffer, *sb, dst_sb->offset);
+                    m_resources->copy_buffers.emplace_back(m_resources->object_buffer, *sb, dst_sb->offset);
                     m_chunks_state[layer].uniform_buffer = *dst_sb;
                 }
                 // defer suballocation deletion
-                m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
+                m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->staging_buffer), *sb));
             }
 
-            if (const auto sb = m_resources.staging_buffer.suballoc(batch.draw_args.size() * sizeof(VkDrawIndirectCommand), 64))
+            if (const auto sb = m_resources->staging_buffer.suballoc(batch.draw_args.size() * sizeof(VkDrawIndirectCommand), 64))
             {
-                if (const auto dst_sb = m_resources.args_buffer.suballoc(sb->size, 64))
+                if (const auto dst_sb = m_resources->args_buffer.suballoc(sb->size, 64))
                 {
                     std::ranges::copy(batch.draw_args, static_cast<VkDrawIndirectCommand*>(sb->ptr));
-                    m_resources.copy_buffers.emplace_back(m_resources.args_buffer, *sb, dst_sb->offset);
+                    m_resources->copy_buffers.emplace_back(m_resources->args_buffer, *sb, dst_sb->offset);
                     m_chunks_state[layer].args_buffer = *dst_sb;
                 }
                 // defer suballocation deletion
-                m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
+                m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->staging_buffer), *sb));
             }
             m_chunks_state[layer].draw_count = batch.draw_count;
         }
@@ -535,9 +539,9 @@ public:
 
         update_chunks(frame);
 
-        if (const auto sb = m_resources.staging_buffer.suballoc(sizeof(shaders::SolidFlatShader::PerFrameConstants), 64))
+        if (const auto sb = m_resources->staging_buffer.suballoc(sizeof(shaders::SolidFlatShader::PerFrameConstants), 64))
         {
-            const auto dst_sb = m_resources.frame_buffer.suballoc(sb->size, 64);
+            const auto dst_sb = m_resources->frame_buffer.suballoc(sb->size, 64);
 
             auto tint = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
             auto fogColor = glm::vec4(.27f, .37f, .5f, 1.f);
@@ -562,23 +566,23 @@ public:
                 .fogEnd = fogEnd,
             };
             // defer copy
-            m_resources.copy_buffers.emplace_back(m_resources.frame_buffer, *sb, dst_sb->offset);
+            m_resources->copy_buffers.emplace_back(m_resources->frame_buffer, *sb, dst_sb->offset);
             shader_flat_frame = *dst_sb;
             // defer suballocation deletion
-            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
-            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.frame_buffer), *dst_sb));
+            m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->staging_buffer), *sb));
+            m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->frame_buffer), *dst_sb));
             if (const auto set = shader_opaque->alloc_descriptor(frame.present_index, 0))
             {
                 shader_flat_frame_set = *set;
-                shader_opaque->write_buffer(*set, 0, m_resources.frame_buffer.buffer(),
+                shader_opaque->write_buffer(*set, 0, m_resources->frame_buffer.buffer(),
                     dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                shader_opaque->write_texture(*set, 1, m_resources.texture.image_view, m_resources.sampler);
+                shader_opaque->write_texture(*set, 1, m_resources->texture.image_view, m_resources->sampler);
             }
         }
 
-        if (const auto sb = m_resources.staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerFrameConstants), 64))
+        if (const auto sb = m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerFrameConstants), 64))
         {
-            const auto dst_sb = m_resources.frame_buffer.suballoc(sb->size, 64);
+            const auto dst_sb = m_resources->frame_buffer.suballoc(sb->size, 64);
             *static_cast<shaders::SolidColorShader::PerFrameConstants*>(sb->ptr) = {
                 .ViewProjection = {
                     glm::transpose(frame.projection[0] * frame.view[0]),
@@ -586,15 +590,15 @@ public:
                 }
             };
             // defer copy
-            m_resources.copy_buffers.emplace_back(m_resources.frame_buffer, *sb, dst_sb->offset);
+            m_resources->copy_buffers.emplace_back(m_resources->frame_buffer, *sb, dst_sb->offset);
             shader_color_frame = *dst_sb;
             // defer suballocation deletion
-            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
-            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.frame_buffer), *dst_sb));
+            m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->staging_buffer), *sb));
+            m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->frame_buffer), *dst_sb));
             if (const auto set = shader_color->alloc_descriptor(frame.present_index, 0))
             {
                 shader_color_frame_set = *set;
-                shader_color->write_buffer(*set, 0, m_resources.frame_buffer.buffer(),
+                shader_color->write_buffer(*set, 0, m_resources->frame_buffer.buffer(),
                     dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
             }
         }
@@ -605,15 +609,15 @@ public:
             if (const auto set = shader->alloc_descriptor(frame.present_index, 1))
             {
                 state.object_descriptor_set = *set;
-                shader->write_buffer(*set, 0, m_resources.object_buffer.buffer(),
+                shader->write_buffer(*set, 0, m_resources->object_buffer.buffer(),
                     state.uniform_buffer.offset, state.uniform_buffer.size,
                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
             }
         }
 
-        if (const auto sb = m_resources.staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+        if (const auto sb = m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
         {
-            if (const auto dst_sb = m_resources.object_buffer.suballoc(sb->size, 64))
+            if (const auto dst_sb = m_resources->object_buffer.suballoc(sb->size, 64))
             {
                 const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
                 if (auto hit = build_block_cell(m_camera.cam_pos, forward))
@@ -632,17 +636,17 @@ public:
                         .Color = {0, 0, 0, 1}
                     };
                 }
-                m_resources.copy_buffers.emplace_back(m_resources.object_buffer, *sb, dst_sb->offset);
+                m_resources->copy_buffers.emplace_back(m_resources->object_buffer, *sb, dst_sb->offset);
                 m_cube.uniform_buffer = *dst_sb;
-                m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.object_buffer), *dst_sb));
+                m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->object_buffer), *dst_sb));
             }
             // defer suballocation deletion
-            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
+            m_resources->delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources->staging_buffer), *sb));
         }
         if (const auto set = shader_color->alloc_descriptor(frame.present_index, 1))
         {
             m_cube.object_descriptor_set = *set;
-            shader_color->write_buffer(*set, 0, m_resources.object_buffer.buffer(),
+            shader_color->write_buffer(*set, 0, m_resources->object_buffer.buffer(),
                 m_cube.uniform_buffer.offset, m_cube.uniform_buffer.size,
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         }
@@ -656,7 +660,7 @@ public:
         ZoneScoped;
         {
             TracyVkZone(m_vk->tracy(), cmd, "Copy Buffers");
-            m_resources.exec_copy_buffers(cmd);
+            m_resources->exec_copy_buffers(cmd);
         }
 
         {
@@ -671,7 +675,7 @@ public:
                     .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
                     .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                     .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .buffer = m_resources.args_buffer.buffer(),
+                    .buffer = m_resources->args_buffer.buffer(),
                     .offset = state.args_buffer.offset,
                     .size = state.args_buffer.size,
                 });
@@ -766,7 +770,7 @@ public:
             {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader->pipeline());
 
-                const std::array vertex_buffers{m_resources.vertex_buffer.buffer()};
+                const std::array vertex_buffers{m_resources->vertex_buffer.buffer()};
                 const std::array vertex_buffers_offset{VkDeviceSize{0ull}};
                 vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                     vertex_buffers.data(), vertex_buffers_offset.data());
@@ -775,7 +779,7 @@ public:
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     shader->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
-                vkCmdDrawIndirect(cmd, m_resources.args_buffer.buffer(),
+                vkCmdDrawIndirect(cmd, m_resources->args_buffer.buffer(),
                     state.args_buffer.offset, state.draw_count, sizeof(VkDrawIndirectCommand));
             }
         }
@@ -786,7 +790,7 @@ public:
             vkCmdSetLineWidth(cmd, 2.f);
             //vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_LINE);
 
-            const std::array vertex_buffers{m_resources.vertex_buffer.buffer()};
+            const std::array vertex_buffers{m_resources->vertex_buffer.buffer()};
             const std::array vertex_buffers_offset{m_cube.vertex_buffer.offset};
             vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                 vertex_buffers.data(), vertex_buffers_offset.data());
@@ -1099,7 +1103,7 @@ public:
             action_physics_record = action_physics_record_new;
             if (action_physics_record)
             {
-                m_physics_system.start_recording();
+                m_physics_system->start_recording();
             }
         }
         static bool action_frustum = false;
@@ -1253,13 +1257,13 @@ public:
         ZoneScoped;
         if (m_server_mode)
         {
-            m_server_system.tick(dt);
+            m_server_system->tick(dt);
         }
         else
         {
-            m_client_system.tick(dt);
+            m_client_system->tick(dt);
         }
-        m_physics_system.tick(dt);
+        m_physics_system->tick(dt);
         m_player.character->PostSimulation(0.1);
         m_camera.cam_pos = glm::gtc::make_vec3(m_player.character->GetPosition().mF32);
         const bool new_on_ground = m_player.character->GetGroundState() == JPH::Character::EGroundState::OnGround;
@@ -1270,7 +1274,7 @@ public:
             {
                 // play landing sound only when falling
                 if (m_player.character->GetLinearVelocity().GetY() < 0)
-                    m_audio_system.play_sound(std::format("walk/Sound {:02d}.wav", glm::gtc::linearRand(22, 23)));
+                    m_audio_system->play_sound(std::format("walk/Sound {:02d}.wav", glm::gtc::linearRand(22, 23)));
                 m_player.walk_start = glm::gtc::make_vec3(m_player.character->GetGroundPosition().mF32);
             }
         }
@@ -1284,7 +1288,7 @@ public:
                 {
                     m_player.walk_start = current_pos;
                     // play step sound
-                    m_audio_system.play_sound(std::format("walk/Sound {:02d}.wav", glm::gtc::linearRand(1, 21)));
+                    m_audio_system->play_sound(std::format("walk/Sound {:02d}.wav", glm::gtc::linearRand(1, 21)));
                 }
             }
         }
@@ -1292,13 +1296,13 @@ public:
         if (xrmode)
         {
             m_timeline_value = m_xr->timeline_value().value_or(0);
-            m_resources.garbage_collect(m_timeline_value);
+            m_resources->garbage_collect(m_timeline_value);
             tick_xrmode(dt, gamepad);
         }
         else
         {
             m_timeline_value = m_vk->timeline_value().value_or(0);
-            m_resources.garbage_collect(m_timeline_value);
+            m_resources->garbage_collect(m_timeline_value);
             tick_windowed(dt, gamepad);
         }
     }
