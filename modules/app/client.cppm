@@ -65,7 +65,7 @@ public:
         }
         // Wait up to 5 seconds for the connection attempt to succeed.
         ENetEvent event{};
-        if (enet_host_service(client, &event, 5000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)
+        if (enet_host_service(client, &event, 1000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)
         {
             LOGI("Connection to %s succeeded.", address2str(address).c_str());
         }

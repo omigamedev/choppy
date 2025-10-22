@@ -503,4 +503,5 @@ target_sources(app PUBLIC
         audio.cppm
         server.cppm
         client.cppm
+        resources.cppm
 )

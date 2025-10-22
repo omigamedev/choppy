@@ -48,6 +48,7 @@ import :player;
 import :audio;
 import :server;
 import :client;
+import :resources;
 
 export namespace ce::app
 {
@@ -89,24 +90,6 @@ struct ChunksState
     vk::BufferSuballocation args_buffer{};
     uint32_t draw_count = 0;
 };
-struct Geometry
-{
-    VkDescriptorSet object_descriptor_set = VK_NULL_HANDLE;
-    vk::BufferSuballocation vertex_buffer{};
-    vk::BufferSuballocation uniform_buffer{};
-    uint32_t vertex_count = 0;
-};
-struct TransformComponent
-{
-    glm::vec3 translation{};
-    glm::vec3 rotation{};
-    glm::vec3 scale{};
-    glm::mat4 transform{};
-};
-struct StaticMeshComponent
-{
-    Geometry geometry;
-};
 
 class AppBase final
 {
@@ -121,26 +104,19 @@ class AppBase final
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
     glm::ivec2 m_size{0, 0};
 
-    std::multimap<uint64_t, std::pair<vk::Buffer&, const vk::BufferSuballocation>> m_delete_buffers;
-    std::vector<std::tuple<vk::Buffer&, const vk::BufferSuballocation, VkDeviceSize /*dst_offset*/>> m_copy_buffers;
-    vk::Buffer m_staging_buffer;
-    vk::Buffer m_vertex_buffer;
-    vk::Buffer m_frame_buffer;
-    vk::Buffer m_object_buffer;
+    resources::VulkanResources m_resources;
 
-    vk::texture::Texture m_texture;
-    VkSampler m_sampler = VK_NULL_HANDLE;
-
-    Geometry m_cube{};
+    resources::Geometry m_cube;
     vk::BufferSuballocation shader_flat_frame{};
     vk::BufferSuballocation shader_color_frame{};
     VkDescriptorSet shader_flat_frame_set = VK_NULL_HANDLE;
     VkDescriptorSet shader_color_frame_set = VK_NULL_HANDLE;
 
-    vk::Buffer m_args_buffer;
     bool m_running = true;
     player::PlayerState m_player{};
+    player::PlayerCamera m_camera{};
     bool xrmode = false;
+    std::array<bool, 256> keys{false};
     uint32_t m_swapchain_count = 0;
     uint64_t m_timeline_value = 0;
 
@@ -181,14 +157,10 @@ public:
         for (auto& c : m_chunks)
         {
             for (auto& [k, b] : c.buffer)
-                m_vertex_buffer.subfree(b);
+                m_resources.vertex_buffer.subfree(b);
         }
-        if (m_cube.vertex_buffer.alloc)
-            m_vertex_buffer.subfree(m_cube.vertex_buffer);
-        if (m_cube.uniform_buffer.alloc)
-            m_object_buffer.subfree(m_cube.uniform_buffer);
         clear_chunks_state(0);
-        garbage_collect(true);
+        m_resources.garbage_collect(0);
         generator.save();
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
@@ -238,49 +210,8 @@ public:
         //m_grid = std::make_shared<Grid>();
         //m_grid->create(m_vk, 0);
 
-        // Create and upload vertex buffer
-        m_vertex_buffer = vk::Buffer(m_vk, "ChunksVertexBuffer");
-        if (!m_vertex_buffer.create(1024 * (1 << 20),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
-        {
-            LOGE("Failed to create chunks vertex buffer");
-        }
-
-        m_frame_buffer = vk::Buffer(m_vk, "ChunksPerFrameBuffer");
-        if (!m_frame_buffer.create(sizeof(shaders::SolidFlatShader::PerFrameConstants) * 100,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
-        {
-            LOGE("Failed to create cube vertex buffer");
-        }
-
-        m_object_buffer = vk::Buffer(m_vk, "ChunksPerObjectBuffer");
-        if (!m_object_buffer.create(sizeof(shaders::SolidFlatShader::PerObjectBuffer) * 30'000,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
-        {
-            LOGE("Failed to create cube vertex buffer");
-        }
-
-        m_staging_buffer = vk::Buffer(m_vk, "StagingBuffer");
-        if (!m_staging_buffer.create(128 * (1 << 20),
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU,
-            VMA_ALLOCATION_CREATE_MAPPED_BIT))
-        {
-            LOGE("Failed to create cube vertex buffer");
-        }
-
-        m_args_buffer = vk::Buffer(m_vk, "CubeArgsBuffer");
-        constexpr uint32_t args_buffer_size = sizeof(VkDrawIndirectCommand) * 30'000;
-        if (!m_args_buffer.create(args_buffer_size,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE))
-        {
-            LOGE("Failed to create cube vertex buffer");
-        }
-
-        m_cube = create_cube();
+        m_resources.create_buffers(m_vk);
+        m_cube = m_resources.create_cube<shaders::SolidColorShader>();
 
         m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
             if (xrmode)
@@ -291,10 +222,10 @@ public:
             {
                 m_vk->init_resources(cmd);
             }
-            flush_staging_buffer_copies(cmd);
+            m_resources.exec_copy_buffers(cmd);
         });
 
-        m_texture = vk::texture::load_texture(m_vk, "assets/grass.png", m_staging_buffer).value();
+        m_resources.texture = vk::texture::load_texture(m_vk, "assets/grass.png", m_resources.staging_buffer).value();
 
         const VkSamplerCreateInfo sampler_info{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -314,73 +245,14 @@ public:
             .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
             .unnormalizedCoordinates = false,
         };
-        if (const VkResult r = vkCreateSampler(m_vk->device(), &sampler_info, nullptr, &m_sampler); r != VK_SUCCESS)
+        if (const VkResult r = vkCreateSampler(m_vk->device(), &sampler_info, nullptr, &m_resources.sampler); r != VK_SUCCESS)
         {
             LOGE("Failed to create sampler");
         }
         if (generate_chunks())
             needs_update.store(true);
         m_chunks_thread = std::thread(&AppBase::generate_thread, this);
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-    }
-    [[nodiscard]] Geometry create_cube() noexcept
-    {
-        Geometry cube;
-        // Define the 8 vertices of the cube with unique colors for interpolation
-        constexpr std::array<shaders::SolidColorShader::VertexInput, 8> points = {{
-            // {position},
-            {{0, 0, 1, 1.0f}}, // 0: Front-Bottom-Left,  Red
-            {{1, 0, 1, 1.0f}}, // 1: Front-Bottom-Right, Green
-            {{1, 1, 1, 1.0f}}, // 2: Front-Top-Right,    Blue
-            {{0, 1, 1, 1.0f}}, // 3: Front-Top-Left,     Yellow
-            {{0, 0, 0, 1.0f}}, // 4: Back-Bottom-Left,   Magenta
-            {{1, 0, 0, 1.0f}}, // 5: Back-Bottom-Right,  Cyan
-            {{1, 1, 0, 1.0f}}, // 6: Back-Top-Right,     White
-            {{0, 1, 0, 1.0f}}, // 7: Back-Top-Left,      Gray
-        }};
-
-        // Define the 36 indices for the 12 triangles of the cube
-        constexpr std::array<uint32_t, 36> indices = {
-            // Front face (+Z)
-            0, 1, 2,   2, 3, 0,
-            // Back face (-Z)
-            4, 7, 6,   6, 5, 4,
-            // Top face (+Y)
-            3, 2, 6,   6, 7, 3,
-            // Bottom face (-Y)
-            4, 5, 1,   1, 0, 4,
-            // Right face (+X)
-            1, 5, 6,   6, 2, 1,
-            // Left face (-X)
-            4, 0, 3,   3, 7, 4,
-        };
-
-        std::vector<shaders::SolidColorShader::VertexInput> vertices;
-        vertices.reserve(indices.size() * 3);
-        for (const auto i : indices)
-        {
-            vertices.emplace_back(points[i]);
-        }
-        cube.vertex_count = static_cast<uint32_t>(vertices.size());
-
-        constexpr shaders::SolidColorShader::PerObjectBuffer ubo{
-            .ObjectTransform = glm::gtc::identity<glm::mat4>(),
-            .Color = {1, 0, 0, 1}
-        };
-
-        if (const auto sb = m_staging_buffer.suballoc(vertices.size() *
-            sizeof(shaders::SolidColorShader::VertexInput), 64))
-        {
-            if (const auto dst_sb = m_vertex_buffer.suballoc(sb->size, 64))
-            {
-                std::ranges::copy(vertices, static_cast<shaders::SolidColorShader::VertexInput*>(sb->ptr));
-                m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
-                cube.vertex_buffer = *dst_sb;
-            }
-            // defer suballocation deletion
-            m_delete_buffers.emplace(1, std::pair(std::ref(m_staging_buffer), *sb));
-        }
-        return cube;
+        //std::this_thread::sleep_for(std::chrono::seconds(3));
     }
     void generate_thread() noexcept
     {
@@ -395,7 +267,7 @@ public:
     {
         ZoneScoped;
         std::vector<glm::ivec3> neighbors;
-        const uint32_t chunk_count = pow(size * 2 + 1, 3);
+        const uint32_t chunk_count = utils::pow(size * 2 + 1, 3);
         neighbors.reserve(chunk_count);
         const int32_t side = size;
         for (int32_t y = -1; y < 10 + 1; ++y)
@@ -415,7 +287,7 @@ public:
     {
         constexpr uint32_t chunk_count = (ChunkRings * 2 + 1) * (ChunkRings * 2 + 1) * (3);
 
-        const glm::vec3 cur_sector = glm::floor(m_player.cam_pos / (ChunkSize * BlockSize));
+        const glm::vec3 cur_sector = glm::floor(m_camera.cam_pos / (ChunkSize * BlockSize));
 
         auto neighbors = generate_neighbors(cur_sector, ChunkRings);
         std::ranges::sort(neighbors, [cur_sector](const glm::ivec3 a, const glm::ivec3 b)
@@ -436,9 +308,9 @@ public:
         }
 
         //const glm::vec3 dist = glm::abs(cur_sector - glm::vec3(m_player.cam_sector));
-        if (m_chunks.size() < chunk_count || !chunk_indices.empty() || m_player.cam_sector != glm::ivec3(glm::floor(cur_sector)))
+        if (m_chunks.size() < chunk_count || !chunk_indices.empty() || m_camera.cam_sector != glm::ivec3(glm::floor(cur_sector)))
         {
-            m_player.cam_sector = cur_sector;
+            m_camera.cam_sector = cur_sector;
             if (m_chunks.size() < chunk_count)
             {
                 LOGI("Loading world: %d%%", static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
@@ -446,7 +318,7 @@ public:
             else
             {
                 LOGI("travel to sector [%d, %d, %d]",
-                    m_player.cam_sector.x, m_player.cam_sector.y, m_player.cam_sector.z);
+                    m_camera.cam_sector.x, m_camera.cam_sector.y, m_camera.cam_sector.z);
             }
         }
         else
@@ -522,9 +394,9 @@ public:
         for (const auto& [layer, state] : m_chunks_state)
         {
             if (state.uniform_buffer.alloc)
-                m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_object_buffer), state.uniform_buffer));
+                m_resources.delete_buffers.emplace(timeline_value, std::pair(std::ref(m_resources.object_buffer), state.uniform_buffer));
             if (state.args_buffer.alloc)
-                m_delete_buffers.emplace(timeline_value, std::pair(std::ref(m_args_buffer), state.args_buffer));
+                m_resources.delete_buffers.emplace(timeline_value, std::pair(std::ref(m_resources.args_buffer), state.args_buffer));
         }
         m_chunks_state.clear();
     }
@@ -551,8 +423,8 @@ public:
 
         auto sorted_chunks = utils::sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
         {
-            const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_player.cam_pos));
-            const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_player.cam_pos));
+            const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(m_camera.cam_pos));
+            const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(m_camera.cam_pos));
             return dist1 < dist2;
         });
 
@@ -575,27 +447,27 @@ public:
                 if (m.vertices.empty())
                 {
                     if (chunk.buffer[layer].alloc)
-                        m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer[layer]));
+                        m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.vertex_buffer), chunk.buffer[layer]));
                     chunk.buffer.erase(layer);
                     continue;
                 }
                 if (chunk.dirty)
                 {
-                    if (const auto sb = m_staging_buffer.suballoc(m.vertices.size() *
+                    if (const auto sb = m_resources.staging_buffer.suballoc(m.vertices.size() *
                         sizeof(shaders::SolidFlatShader::VertexInput), 64))
                     {
-                        if (const auto dst_sb = m_vertex_buffer.suballoc(sb->size, 64))
+                        if (const auto dst_sb = m_resources.vertex_buffer.suballoc(sb->size, 64))
                         {
                             std::ranges::copy(m.vertices, static_cast<shaders::SolidFlatShader::VertexInput*>(sb->ptr));
-                            m_copy_buffers.emplace_back(m_vertex_buffer, *sb, dst_sb->offset);
+                            m_resources.copy_buffers.emplace_back(m_resources.vertex_buffer, *sb, dst_sb->offset);
                             //m_chunks_state.vertex_buffer = *dst_sb;
 
                             if (chunk.buffer[layer].alloc)
-                                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_vertex_buffer), chunk.buffer[layer]));
+                                m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.vertex_buffer), chunk.buffer[layer]));
                             chunk.buffer[layer] = *dst_sb;
                         }
                         // defer suballocation deletion
-                        m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                        m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
                     }
                 }
                 if (m_frustum.is_box_visible(chunk_aabb))
@@ -620,10 +492,10 @@ public:
         clear_chunks_state(frame.timeline_value);
         for (const auto& [layer, batch] : batches)
         {
-            if (const auto sb = m_staging_buffer.suballoc(batch.ubo.size() *
+            if (const auto sb = m_resources.staging_buffer.suballoc(batch.ubo.size() *
                 sizeof(shaders::SolidFlatShader::PerObjectBuffer), 64))
             {
-                if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
+                if (const auto dst_sb = m_resources.object_buffer.suballoc(sb->size, 64))
                 {
                     auto ubo_copy = batch.ubo;
                     if (layer == BlockLayer::Transparent)
@@ -632,23 +504,23 @@ public:
                             ubo.y_offset = -0.1f;
                     }
                     std::ranges::copy(ubo_copy, static_cast<shaders::SolidFlatShader::PerObjectBuffer*>(sb->ptr));
-                    m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
+                    m_resources.copy_buffers.emplace_back(m_resources.object_buffer, *sb, dst_sb->offset);
                     m_chunks_state[layer].uniform_buffer = *dst_sb;
                 }
                 // defer suballocation deletion
-                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
             }
 
-            if (const auto sb = m_staging_buffer.suballoc(batch.draw_args.size() * sizeof(VkDrawIndirectCommand), 64))
+            if (const auto sb = m_resources.staging_buffer.suballoc(batch.draw_args.size() * sizeof(VkDrawIndirectCommand), 64))
             {
-                if (const auto dst_sb = m_args_buffer.suballoc(sb->size, 64))
+                if (const auto dst_sb = m_resources.args_buffer.suballoc(sb->size, 64))
                 {
                     std::ranges::copy(batch.draw_args, static_cast<VkDrawIndirectCommand*>(sb->ptr));
-                    m_copy_buffers.emplace_back(m_args_buffer, *sb, dst_sb->offset);
+                    m_resources.copy_buffers.emplace_back(m_resources.args_buffer, *sb, dst_sb->offset);
                     m_chunks_state[layer].args_buffer = *dst_sb;
                 }
                 // defer suballocation deletion
-                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+                m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
             }
             m_chunks_state[layer].draw_count = batch.draw_count;
         }
@@ -663,15 +535,15 @@ public:
 
         update_chunks(frame);
 
-        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidFlatShader::PerFrameConstants), 64))
+        if (const auto sb = m_resources.staging_buffer.suballoc(sizeof(shaders::SolidFlatShader::PerFrameConstants), 64))
         {
-            const auto dst_sb = m_frame_buffer.suballoc(sb->size, 64);
+            const auto dst_sb = m_resources.frame_buffer.suballoc(sb->size, 64);
 
             auto tint = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
             auto fogColor = glm::vec4(.27f, .37f, .5f, 1.f);
             auto fogStart = 20.f;
             auto fogEnd = 50.f;
-            const glm::ivec3 cell = glm::floor(m_player.cam_pos / BlockSize);
+            const glm::ivec3 cell = glm::floor(m_camera.cam_pos / BlockSize);
             if (generator.peek(cell) == BlockType::Water)
             {
                 tint = glm::vec4(.1f, .1f, .2f, 1.0f);
@@ -690,23 +562,23 @@ public:
                 .fogEnd = fogEnd,
             };
             // defer copy
-            m_copy_buffers.emplace_back(m_frame_buffer, *sb, dst_sb->offset);
+            m_resources.copy_buffers.emplace_back(m_resources.frame_buffer, *sb, dst_sb->offset);
             shader_flat_frame = *dst_sb;
             // defer suballocation deletion
-            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
-            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_frame_buffer), *dst_sb));
+            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
+            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.frame_buffer), *dst_sb));
             if (const auto set = shader_opaque->alloc_descriptor(frame.present_index, 0))
             {
                 shader_flat_frame_set = *set;
-                shader_opaque->write_buffer(*set, 0, m_frame_buffer.buffer(),
+                shader_opaque->write_buffer(*set, 0, m_resources.frame_buffer.buffer(),
                     dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-                shader_opaque->write_texture(*set, 1, m_texture.image_view, m_sampler);
+                shader_opaque->write_texture(*set, 1, m_resources.texture.image_view, m_resources.sampler);
             }
         }
 
-        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerFrameConstants), 64))
+        if (const auto sb = m_resources.staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerFrameConstants), 64))
         {
-            const auto dst_sb = m_frame_buffer.suballoc(sb->size, 64);
+            const auto dst_sb = m_resources.frame_buffer.suballoc(sb->size, 64);
             *static_cast<shaders::SolidColorShader::PerFrameConstants*>(sb->ptr) = {
                 .ViewProjection = {
                     glm::transpose(frame.projection[0] * frame.view[0]),
@@ -714,15 +586,15 @@ public:
                 }
             };
             // defer copy
-            m_copy_buffers.emplace_back(m_frame_buffer, *sb, dst_sb->offset);
+            m_resources.copy_buffers.emplace_back(m_resources.frame_buffer, *sb, dst_sb->offset);
             shader_color_frame = *dst_sb;
             // defer suballocation deletion
-            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
-            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_frame_buffer), *dst_sb));
+            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
+            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.frame_buffer), *dst_sb));
             if (const auto set = shader_color->alloc_descriptor(frame.present_index, 0))
             {
                 shader_color_frame_set = *set;
-                shader_color->write_buffer(*set, 0, m_frame_buffer.buffer(),
+                shader_color->write_buffer(*set, 0, m_resources.frame_buffer.buffer(),
                     dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
             }
         }
@@ -733,18 +605,18 @@ public:
             if (const auto set = shader->alloc_descriptor(frame.present_index, 1))
             {
                 state.object_descriptor_set = *set;
-                shader->write_buffer(*set, 0, m_object_buffer.buffer(),
+                shader->write_buffer(*set, 0, m_resources.object_buffer.buffer(),
                     state.uniform_buffer.offset, state.uniform_buffer.size,
                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
             }
         }
 
-        if (const auto sb = m_staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+        if (const auto sb = m_resources.staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
         {
-            if (const auto dst_sb = m_object_buffer.suballoc(sb->size, 64))
+            if (const auto dst_sb = m_resources.object_buffer.suballoc(sb->size, 64))
             {
                 const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-                if (auto hit = build_block_cell(m_player.cam_pos, forward))
+                if (auto hit = build_block_cell(m_camera.cam_pos, forward))
                 {
                     *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
                         .ObjectTransform = glm::transpose(
@@ -760,17 +632,17 @@ public:
                         .Color = {0, 0, 0, 1}
                     };
                 }
-                m_copy_buffers.emplace_back(m_object_buffer, *sb, dst_sb->offset);
+                m_resources.copy_buffers.emplace_back(m_resources.object_buffer, *sb, dst_sb->offset);
                 m_cube.uniform_buffer = *dst_sb;
-                m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_object_buffer), *dst_sb));
+                m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.object_buffer), *dst_sb));
             }
             // defer suballocation deletion
-            m_delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_staging_buffer), *sb));
+            m_resources.delete_buffers.emplace(frame.timeline_value, std::pair(std::ref(m_resources.staging_buffer), *sb));
         }
         if (const auto set = shader_color->alloc_descriptor(frame.present_index, 1))
         {
             m_cube.object_descriptor_set = *set;
-            shader_color->write_buffer(*set, 0, m_object_buffer.buffer(),
+            shader_color->write_buffer(*set, 0, m_resources.object_buffer.buffer(),
                 m_cube.uniform_buffer.offset, m_cube.uniform_buffer.size,
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         }
@@ -784,11 +656,7 @@ public:
         ZoneScoped;
         {
             TracyVkZone(m_vk->tracy(), cmd, "Copy Buffers");
-            for (auto& [buffer, sb, dst_offset] : m_copy_buffers)
-            {
-                buffer.copy_from(frame.cmd, m_staging_buffer.buffer(), sb, dst_offset);
-            }
-            m_copy_buffers.clear();
+            m_resources.exec_copy_buffers(cmd);
         }
 
         {
@@ -803,7 +671,7 @@ public:
                     .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
                     .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                     .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .buffer = m_args_buffer.buffer(),
+                    .buffer = m_resources.args_buffer.buffer(),
                     .offset = state.args_buffer.offset,
                     .size = state.args_buffer.size,
                 });
@@ -898,7 +766,7 @@ public:
             {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader->pipeline());
 
-                const std::array vertex_buffers{m_vertex_buffer.buffer()};
+                const std::array vertex_buffers{m_resources.vertex_buffer.buffer()};
                 const std::array vertex_buffers_offset{VkDeviceSize{0ull}};
                 vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                     vertex_buffers.data(), vertex_buffers_offset.data());
@@ -907,7 +775,7 @@ public:
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     shader->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
-                vkCmdDrawIndirect(cmd, m_args_buffer.buffer(),
+                vkCmdDrawIndirect(cmd, m_resources.args_buffer.buffer(),
                     state.args_buffer.offset, state.draw_count, sizeof(VkDrawIndirectCommand));
             }
         }
@@ -918,7 +786,7 @@ public:
             vkCmdSetLineWidth(cmd, 2.f);
             //vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_LINE);
 
-            const std::array vertex_buffers{m_vertex_buffer.buffer()};
+            const std::array vertex_buffers{m_resources.vertex_buffer.buffer()};
             const std::array vertex_buffers_offset{m_cube.vertex_buffer.offset};
             vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                 vertex_buffers.data(), vertex_buffers_offset.data());
@@ -982,11 +850,11 @@ public:
         const glm::vec2 abs_rthumb = glm::abs(rthumb);
         if (abs_rthumb.x > dead_zone)
         {
-            m_player.cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
+            m_camera.cam_angles.x += glm::radians(rthumb.x * dt * steering_speed);
         }
         if (abs_rthumb.y > dead_zone)
         {
-            m_player.cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
+            m_camera.cam_angles.y += glm::radians(-rthumb.y * dt * steering_speed);
         }
 
 //        const glm::vec2 touch_abs_rthumb = glm::abs(touch.thumbstick_right);
@@ -998,7 +866,7 @@ public:
 //        {
 //            m_player.cam_angles.y -= glm::radians(-touch.thumbstick_right.y * dt * steering_speed);
 //        }
-        return glm::gtx::eulerAngleYX(-m_player.cam_angles.x, -m_player.cam_angles.y);
+        return glm::gtx::eulerAngleYX(-m_camera.cam_angles.x, -m_camera.cam_angles.y);
     }
     [[nodiscard]] std::optional<std::tuple<glm::ivec3, BlockType, glm::vec3>> trace(const glm::vec3& origin,
         const glm::vec3& direction, const float dist, const float step, const auto hit_test) const noexcept
@@ -1204,19 +1072,19 @@ public:
         constexpr float dead_zone = 0.05;
 #ifdef _WIN32
         float speed = 2.f;
-        if (m_player.keys[VK_SHIFT])
+        if (keys[VK_SHIFT])
             speed = speed * 0.25f;
-        if (m_player.keys[VK_CONTROL])
+        if (keys[VK_CONTROL])
             speed = speed * 2.f;
-        const bool action_build_new = m_player.keys[VK_SPACE] ||
+        const bool action_build_new = keys[VK_SPACE] ||
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderLeft)];
-        const bool action_break_new = m_player.keys['B'] ||
+        const bool action_break_new = keys['B'] ||
             gamepad.buttons[std::to_underlying(GamepadButton::ShoulderRight)];
-        const bool action_respawn_new = m_player.keys['F'] ||
+        const bool action_respawn_new = keys['F'] ||
             gamepad.buttons[std::to_underlying(GamepadButton::Menu)];
-        const bool action_frustum_new = m_player.keys['C'];
-        const bool action_physics_record_new = m_player.keys['R'];
-        speed = speed + 10.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
+        const bool action_frustum_new = keys['C'];
+        const bool action_physics_record_new = keys['R'];
+        speed = speed + 3.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
 #else
         const float speed = 3.f;
         const bool action_build_new = touch.trigger_right > 0.5f;
@@ -1261,7 +1129,7 @@ public:
             if (action_build)
             {
                 const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-                build_block(m_player.cam_pos, forward);
+                build_block(m_camera.cam_pos, forward);
             }
         }
         static bool action_break = false;
@@ -1271,15 +1139,15 @@ public:
             if (action_break)
             {
                 const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-                break_block(m_player.cam_pos, forward);
+                break_block(m_camera.cam_pos, forward);
             }
         }
 #ifdef _WIN32
         const float fx = (fabs(gamepad.thumbstick_left[0]) > dead_zone ? gamepad.thumbstick_left[0] : 0.f) +
-            (m_player.keys['D'] ? 1.f : 0.f) + (m_player.keys['A'] ? -1.f : 0.f);
+            (keys['D'] ? 1.f : 0.f) + (keys['A'] ? -1.f : 0.f);
         const float fz = (fabs(gamepad.thumbstick_left[1]) > dead_zone ? gamepad.thumbstick_left[1] : 0.f) +
-            (m_player.keys['W'] ? 1.f : 0.f) + (m_player.keys['S'] ? -1.f : 0.f);
-        const bool action_jump_new = m_player.keys['E'] ||
+            (keys['W'] ? 1.f : 0.f) + (keys['S'] ? -1.f : 0.f);
+        const bool action_jump_new = keys['E'] ||
             gamepad.buttons[std::to_underlying(xr::TouchControllerButton::A)];
 #else
         const float fx = fabs(touch.thumbstick_left[0]) > dead_zone ? touch.thumbstick_left[0] : 0.f;
@@ -1306,7 +1174,7 @@ public:
         else
         {
             const auto current_velocity = glm::gtc::make_vec3(m_player.character->GetLinearVelocity().mF32);
-            const auto v = glm::gtc::lerp(current_velocity, glm::vec3(0, current_velocity.y, 0), dt * 3.f);
+            const auto v = glm::gtc::lerp(current_velocity, glm::vec3(0, current_velocity.y, 0), dt * 10.f);
             m_player.character->SetLinearVelocity(JPH::Vec3(v.x, v.y, v.z));
         }
     }
@@ -1327,11 +1195,11 @@ public:
             {
                 frame_fixed = frame;
                 update_flying_camera_angles(dt, gamepad, m_xr->touch_controllers());
-                const auto cam_rot = glm::gtx::eulerAngleX(m_player.cam_angles.y) * glm::gtx::eulerAngleY(m_player.cam_angles.x);
+                const auto cam_rot = glm::gtx::eulerAngleX(m_camera.cam_angles.y) * glm::gtx::eulerAngleY(m_camera.cam_angles.x);
                 const glm::mat4 head_rot = glm::inverse(glm::gtc::mat4_cast(frame.view_quat[0]));
                 update_flying_camera_pos(dt, gamepad, m_xr->touch_controllers(), head_rot * cam_rot);
                 for (uint32_t i = 0; i < 2; i++)
-                    frame_fixed.view[i] = frame.view[i] * glm::inverse(cam_rot * glm::gtx::translate(m_player.cam_pos));
+                    frame_fixed.view[i] = frame.view[i] * glm::inverse(cam_rot * glm::gtx::translate(m_camera.cam_pos));
                 update(frame_fixed, head_rot * cam_rot);
             },
             [this, dt, &frame_fixed](const vk::utils::FrameContext& frame){
@@ -1357,9 +1225,9 @@ public:
             const auto cam_rot = update_flying_camera_angles(dt, gamepad, {});
             update_flying_camera_pos(dt, gamepad, {}, frame.view[0] * glm::inverse(cam_rot));
             const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
-            frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(glm::radians(m_player.cam_fov), aspect, 0.01f, 100.f);
+            frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(glm::radians(m_camera.cam_fov), aspect, 0.01f, 100.f);
             frame_fixed.projection[0][1][1] *= -1.0f; // flip Y for Vulkan
-            frame_fixed.view[0] = glm::inverse(glm::gtx::translate(m_player.cam_pos) * cam_rot);
+            frame_fixed.view[0] = glm::inverse(glm::gtx::translate(m_camera.cam_pos) * cam_rot);
 
             update(frame_fixed, frame.view[0] * glm::inverse(cam_rot));
         },
@@ -1393,7 +1261,7 @@ public:
         }
         m_physics_system.tick(dt);
         m_player.character->PostSimulation(0.1);
-        m_player.cam_pos = glm::gtc::make_vec3(m_player.character->GetPosition().mF32);
+        m_camera.cam_pos = glm::gtc::make_vec3(m_player.character->GetPosition().mF32);
         const bool new_on_ground = m_player.character->GetGroundState() == JPH::Character::EGroundState::OnGround;
         if (m_player.on_ground != new_on_ground)
         {
@@ -1424,45 +1292,15 @@ public:
         if (xrmode)
         {
             m_timeline_value = m_xr->timeline_value().value_or(0);
-            garbage_collect(false);
+            m_resources.garbage_collect(m_timeline_value);
             tick_xrmode(dt, gamepad);
         }
         else
         {
             m_timeline_value = m_vk->timeline_value().value_or(0);
-            garbage_collect(false);
+            m_resources.garbage_collect(m_timeline_value);
             tick_windowed(dt, gamepad);
         }
-    }
-    void flush_staging_buffer_copies(VkCommandBuffer cmd) noexcept
-    {
-        TracyVkZone(m_vk->tracy(), cmd, "Flush Copy Buffers");
-        for (auto& [buffer, sb, dst_offset] : m_copy_buffers)
-        {
-            buffer.copy_from(cmd, m_staging_buffer.buffer(), sb, dst_offset);
-        }
-        m_copy_buffers.clear();
-    }
-    void garbage_collect(const bool force) noexcept
-    {
-        ZoneScoped;
-        std::multimap<uint64_t, std::pair<vk::Buffer&, const vk::BufferSuballocation>> not_deleted;
-        uint32_t removed_count = 0;
-        for (auto& [timeline, buffer_pair] : m_delete_buffers)
-        {
-            if (m_timeline_value >= timeline || force)
-            {
-                auto& [buffer, sb] = buffer_pair;
-                buffer.subfree(sb);
-                removed_count++;
-            }
-            else
-            {
-                not_deleted.emplace(timeline, buffer_pair);
-            }
-        }
-        // LOGE("\rGC: removed %d / %llu", removed_count, m_delete_buffers.size());
-        m_delete_buffers = std::move(not_deleted);
     }
     void on_resize(const uint32_t width, const uint32_t height) noexcept
     {
@@ -1472,30 +1310,30 @@ public:
     void on_mouse_wheel(const int32_t x, const int32_t y, const float delta) noexcept
     {
         LOGI("mouse wheel %d %d %f", x, y, delta);
-        m_player.cam_fov += delta * 10;
+        m_camera.cam_fov += delta * 10;
     }
     void on_mouse_move(const int32_t x, const int32_t y) noexcept
     {
         // LOGI("mouse moved %d %d", x, y);
-        if (m_player.dragging)
+        if (m_camera.dragging)
         {
             const glm::ivec2 pos{x, y};
-            const glm::ivec2 delta = pos - m_player.drag_start;
+            const glm::ivec2 delta = pos - m_camera.drag_start;
             constexpr float multiplier = .25f;
-            m_player.cam_angles = m_player.cam_start + glm::radians(glm::vec2(delta) * multiplier);
+            m_camera.cam_angles = m_camera.cam_start + glm::radians(glm::vec2(delta) * multiplier);
         }
     }
     void on_mouse_left_down(const int32_t x, const int32_t y) noexcept
     {
         // LOGI("mouse left down %d %d", x, y);
-        m_player.dragging = true;
-        m_player.drag_start = {x, y};
-        m_player.cam_start = m_player.cam_angles;
+        m_camera.dragging = true;
+        m_camera.drag_start = {x, y};
+        m_camera.cam_start = m_camera.cam_angles;
     }
     void on_mouse_left_up(const int32_t x, const int32_t y) noexcept
     {
         // LOGI("mouse left up %d %d", x, y);
-        m_player.dragging = false;
+        m_camera.dragging = false;
     }
     void on_mouse_right_down(const int32_t x, const int32_t y) noexcept
     {
@@ -1512,14 +1350,14 @@ public:
         if (keycode == VK_ESCAPE)
         {
             // Please don't kill me like that :(
-            exit(0);
+            //exit(0);
         }
 #endif
-        m_player.keys[keycode] = true;
+        keys[keycode] = true;
     }
     void on_key_up(const uint64_t keycode) noexcept
     {
-        m_player.keys[keycode] = false;
+        keys[keycode] = false;
     }
 };
 }

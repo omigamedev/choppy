@@ -9,8 +9,7 @@ import :physics;
 
 export namespace ce::app::player
 {
-
-struct PlayerState
+struct PlayerCamera
 {
     bool dragging = false;
     glm::ivec2 drag_start = { 0, 0 };
@@ -19,10 +18,11 @@ struct PlayerState
     glm::vec2 cam_angles = { 0, 0 };
     glm::vec3 cam_pos = { 0, 100, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
-    std::array<bool, 256> keys{false};
+};
+struct PlayerState
+{
     JPH::Ref<JPH::Character> character;
     glm::vec3 walk_start{};
     bool on_ground = false;
 };
-
 }

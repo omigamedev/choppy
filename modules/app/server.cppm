@@ -15,6 +15,7 @@ module;
 
 export module ce.app:server;
 import :utils;
+import :player;
 
 export namespace ce::app::server
 {
@@ -22,6 +23,7 @@ class ServerSystem : utils::NoCopy
 {
     static constexpr uint32_t MaxClients = 32;
     ENetHost* server = nullptr;
+    std::unordered_map<ENetPeer*, player::PlayerState> clients;
     std::string address2str(const ENetAddress& address) const noexcept
     {
         char ipStr[INET6_ADDRSTRLEN] = {0};
@@ -59,8 +61,9 @@ public:
             {
             case ENET_EVENT_TYPE_CONNECT:
                 LOGI("A new client connected from %s.", address2str(event.peer->address).c_str());
-                /* Store any relevant client information here. */
-                event.peer->data = const_cast<char*>("Client information");
+                // Store any relevant client information here.
+                // event.peer->data = new player::PlayerState;
+                clients.emplace(std::pair(event.peer, player::PlayerState{}));
                 break;
             case ENET_EVENT_TYPE_RECEIVE:
                 LOGI("A packet of length %llu containing %s was received from %s on channel %u.",
@@ -68,17 +71,17 @@ public:
                     reinterpret_cast<const char*>(event.packet->data),
                     static_cast<const char*>(event.peer->data),
                     event.channelID);
-                /* Clean up the packet now that we're done using it. */
+                // Clean up the packet now that we're done using it.
                 enet_packet_destroy(event.packet);
                 break;
             case ENET_EVENT_TYPE_DISCONNECT:
                 LOGI("%s disconnected.", static_cast<const char*>(event.peer->data));
-                /* Reset the peer's client information. */
-                event.peer->data = nullptr;
+                // Reset the peer's client information.
+                clients.erase(event.peer);
                 break;
             case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
                 LOGI("%s disconnected due to timeout.", static_cast<const char*>(event.peer->data));
-                /* Reset the peer's client information. */
+                // Reset the peer's client information.
                 event.peer->data = nullptr;
                 break;
             case ENET_EVENT_TYPE_NONE:
