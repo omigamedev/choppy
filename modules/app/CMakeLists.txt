@@ -489,20 +489,23 @@ add_library(app OBJECT stb.cpp)
 target_link_libraries(app PUBLIC platform xr vk glmcppm shaders perlin jolt miniaudio enet_static)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
-    FILE_SET CXX_MODULES
-    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-    FILES
+    FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES
         app.cppm
         utils.cppm
         chunkgen.cppm
         chunkmesh.cppm
+        chunksman.cppm
         frustum.cppm
         player.cppm
-        physics.cppm
         ecs.cppm
         audio.cppm
         server.cppm
         client.cppm
         resources.cppm
         messages.cppm
+        world.cppm
+        systems.cppm
+        physics.cppm
+        globals.cppm
+        shaders.cppm
 )

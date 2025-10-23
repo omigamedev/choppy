@@ -147,4 +147,32 @@ struct Texture
     }
     return std::nullopt;
 }
+[[nodiscard]] std::optional<VkSampler> create_sampler(const std::shared_ptr<vk::Context>& vk) noexcept
+{
+    const VkSamplerCreateInfo sampler_info{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_NEAREST,
+        .minFilter = VK_FILTER_NEAREST,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .mipLodBias = 0.f,
+        .anisotropyEnable = false,
+        .maxAnisotropy = 1.f,
+        .compareEnable = false,
+        .compareOp = VK_COMPARE_OP_ALWAYS,
+        .minLod = 0.f,
+        .maxLod = VK_LOD_CLAMP_NONE,
+        .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+        .unnormalizedCoordinates = false,
+    };
+    VkSampler sampler = VK_NULL_HANDLE;
+    if (const VkResult r = vkCreateSampler(vk->device(), &sampler_info, nullptr, &sampler); r != VK_SUCCESS)
+    {
+        LOGE("Failed to create sampler");
+        return std::nullopt;
+    }
+    return sampler;
+}
 }

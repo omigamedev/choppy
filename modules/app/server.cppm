@@ -21,7 +21,6 @@ import :player;
 import :resources;
 import :physics;
 import :messages;
-import ce.shaders;
 import ce.shaders.solidcolor;
 
 export namespace ce::app::server
@@ -73,6 +72,13 @@ public:
         }
         enet_deinitialize();
     }
+    template<typename T>
+    void send_message(const T& message) const noexcept
+    {
+        const auto buffer = messages::serialize(message);
+        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), 0);
+        // enet_peer_send(server, 0, packet);
+    }
     void add_player(ENetPeer* peer) noexcept
     {
         player::PlayerState player{
@@ -86,16 +92,47 @@ public:
     }
     void parse_message(ENetPeer* peer, const std::span<const uint8_t> message) noexcept
     {
-        const uint16_t type = *reinterpret_cast<const uint16_t*>(message.data());
-        if (type == 0)
+        const messages::MessageType type = *reinterpret_cast<const messages::MessageType*>(message.data());
+        switch (type)
         {
-            if (auto update = messages::deserialize<messages::UpdatePosMessage>(message))
-            {
-                clients[peer].position = update->position;
-                clients[peer].rotation = update->rotation;
-                LOGI("received position: %f %f %f", update->position.x, update->position.y, update->position.z);
+            case messages::MessageType::UpdatePos:
+                if (auto update = messages::deserialize<messages::UpdatePosMessage>(message))
+                {
+                    clients[peer].position = update->position;
+                    clients[peer].rotation = update->rotation;
+                    LOGI("received position: %f %f %f", update->position.x, update->position.y, update->position.z);
 
-            }
+                }
+                break;
+            case messages::MessageType::BlockAction:
+                if (auto action = messages::deserialize<messages::BlockActionMessage>(message))
+                {
+                    if (action->action == messages::BlockActionMessage::ActionType::Build)
+                    {
+                        /*
+                        generator.edit(sector, *cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
+                        std::lock_guard lock(m_chunks_mutex);
+                        if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
+                        {
+                            // auto blocks_data = generator.generate(sector);
+                            // auto chunk_data = mesher.mesh(blocks_data, BlockSize);
+                            // it->mesh = std::move(chunk_data);
+                            // it->data = std::move(blocks_data);
+                            // it->sector = sector;
+                            // it->dirty = true;
+                            // m_physics_system.remove_body(it->body_id);
+                            // if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, it->data, it->sector))
+                            // {
+                            //     std::tie(it->body_id, it->shape) = result.value();
+                            // }
+                            // needs_update = true;
+                            it->regenerate = true;
+                        }
+                        */
+                    }
+                    LOGI("received block action: %d", action->action);
+                }
+                break;
         }
     }
     void tick(const float dt) noexcept

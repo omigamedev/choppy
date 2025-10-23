@@ -12,7 +12,17 @@ namespace ce::app::messages
 enum class MessageType : uint16_t
 {
     UpdatePos,
+    BlockAction,
 };
+const char* to_string(const MessageType t)
+{
+    switch (t)
+    {
+        case MessageType::UpdatePos: return "UpdatePos";
+        case MessageType::BlockAction: return "BlockAction";
+        default: return "Unknown";
+    }
+}
 struct MessageReader
 {
     off_t offset = 0;
@@ -79,4 +89,30 @@ template<>
     };
     return m;
 }
+
+struct BlockActionMessage
+{
+    MessageType type = MessageType::BlockAction;
+    enum class ActionType : uint8_t { Build, Destroy } action;
+    glm::ivec3 world_cell;
+};
+[[nodiscard]] std::vector<uint8_t> serialize(const BlockActionMessage& message) noexcept
+{
+    MessageWriter w;
+    w.write(message.type);
+    w.write(message.action);
+    w.write(message.world_cell);
+    return std::move(w.buffer);
+}
+template<>
+[[nodiscard]] std::optional<BlockActionMessage> deserialize<BlockActionMessage>(const std::span<const uint8_t>& message) noexcept
+{
+    MessageReader r(message);
+    return BlockActionMessage {
+        .type = r.read<MessageType>(),
+        .action = r.read<BlockActionMessage::ActionType>(),
+        .world_cell = r.read<glm::ivec3>()
+    };
+}
+
 }

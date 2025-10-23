@@ -97,4 +97,4 @@ target_link_libraries(shaders PUBLIC glmcppm vk)
 target_sources(shaders PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_LIST_DIR}
-    FILES shaders.cppm ${SHADER_MODULES_LIST})
+    FILES ${SHADER_MODULES_LIST})

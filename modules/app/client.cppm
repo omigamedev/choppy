@@ -26,7 +26,6 @@ class ClientSystem : utils::NoCopy
     static constexpr uint16_t ServerPort = 7777;
     ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
-    player::PlayerState* player = nullptr;
     std::string address2str(const ENetAddress& address) const noexcept
     {
         char ipStr[INET6_ADDRSTRLEN] = {0};
@@ -36,9 +35,10 @@ class ClientSystem : utils::NoCopy
         return std::format("{}:{}", ipStr, address.port);
     }
 public:
-    bool create_system(player::PlayerState& player) noexcept
+    glm::vec3 player_pos = glm::vec3(0, 0, 0);
+    glm::quat player_rot = glm::gtc::identity<glm::quat>();
+    bool create_system() noexcept
     {
-        this->player = &player;
         if (enet_initialize() != 0)
         {
             LOGE("An error occurred while initializing ENet.");
@@ -89,23 +89,30 @@ public:
     void destroy_system() noexcept
     {
     }
+    template<typename T>
+    void send_message(const T& message) const noexcept
+    {
+        const auto buffer = messages::serialize(message);
+        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), 0);
+        enet_peer_send(server, 0, packet);
+        LOGI("sent message of type: %s", messages::to_string(message.type));
+    }
     void tick(const float dt) noexcept
     {
+        if (!server)
+            return;
         static float update_timer = 0.0f;
         update_timer += dt;
         if (server && update_timer > 0.3f)
         {
             update_timer = 0.0f;
-            JPH::Vec3 pos{};
-            JPH::Quat rot{};
-            player->character->GetPositionAndRotation(pos, rot);
             const auto buffer = messages::serialize(messages::UpdatePosMessage{
-                .position = glm::gtc::make_vec3(pos.mF32),
-                .rotation = glm::gtc::make_quat(rot.mValue.mF32)
+                .position = player_pos,
+                .rotation = player_rot,
             });
             ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), 0);
             enet_peer_send(server, 0, packet);
-            LOGI("send position: %f %f %f", pos.GetX(), pos.GetY(), pos.GetZ());
+            LOGI("send position: %f %f %f", player_pos.x, player_pos.y, player_pos.z);
         }
 
         ENetEvent event{};
