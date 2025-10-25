@@ -27,7 +27,7 @@ bool create_systems(const SystemsCreateInfo& info) noexcept
     if (info.server_mode)
     {
         m_server_system = std::make_shared<server::ServerSystem>();
-        m_server_system->create_system(globals::m_resources, m_physics_system);
+        m_server_system->create_system();
     }
     else
     {

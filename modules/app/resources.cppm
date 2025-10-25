@@ -1,4 +1,5 @@
 module;
+#include <ranges>
 #include <vector>
 #include <tuple>
 #include <memory>
@@ -34,7 +35,7 @@ struct Geometry
     vk::BufferSuballocation vertex_buffer{};
     vk::BufferSuballocation uniform_buffer{};
     uint32_t vertex_count = 0;
-    void destroy() noexcept;
+    // void destroy() noexcept;
 };
 struct VulkanResources : utils::NoCopy
 {
@@ -186,6 +187,15 @@ struct VulkanResources : utils::NoCopy
         }
         return cube;
     }
+    void destroy_geometry(Geometry& geo, const uint64_t timeline_value) noexcept
+    {
+        //delete_buffers.emplace(timeline_value,
+        //    std::pair(std::ref(object_buffer), geo.uniform_buffer));
+        delete_buffers.emplace(timeline_value,
+            std::pair(std::ref(vertex_buffer), geo.vertex_buffer));
+        geo.uniform_buffer.alloc = VK_NULL_HANDLE;
+        geo.vertex_buffer.alloc = VK_NULL_HANDLE;
+    }
     void exec_copy_buffers(VkCommandBuffer cmd) noexcept
     {
         ZoneScoped;
@@ -196,17 +206,18 @@ struct VulkanResources : utils::NoCopy
         copy_buffers.clear();
     }
 };
-void Geometry::destroy() noexcept
-{
-    if (vkr && vertex_buffer.alloc)
-    {
-        vkr->vertex_buffer.subfree(vertex_buffer);
-        vertex_buffer.alloc = VK_NULL_HANDLE;
-    }
-    if (vkr && uniform_buffer.alloc)
-    {
-        vkr->object_buffer.subfree(uniform_buffer);
-        uniform_buffer.alloc = VK_NULL_HANDLE;
-    }
-}
+// void Geometry::destroy() noexcept
+// {
+//     if (vkr && vertex_buffer.alloc)
+//     {
+//         vkr->vertex_buffer.subfree(vertex_buffer);
+//
+//         vertex_buffer.alloc = VK_NULL_HANDLE;
+//     }
+//     if (vkr && uniform_buffer.alloc)
+//     {
+//         vkr->object_buffer.subfree(uniform_buffer);
+//         uniform_buffer.alloc = VK_NULL_HANDLE;
+//     }
+// }
 }

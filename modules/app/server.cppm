@@ -22,6 +22,7 @@ import :resources;
 import :physics;
 import :messages;
 import ce.shaders.solidcolor;
+import ce.vk.utils;
 
 export namespace ce::app::server
 {
@@ -29,9 +30,9 @@ class ServerSystem : utils::NoCopy
 {
     static constexpr uint32_t MaxClients = 32;
     ENetHost* server = nullptr;
+    uint32_t client_ids = 1;
     std::unordered_map<ENetPeer*, player::PlayerState> clients;
-    std::shared_ptr<resources::VulkanResources> resources;
-    std::shared_ptr<physics::PhysicsSystem> physics;
+    std::vector<player::PlayerState> removed_players;
     std::string address2str(const ENetAddress& address) const noexcept
     {
         char ipStr[INET6_ADDRSTRLEN] = {0};
@@ -41,11 +42,12 @@ class ServerSystem : utils::NoCopy
         return std::format("{}:{}", ipStr, address.port);
     }
 public:
-    bool create_system(const std::shared_ptr<resources::VulkanResources>& vulkan_resources,
-        const std::shared_ptr<physics::PhysicsSystem>& physics_system) noexcept
+    uint32_t player_id = 1;
+    glm::vec3 player_pos = glm::vec3(0, 0, 0);
+    glm::quat player_rot = glm::gtc::identity<glm::quat>();
+    glm::vec3 player_vel = glm::vec3(0, 0, 0);
+    bool create_system() noexcept
     {
-        resources = vulkan_resources;
-        physics = physics_system;
         if (enet_initialize() != 0)
         {
             LOGE("An error occurred while initializing ENet.");
@@ -65,6 +67,11 @@ public:
     }
     void destroy_system() noexcept
     {
+        for (auto& player : std::views::values(clients))
+        {
+            globals::m_resources->destroy_geometry(player.cube, 0);
+            player.destroy();
+        }
         if (server)
         {
             enet_host_destroy(server);
@@ -73,18 +80,33 @@ public:
         enet_deinitialize();
     }
     template<typename T>
-    void send_message(const T& message) const noexcept
+    void send_message(ENetPeer* peer, const uint32_t enet_flags, const T& message) const noexcept
     {
-        const auto buffer = messages::serialize(message);
-        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), 0);
-        // enet_peer_send(server, 0, packet);
+        const auto buffer = message.serialize();
+        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
+        enet_peer_send(peer, 0, packet);
+        //LOGI("sent message of type: %s", messages::to_string(message.type));
     }
     void add_player(ENetPeer* peer) noexcept
     {
         player::PlayerState player{
-            .cube = resources->create_cube<shaders::SolidColorShader>()
+            .cube = globals::m_resources->create_cube<shaders::SolidColorShader>()
         };
         clients.emplace(std::pair(peer, player));
+    }
+    void remove_player(ENetPeer* peer) noexcept
+    {
+        const uint32_t id = clients[peer].id;
+        removed_players.emplace_back(clients[peer]);
+        clients.erase(peer);
+        for (const auto& [send_peer, player] : clients)
+        {
+            if (peer != send_peer)
+            {
+                send_message(send_peer, ENET_PACKET_FLAG_RELIABLE,
+                    messages::PlayerRemovedMessage{.id = id});
+            }
+        }
     }
     [[nodiscard]] auto get_players() noexcept
     {
@@ -95,48 +117,101 @@ public:
         const messages::MessageType type = *reinterpret_cast<const messages::MessageType*>(message.data());
         switch (type)
         {
-            case messages::MessageType::UpdatePos:
-                if (auto update = messages::deserialize<messages::UpdatePosMessage>(message))
+        case messages::MessageType::JoinRequest:
+            if (const auto request = messages::JoinRequestMessage::deserialize(message))
+            {
+                const uint32_t new_id = ++client_ids;
+                clients[peer].id = new_id;
+                LOGI("Join request from %s accepted with id %d", request->username.c_str(), new_id);
+                send_message(peer, ENET_PACKET_FLAG_RELIABLE, messages::JoinResponseMessage{
+                    .accepted = true,
+                    .new_id = new_id
+                });
+            }
+            break;
+        case messages::MessageType::PlayerState:
+            if (const auto update = messages::PlayerStateMessage::deserialize(message))
+            {
+                clients[peer].position = update->position;
+                clients[peer].rotation = update->rotation;
+                clients[peer].velocity = update->velocity;
+                //LOGI("received position: %f %f %f",
+                //    update->position.x, update->position.y, update->position.z);
+                // send update to all other players
+                for (const auto& [send_peer, player] : clients)
                 {
-                    clients[peer].position = update->position;
-                    clients[peer].rotation = update->rotation;
-                    LOGI("received position: %f %f %f", update->position.x, update->position.y, update->position.z);
-
-                }
-                break;
-            case messages::MessageType::BlockAction:
-                if (auto action = messages::deserialize<messages::BlockActionMessage>(message))
-                {
-                    if (action->action == messages::BlockActionMessage::ActionType::Build)
+                    if (peer != send_peer)
                     {
-                        /*
-                        generator.edit(sector, *cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
-                        std::lock_guard lock(m_chunks_mutex);
-                        if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
-                        {
-                            // auto blocks_data = generator.generate(sector);
-                            // auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                            // it->mesh = std::move(chunk_data);
-                            // it->data = std::move(blocks_data);
-                            // it->sector = sector;
-                            // it->dirty = true;
-                            // m_physics_system.remove_body(it->body_id);
-                            // if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, it->data, it->sector))
-                            // {
-                            //     std::tie(it->body_id, it->shape) = result.value();
-                            // }
-                            // needs_update = true;
-                            it->regenerate = true;
-                        }
-                        */
+                        send_message(send_peer, 0, update.value());
                     }
-                    LOGI("received block action: %d", action->action);
                 }
-                break;
+            }
+            break;
+        case messages::MessageType::BlockAction:
+            if (const auto action = messages::BlockActionMessage::deserialize(message))
+            {
+                if (action->action == messages::BlockActionMessage::ActionType::Build)
+                {
+                    /*
+                    generator.edit(sector, *cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
+                    std::lock_guard lock(m_chunks_mutex);
+                    if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
+                    {
+                        // auto blocks_data = generator.generate(sector);
+                        // auto chunk_data = mesher.mesh(blocks_data, BlockSize);
+                        // it->mesh = std::move(chunk_data);
+                        // it->data = std::move(blocks_data);
+                        // it->sector = sector;
+                        // it->dirty = true;
+                        // m_physics_system.remove_body(it->body_id);
+                        // if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, it->data, it->sector))
+                        // {
+                        //     std::tie(it->body_id, it->shape) = result.value();
+                        // }
+                        // needs_update = true;
+                        it->regenerate = true;
+                    }
+                    */
+                }
+                LOGI("received block action: %d", action->action);
+            }
+            break;
         }
+    }
+    void update(const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
+    {
+        for (auto& player : removed_players)
+        {
+            globals::m_resources->destroy_geometry(player.cube, frame.timeline_value);
+            player.destroy();
+        }
+        removed_players.clear();
     }
     void tick(const float dt) noexcept
     {
+        static float update_timer = 0.0f;
+        update_timer += dt;
+        if (server && update_timer > 0.03f)
+        {
+            update_timer = 0.0f;
+            for (auto& [peer, player] : clients)
+            {
+                send_message(peer, 0, messages::PlayerStateMessage{
+                    .id = player_id,
+                    .position = player_pos,
+                    .rotation = player_rot,
+                    .velocity = player_vel,
+                });
+            }
+            //LOGI("send position: %f %f %f", player_pos.x, player_pos.y, player_pos.z);
+        }
+
+        // basic motion interpolation
+        for (auto& player : std::views::values(clients))
+        {
+            player.position += player.velocity * dt;
+        }
+
         ENetEvent event{};
         if (enet_host_service(server, &event, 0) > 0)
         {
@@ -149,24 +224,21 @@ public:
                 add_player(event.peer);
                 break;
             case ENET_EVENT_TYPE_RECEIVE:
-                LOGI("A packet of length %llu containing %s was received from %s on channel %u.",
-                    event.packet->dataLength,
-                    reinterpret_cast<const char*>(event.packet->data),
-                    static_cast<const char*>(event.peer->data),
-                    event.channelID);
+                //LOGI("A packet of length %llu containing %s was received from %s on channel %u.",
+                //    event.packet->dataLength,
+                //    reinterpret_cast<const char*>(event.packet->data),
+                //    static_cast<const char*>(event.peer->data),
+                //    event.channelID);
                 parse_message(event.peer, {event.packet->data, event.packet->dataLength});
-                // Clean up the packet now that we're done using it.
                 enet_packet_destroy(event.packet);
                 break;
             case ENET_EVENT_TYPE_DISCONNECT:
                 LOGI("%s disconnected.", static_cast<const char*>(event.peer->data));
-                // Reset the peer's client information.
-                clients.erase(event.peer);
+                remove_player(event.peer);
                 break;
             case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
                 LOGI("%s disconnected due to timeout.", static_cast<const char*>(event.peer->data));
-                // Reset the peer's client information.
-                clients.erase(event.peer);
+                remove_player(event.peer);
                 break;
             case ENET_EVENT_TYPE_NONE:
                 break;

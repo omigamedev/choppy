@@ -30,6 +30,12 @@ bool create_shaders(const ShadersCreateInfo& info) noexcept
     shader_color->create(info.renderpass, info.swapchain_count, info.sample_count, 1, 100, true, true, true);
     return true;
 }
+void destroy_shaders() noexcept
+{
+    shader_opaque.reset();
+    shader_transparent.reset();
+    shader_color.reset();
+}
 void reset_descriptors(uint32_t present_index) noexcept
 {
     shader_opaque->reset_descriptors(present_index);

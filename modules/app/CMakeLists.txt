@@ -508,4 +508,5 @@ target_sources(app PUBLIC
         physics.cppm
         globals.cppm
         shaders.cppm
+        serializer.cppm
 )

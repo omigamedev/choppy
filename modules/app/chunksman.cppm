@@ -440,13 +440,13 @@ struct ChunksManager
             const auto [cell, b, p, n] = hit.value();
             const glm::ivec3 sector = glm::floor(glm::vec3(cell) / static_cast<float>(globals::ChunkSize));
             //if (!m_server_mode)
-            {
-                const messages::BlockActionMessage message{
-                    .action = messages::BlockActionMessage::ActionType::Destroy,
-                    .world_cell = cell
-                };
-                systems::m_client_system->send_message(message);
-            }
+            // {
+            //     const messages::BlockActionMessage message{
+            //         .action = messages::BlockActionMessage::ActionType::Destroy,
+            //         .world_cell = cell
+            //     };
+            //     systems::m_client_system->send_message(message);
+            // }
             /*
             generator.remove(sector, cell - sector * static_cast<int32_t>(ChunkSize));
             std::lock_guard lock(m_chunks_mutex);
@@ -475,13 +475,13 @@ struct ChunksManager
         {
             const glm::ivec3 sector = glm::floor(glm::vec3(*cell) / static_cast<float>(globals::ChunkSize));
             //if (!m_server_mode)
-            {
-                const messages::BlockActionMessage message{
-                    .action = messages::BlockActionMessage::ActionType::Build,
-                    .world_cell = cell.value()
-                };
-                systems::m_client_system->send_message(message);
-            }
+            // {
+            //     const messages::BlockActionMessage message{
+            //         .action = messages::BlockActionMessage::ActionType::Build,
+            //         .world_cell = cell.value()
+            //     };
+            //     systems::m_client_system->send_message(message);
+            // }
             /*
             generator.edit(sector, *cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
             std::lock_guard lock(m_chunks_mutex);

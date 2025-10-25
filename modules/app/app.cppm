@@ -89,7 +89,6 @@ class AppBase final
     VkSampleCountFlagBits m_sample_count = VK_SAMPLE_COUNT_1_BIT;
     glm::ivec2 m_size{0, 0};
 
-    bool m_server_mode = false;
     world::World m_world;
 
     bool xrmode = false;
@@ -104,8 +103,11 @@ public:
         {
             vkDeviceWaitIdle(m_vk->device());
         }
-        systems::destroy_systems();
         m_world.destroy();
+        systems::destroy_systems();
+        shaders::destroy_shaders();
+        globals::m_resources->garbage_collect(~1ull);
+        globals::m_resources->destroy_buffers();
     };
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
@@ -127,18 +129,24 @@ public:
             m_swapchain_count = m_vk->swapchain_count();
         }
 
-        systems::create_systems({
-            .xr_mode = xr_mode,
-            .server_mode = server_mode,
-        });
-        m_world.create(m_vk);
-
         shaders::create_shaders({
             .vk = m_vk,
             .renderpass = m_renderpass,
             .swapchain_count = m_swapchain_count,
             .sample_count = m_sample_count
         });
+
+        globals::m_resources = std::make_shared<resources::VulkanResources>();
+        globals::m_resources->create_buffers(m_vk);
+        globals::m_resources->texture = vk::texture::load_texture(m_vk,
+            "assets/grass.png", globals::m_resources->staging_buffer).value();
+        globals::m_resources->sampler = vk::texture::create_sampler(m_vk).value();
+
+        systems::create_systems({
+            .xr_mode = xr_mode,
+            .server_mode = server_mode,
+        });
+        m_world.create(m_vk, server_mode);
 
         // Create the grid object
         //m_grid = std::make_shared<Grid>();
@@ -156,13 +164,27 @@ public:
             }
         });
     }
-    void update(const vk::utils::FrameContext& frame, glm::mat4 view) noexcept
+    void update(const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
     {
         ZoneScoped;
         shaders::reset_descriptors(frame.present_index);
-
+        if (m_world.m_server_mode)
+        {
+            systems::m_server_system->player_pos = m_world.m_camera.cam_pos;
+            systems::m_server_system->player_rot = glm::gtc::quat_cast(view);
+            systems::m_server_system->player_vel = glm::gtc::make_vec3(
+                m_world.m_player.character->GetLinearVelocity().mF32);
+            systems::m_server_system->update(frame, view);
+        }
+        else
+        {
+            systems::m_client_system->player_pos = m_world.m_camera.cam_pos;
+            systems::m_client_system->player_rot = glm::gtc::quat_cast(view);
+            systems::m_client_system->player_vel = glm::gtc::make_vec3(
+                m_world.m_player.character->GetLinearVelocity().mF32);
+            systems::m_client_system->update(frame, view);
+        }
         m_world.update(frame, view);
-
         shaders::update_descriptors();
     }
     void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) noexcept
@@ -466,15 +488,16 @@ public:
     void tick(const float dt, const GamepadState& gamepad) noexcept
     {
         ZoneScoped;
-        if (m_server_mode)
+        if (m_world.m_server_mode)
         {
+            systems::m_physics_system->tick(dt);
             systems::m_server_system->tick(dt);
         }
         else
         {
             systems::m_client_system->tick(dt);
+            systems::m_physics_system->tick(dt);
         }
-        systems::m_physics_system->tick(dt);
         m_world.tick(dt);
 
         if (xrmode)

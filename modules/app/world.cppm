@@ -72,12 +72,12 @@ struct World
     chunksman::ChunksManager chunks_manager;
 
     bool update_frustum = true;
+    bool m_server_mode = false;
 
-    bool create(const std::shared_ptr<vk::Context>& vulkan_context) noexcept
+    bool create(const std::shared_ptr<vk::Context>& vulkan_context, const bool server_mode) noexcept
     {
         m_vk = vulkan_context;
-        globals::m_resources = std::make_shared<resources::VulkanResources>();
-        globals::m_resources->create_buffers(m_vk);
+        m_server_mode = server_mode;
         m_player.character = systems::m_physics_system->create_character();
         m_cube = globals::m_resources->create_cube<shaders::SolidColorShader>();
 
@@ -85,25 +85,19 @@ struct World
             globals::m_resources->exec_copy_buffers(cmd);
         });
 
-        globals::m_resources->texture = vk::texture::load_texture(m_vk,
-            "assets/grass.png", globals::m_resources->staging_buffer).value();
-        globals::m_resources->sampler = vk::texture::create_sampler(m_vk).value();
         chunks_manager.create();
         return true;
     }
     void destroy() noexcept
     {
-        m_cube = {};
-        m_player.character->RemoveFromPhysicsSystem();
-        m_player = {};
+        globals::m_resources->destroy_geometry(m_cube, 0);
+        m_player.destroy();;
         chunks_manager.destroy();
-        globals::m_resources->garbage_collect(~1ull);
-        globals::m_resources->destroy_buffers();
     }
     void update(const vk::utils::FrameContext& frame, glm::mat4 view) noexcept
     {
         chunks_manager.cam_pos = m_camera.cam_pos;
-        chunks_manager.cam_sector = m_camera.cam_sector;
+        //chunks_manager.cam_sector = m_camera.cam_sector;
         chunks_manager.update_chunks(frame);
 
         if (const auto sb = globals::m_resources->staging_buffer.suballoc(
@@ -232,8 +226,7 @@ struct World
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         }
 
-        /*
-        if (m_server_mode)
+        if (systems::m_server_system)
         {
             for (auto& player : systems::m_server_system->get_players())
             {
@@ -265,7 +258,38 @@ struct World
                 }
             }
         }
-        */
+        if (systems::m_client_system)
+        {
+            for (auto& player : systems::m_client_system->get_players())
+            {
+                if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+                {
+                    if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
+                    {
+                        glm::mat4 transform = glm::gtc::translate(player.position) *
+                            glm::gtc::mat4_cast(player.rotation);
+                        *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                            .ObjectTransform = glm::transpose(transform),
+                            .Color = {1, 0, 0, 1}
+                        };
+                        globals::m_resources->copy_buffers.emplace_back(globals::m_resources->object_buffer, *sb, dst_sb->offset);
+                        player.cube.uniform_buffer = *dst_sb;
+                        globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                            std::pair(std::ref(globals::m_resources->object_buffer), *dst_sb));
+                    }
+                    // defer suballocation deletion
+                    globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                        std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
+                }
+                if (const auto set = shaders::shader_color->alloc_descriptor(frame.present_index, 1))
+                {
+                    player.cube.object_descriptor_set = *set;
+                    shaders::shader_color->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
+                        player.cube.uniform_buffer.offset, player.cube.uniform_buffer.size,
+                        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                }
+            }
+        }
     }
     void tick(const float dt) noexcept
     {
@@ -341,29 +365,30 @@ struct World
                 shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
             vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
-        }
 
-        /*
-        if (m_server_mode)
-        {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shaders::shader_color->pipeline());
-            vkCmdSetLineWidth(cmd, 2.f);
-            //vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_LINE);
-            const std::array vertex_buffers{globals::m_resources->vertex_buffer.buffer()};
-            for (auto& player : systems::m_server_system->get_players())
+            if (systems::m_server_system)
             {
-                const std::array vertex_buffers_offset{m_cube.vertex_buffer.offset};
-                vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
-                    vertex_buffers.data(), vertex_buffers_offset.data());
+                for (auto& player : systems::m_server_system->get_players())
+                {
+                    const std::array sets{shader_color_frame_set, player.cube.object_descriptor_set};
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
-                const std::array sets{shader_color_frame_set, player.cube.object_descriptor_set};
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+                    vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+                }
+            }
+            if (systems::m_client_system)
+            {
+                for (auto& player : systems::m_client_system->get_players())
+                {
+                    const std::array sets{shader_color_frame_set, player.cube.object_descriptor_set};
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
-                vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+                    vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+                }
             }
         }
-        */
     }
 };
 

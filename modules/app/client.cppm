@@ -1,8 +1,11 @@
 module;
+#include <future>
+#include <ranges>
 #include <string>
 #include <cstdio>
 #include <enet.h>
 #include <format>
+#include <tracy/Tracy.hpp>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -17,6 +20,8 @@ export module ce.app:client;
 import :utils;
 import :player;
 import :messages;
+import ce.shaders.solidcolor;
+import ce.vk.utils;
 
 export namespace ce::app::client
 {
@@ -26,6 +31,10 @@ class ClientSystem : utils::NoCopy
     static constexpr uint16_t ServerPort = 7777;
     ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
+    std::unordered_map<uint32_t, player::PlayerState> players;
+    std::vector<player::PlayerState> removed_players;
+    std::future<bool> connect_result;
+    bool try_connecting = false;
     std::string address2str(const ENetAddress& address) const noexcept
     {
         char ipStr[INET6_ADDRSTRLEN] = {0};
@@ -35,8 +44,10 @@ class ClientSystem : utils::NoCopy
         return std::format("{}:{}", ipStr, address.port);
     }
 public:
+    uint32_t player_id = 0;
     glm::vec3 player_pos = glm::vec3(0, 0, 0);
     glm::quat player_rot = glm::gtc::identity<glm::quat>();
+    glm::vec3 player_vel = glm::vec3(0, 0, 0);
     bool create_system() noexcept
     {
         if (enet_initialize() != 0)
@@ -56,7 +67,27 @@ public:
             LOGE("An error occurred while trying to create an ENet client host.");
             return false;
         }
-
+        connect_async();
+        return true;
+    }
+    void connect_async() noexcept
+    {
+        LOGI("Connecting to server...");
+        try_connecting = true;
+        connect_result = std::async(std::launch::async, [this]
+        {
+            while (try_connecting)
+            {
+                if (connect())
+                {
+                    return true;
+                }
+            }
+            return false;
+        });
+    }
+    bool connect() noexcept
+    {
         ENetAddress address{};
         ENetPeer* peer = nullptr;
         // Connect
@@ -69,50 +100,127 @@ public:
             LOGE("No available peers for initiating an ENet connection.");
             return false;
         }
-        // Wait up to 5 seconds for the connection attempt to succeed.
         ENetEvent event{};
-        if (enet_host_service(client, &event, 1000) > 0 && event.type == ENET_EVENT_TYPE_CONNECT)
+        if (enet_host_service(client, &event, 1000) > 0 &&
+            event.type == ENET_EVENT_TYPE_CONNECT)
         {
-            server = event.peer;
             LOGI("Connection to %s succeeded.", address2str(address).c_str());
+            server = event.peer;
+            send_message(server, ENET_PACKET_FLAG_RELIABLE, messages::JoinRequestMessage{
+                .username = std::format("random_user_{}", rand())
+            });
         }
         else
         {
-              // Either the 5 seconds are up or a disconnect event was
-              // received. Reset the peer in the event the 5 seconds
-              // had run out without any significant event.
-              enet_peer_reset(peer);
-              LOGE("Connection to %s failed.", address2str(address).c_str());
+            // Either the 5 seconds are up or a disconnect event was
+            // received. Reset the peer in the event the 5 seconds
+            // had run out without any significant event.
+            enet_peer_reset(peer);
+            LOGE("Connection to %s failed.", address2str(address).c_str());
+            return false;
         }
         return true;
     }
     void destroy_system() noexcept
     {
+        for (auto& player : std::views::values(players))
+        {
+            globals::m_resources->destroy_geometry(player.cube, 0);
+            player.destroy();
+        }
+        try_connecting = false;
+        if (connect_result.valid())
+            connect_result.get();
+        if (server)
+            enet_peer_reset(server);
+        enet_host_destroy(client);
     }
     template<typename T>
-    void send_message(const T& message) const noexcept
+    void send_message(ENetPeer* peer, const uint32_t enet_flags, const T& message) const noexcept
     {
-        const auto buffer = messages::serialize(message);
-        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), 0);
-        enet_peer_send(server, 0, packet);
-        LOGI("sent message of type: %s", messages::to_string(message.type));
+        const auto buffer = message.serialize();
+        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
+        enet_peer_send(peer, 0, packet);
+        //LOGI("sent message of type: %s", messages::to_string(message.type));
+    }
+    [[nodiscard]] auto get_players() noexcept
+    {
+        return std::views::values(players);
+    }
+    void parse_message(ENetPeer* peer, const std::span<const uint8_t> message) noexcept
+    {
+        const messages::MessageType type = *reinterpret_cast<const messages::MessageType*>(message.data());
+        switch (type)
+        {
+        case messages::MessageType::JoinResponse:
+            if (const auto response = messages::JoinResponseMessage::deserialize(message))
+            {
+                if (response->accepted)
+                {
+                    player_id = response->new_id;
+                    LOGI("join accepted with id: %d", player_id);
+                }
+                else
+                {
+                    LOGE("join NOT accepted, sad");
+                }
+            }
+            break;
+        case messages::MessageType::PlayerRemoved:
+            if (const auto removed = messages::PlayerRemovedMessage::deserialize(message))
+            {
+                removed_players.emplace_back(players[removed->id]);
+                players.erase(removed->id);
+            }
+            break;
+        case messages::MessageType::PlayerState:
+            if (const auto update = messages::PlayerStateMessage::deserialize(message))
+            {
+                if (players.contains(update->id))
+                {
+                    auto& player = players[update->id];
+                    player.position = update->position;
+                    player.rotation = update->rotation;
+                    player.velocity = update->velocity;
+                }
+                else
+                {
+                    player::PlayerState player{
+                        .id = update->id,
+                        .cube = globals::m_resources->create_cube<shaders::SolidColorShader>(),
+                        .position = update->position,
+                        .rotation = update->rotation,
+                        .velocity = update->velocity,
+                    };
+                    players.emplace(std::pair(update->id, player));
+                }
+            }
+            break;
+        }
+    }
+    void update(const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
+    {
+        for (auto& player : removed_players)
+        {
+            globals::m_resources->destroy_geometry(player.cube, frame.timeline_value);
+            player.destroy();
+        }
+        removed_players.clear();
     }
     void tick(const float dt) noexcept
     {
-        if (!server)
-            return;
         static float update_timer = 0.0f;
         update_timer += dt;
-        if (server && update_timer > 0.3f)
+        if (server && update_timer > 0.03f && player_id > 0)
         {
             update_timer = 0.0f;
-            const auto buffer = messages::serialize(messages::UpdatePosMessage{
+            send_message(server, 0, messages::PlayerStateMessage{
+                .id = player_id,
                 .position = player_pos,
                 .rotation = player_rot,
+                .velocity = player_vel,
             });
-            ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), 0);
-            enet_peer_send(server, 0, packet);
-            LOGI("send position: %f %f %f", player_pos.x, player_pos.y, player_pos.z);
+            //LOGI("send position: %f %f %f", player_pos.x, player_pos.y, player_pos.z);
         }
 
         ENetEvent event{};
@@ -121,28 +229,32 @@ public:
             switch (event.type)
             {
             case ENET_EVENT_TYPE_CONNECT:
-                LOGI("Connected to server %s.", address2str(event.peer->address).c_str());
-                // Store any relevant client information here.
-                server = event.peer;
+                // not happening here, checkout connect() function
                 break;
             case ENET_EVENT_TYPE_RECEIVE:
-                LOGI("A packet of length %llu containing %s was received from %s on channel %u.",
-                    event.packet->dataLength,
-                    reinterpret_cast<const char*>(event.packet->data),
-                    static_cast<const char*>(event.peer->data),
-                    event.channelID);
-                // Clean up the packet now that we're done using it.
+                //LOGI("A packet of length %llu containing %s was received from %s on channel %u.",
+                //    event.packet->dataLength,
+                //    reinterpret_cast<const char*>(event.packet->data),
+                //    static_cast<const char*>(event.peer->data),
+                //    event.channelID);
+                parse_message(event.peer, {event.packet->data, event.packet->dataLength});
                 enet_packet_destroy(event.packet);
                 break;
             case ENET_EVENT_TYPE_DISCONNECT:
                 LOGI("%s disconnected.", static_cast<const char*>(event.peer->data));
                 // Reset the peer's client information.
-                event.peer->data = nullptr;
+                server = nullptr;
+                removed_players.append_range(std::views::values(players));
+                players.clear();
+                connect_async();
                 break;
             case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
                 LOGI("%s disconnected due to timeout.", static_cast<const char*>(event.peer->data));
                 // Reset the peer's client information.
-                event.peer->data = nullptr;
+                server = nullptr;
+                removed_players.append_range(std::views::values(players));
+                players.clear();
+                connect_async();
                 break;
             case ENET_EVENT_TYPE_NONE:
                 break;
