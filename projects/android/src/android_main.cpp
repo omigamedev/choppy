@@ -111,7 +111,7 @@ public:
             return false;
         }
         xr->bind_input();
-        app.init(true);
+        app.init(true, false);
         return true;
     }
     bool begin_session() noexcept

@@ -17,6 +17,7 @@ module;
 #include <tracy/TracyC.h>
 #include <tracy/TracyVulkan.hpp>
 #include <Jolt/Jolt.h>
+#include <Jolt/Physics/Character/Character.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>

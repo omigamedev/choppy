@@ -4,6 +4,7 @@ module;
 #include <cstdio>
 #include <enet.h>
 #include <format>
+#include <unordered_map>
 #include <tracy/Tracy.hpp>
 
 #ifdef __ANDROID__

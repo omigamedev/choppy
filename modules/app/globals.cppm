@@ -1,5 +1,6 @@
 module;
 #include <cstdint>
+#include <memory>
 export module ce.app:globals;
 import :resources;
 

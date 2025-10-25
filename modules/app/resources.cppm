@@ -174,7 +174,7 @@ struct VulkanResources : utils::NoCopy
         };
 
         if (const auto sb = staging_buffer.suballoc(vertices.size() *
-            sizeof(ShaderType::VertexInput), 64))
+            sizeof(typename ShaderType::VertexInput), 64))
         {
             if (const auto dst_sb = vertex_buffer.suballoc(sb->size, 64))
             {

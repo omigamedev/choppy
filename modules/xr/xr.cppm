@@ -1,6 +1,7 @@
 module;
 
 #ifdef __ANDROID__
+#include <jni.h>
 #include <android/log.h>
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
@@ -1598,7 +1599,7 @@ public:
     }
     [[nodiscard]] std::optional<XrActionStateFloat> action_state_float(XrAction action) const noexcept
     {
-        XrActionStateFloat state{XR_TYPE_ACTION_STATE_BOOLEAN};
+        XrActionStateFloat state{XR_TYPE_ACTION_STATE_FLOAT};
         XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
         info.action = action;
         if (const XrResult result = xrGetActionStateFloat(m_session, &info, &state);
