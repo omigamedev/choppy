@@ -32,8 +32,8 @@ struct MessageReader
     template<> void read(std::string& out) noexcept
     {
         const uint16_t size = read<uint16_t>();
-        out = std::string(reinterpret_cast<const char*>(message.data() + offset + sizeof(size)), size);
-        offset += sizeof(size) + out.size();
+        out = std::string(reinterpret_cast<const char*>(message.data() + sizeof(size)), size);
+        offset += out.size();
     }
 };
 struct MessageWriter

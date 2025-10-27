@@ -73,29 +73,35 @@ struct World
     chunksman::ChunksManager chunks_manager;
 
     bool update_frustum = true;
-    bool m_server_mode = false;
 
-    bool create(const std::shared_ptr<vk::Context>& vulkan_context, const bool server_mode) noexcept
+    bool create(const std::shared_ptr<vk::Context>& vulkan_context) noexcept
     {
-        m_vk = vulkan_context;
-        m_server_mode = server_mode;
-        m_player.character = systems::m_physics_system->create_character();
-        m_cube = globals::m_resources->create_cube<shaders::SolidColorShader>();
+        if (systems::m_physics_system)
+            m_player.character = systems::m_physics_system->create_character();
 
-        m_vk->exec_immediate("init world resources", [this](VkCommandBuffer cmd){
-            globals::m_resources->exec_copy_buffers(cmd);
-        });
+        if (vulkan_context)
+        {
+            m_vk = vulkan_context;
+            m_cube = globals::m_resources->create_cube<shaders::SolidColorShader>();
+
+            m_vk->exec_immediate("init world resources", [this](VkCommandBuffer cmd){
+                globals::m_resources->exec_copy_buffers(cmd);
+            });
+        }
 
         chunks_manager.create();
         return true;
     }
     void destroy() noexcept
     {
-        globals::m_resources->destroy_geometry(m_cube, 0);
+        if (m_vk)
+        {
+            globals::m_resources->destroy_geometry(m_cube, 0);
+        }
         m_player.destroy();;
         chunks_manager.destroy();
     }
-    void update(const vk::utils::FrameContext& frame, glm::mat4 view) noexcept
+    void update(const float dt, const vk::utils::FrameContext& frame, glm::mat4 view) noexcept
     {
         chunks_manager.cam_pos = m_camera.cam_pos;
         //chunks_manager.cam_sector = m_camera.cam_sector;
@@ -375,7 +381,7 @@ struct World
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
-                    vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+                    vkCmdDraw(cmd, player.cube.vertex_count, 1, 0, 0);
                 }
             }
             if (systems::m_client_system)
@@ -386,7 +392,7 @@ struct World
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
-                    vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+                    vkCmdDraw(cmd, player.cube.vertex_count, 1, 0, 0);
                 }
             }
         }

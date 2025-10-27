@@ -91,14 +91,15 @@ public:
     void add_player(ENetPeer* peer) noexcept
     {
         player::PlayerState player{
-            .cube = globals::m_resources->create_cube<shaders::SolidColorShader>()
+            .cube = globals::headless ?
+                resources::Geometry{} : globals::m_resources->create_cube<shaders::SolidColorShader>()
         };
         clients.emplace(std::pair(peer, player));
     }
     void remove_player(ENetPeer* peer) noexcept
     {
         const uint32_t id = clients[peer].id;
-        removed_players.emplace_back(clients[peer]);
+        removed_players.emplace_back(clients[peer]);  // TODO: in headless mode just remove it, no need to garbage collect
         clients.erase(peer);
         for (const auto& [send_peer, player] : clients)
         {
@@ -179,16 +180,7 @@ public:
             break;
         }
     }
-    void update(const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
-    {
-        for (auto& player : removed_players)
-        {
-            globals::m_resources->destroy_geometry(player.cube, frame.timeline_value);
-            player.destroy();
-        }
-        removed_players.clear();
-    }
-    void tick(const float dt) noexcept
+    void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
     {
         static float update_timer = 0.0f;
         update_timer += dt;
@@ -213,6 +205,15 @@ public:
             player.position += player.velocity * dt;
         }
 
+        for (auto& player : removed_players)
+        {
+            globals::m_resources->destroy_geometry(player.cube, frame.timeline_value);
+            player.destroy();
+        }
+        removed_players.clear();
+    }
+    void tick(const float dt) noexcept
+    {
         ENetEvent event{};
         if (enet_host_service(server, &event, 0) > 0)
         {

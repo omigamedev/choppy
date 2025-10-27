@@ -28,7 +28,7 @@ export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
 {
-    static constexpr std::string_view ServerHost = "localhost";
+    static constexpr std::string_view ServerHost = "192.168.1.62";
     static constexpr uint16_t ServerPort = 7777;
     ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
@@ -199,8 +199,14 @@ public:
             break;
         }
     }
-    void update(const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
+    void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
     {
+        // basic motion interpolation
+        for (auto& player : std::views::values(players))
+        {
+            player.position += player.velocity * dt;
+        }
+
         for (auto& player : removed_players)
         {
             globals::m_resources->destroy_geometry(player.cube, frame.timeline_value);
@@ -233,17 +239,11 @@ public:
                 // not happening here, checkout connect() function
                 break;
             case ENET_EVENT_TYPE_RECEIVE:
-                //LOGI("A packet of length %llu containing %s was received from %s on channel %u.",
-                //    event.packet->dataLength,
-                //    reinterpret_cast<const char*>(event.packet->data),
-                //    static_cast<const char*>(event.peer->data),
-                //    event.channelID);
                 parse_message(event.peer, {event.packet->data, event.packet->dataLength});
                 enet_packet_destroy(event.packet);
                 break;
             case ENET_EVENT_TYPE_DISCONNECT:
                 LOGI("%s disconnected.", static_cast<const char*>(event.peer->data));
-                // Reset the peer's client information.
                 server = nullptr;
                 removed_players.append_range(std::views::values(players));
                 players.clear();
@@ -251,7 +251,6 @@ public:
                 break;
             case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
                 LOGI("%s disconnected due to timeout.", static_cast<const char*>(event.peer->data));
-                // Reset the peer's client information.
                 server = nullptr;
                 removed_players.append_range(std::views::values(players));
                 players.clear();

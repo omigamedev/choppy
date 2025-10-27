@@ -29,27 +29,16 @@ module;
 #endif
 
 export module ce.app:chunksman;
-import ce.platform;
-import ce.platform.globals;
-import ce.xr;
-import ce.vk;
-import ce.vk.buffer;
-import ce.vk.texture;
-import ce.vk.shader;
-import ce.vk.utils;
-import ce.shaders.solidflat;
-import ce.shaders.solidcolor;
 import glm;
-import :utils;
-import :frustum;
-import :chunkgen;
-import :chunkmesh;
 import :globals;
+import :frustum;
+import :chunkmesh;
 import :systems;
+import :physics;
 
 export namespace ce::app::chunksman
 {
-struct ChunkUpdate : utils::NoCopy
+struct ChunkUpdate
 {
     std::map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> data;
     size_t chunk_index = 0;

@@ -491,9 +491,9 @@ public:
             return false;
         }
         LOGI("Device runtime Vulkan: %u.%u.%u",
-            VK_VERSION_MAJOR(vk_runtime_version),
-            VK_VERSION_MINOR(vk_runtime_version),
-            VK_VERSION_PATCH(vk_runtime_version));
+            VK_API_VERSION_MAJOR(vk_runtime_version),
+            VK_API_VERSION_MINOR(vk_runtime_version),
+            VK_API_VERSION_PATCH(vk_runtime_version));
         uint32_t vk_version = std::max(vk_req_version, vk_runtime_version);
         constexpr VkApplicationInfo app_info{
             .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -598,6 +598,10 @@ public:
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         vkGetPhysicalDeviceProperties2(m_physical_device, &physical_device_properties);
         LOGI("Vulkan device: %s", physical_device_properties.properties.deviceName);
+        LOGI("Physical Device Vulkan version: %u.%u.%u",
+            VK_API_VERSION_MAJOR(physical_device_properties.properties.apiVersion),
+            VK_API_VERSION_MINOR(physical_device_properties.properties.apiVersion),
+            VK_API_VERSION_PATCH(physical_device_properties.properties.apiVersion));
         const auto device_extensions = [this] {
             uint32_t count = 0;
             vkEnumerateDeviceExtensionProperties(m_physical_device, nullptr, &count, nullptr);
@@ -657,6 +661,10 @@ public:
             VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
             VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
         };
+        if (physical_device_properties.properties.apiVersion < VK_API_VERSION_1_2)
+        {
+            //vk_device_extensions.emplace_back(VK_)
+        }
         constexpr std::array vk_device_optional_extensions{
             VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
             VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
@@ -664,6 +672,7 @@ public:
             VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
             VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME,
             VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME,
+            VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME,
         };
         for (const char* e : vk_device_optional_extensions)
         {
@@ -756,8 +765,6 @@ public:
         bda_feature.bufferDeviceAddressCaptureReplay = false; // enable for debugging BDA
         bda_feature.bufferDeviceAddressMultiDevice = false;
         has_msaa_single = multisampled_feature.multisampledRenderToSingleSampled;
-        // enable supported features
-        // TODO: these features should be checked, will this collide with multiview_feature?
         VkPhysicalDeviceVulkan11Features enable_features11{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
             .pNext = &imageless_feature,
@@ -768,11 +775,12 @@ public:
         };
         const VkPhysicalDeviceFeatures2 enabled_features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-            //.pNext = &enable_features11,
+            .pNext = (physical_device_properties.properties.apiVersion < VK_API_VERSION_1_2) ?
+                reinterpret_cast<void*>(&imageless_feature) : reinterpret_cast<void*>(&enable_features11),
             .features = {
-                .multiDrawIndirect = true,
-//                .fillModeNonSolid = true,
-//                .wideLines = true,
+                .multiDrawIndirect = supported_physical_device_features.features.multiDrawIndirect,
+                .fillModeNonSolid = supported_physical_device_features.features.fillModeNonSolid,
+                .wideLines = supported_physical_device_features.features.wideLines,
             }
         };
         const VkDeviceCreateInfo device_info{

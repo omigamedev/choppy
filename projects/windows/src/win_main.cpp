@@ -56,6 +56,7 @@ class WindowsContext
     ce::app::AppBase app;
     HWND m_wnd = nullptr;
     bool initialized = false;
+    bool headless = false;
     std::shared_ptr<ce::platform::Win32Window> m_window;
     IGameInput* gameInput = nullptr;
     IGameInputDevice* device = nullptr;
@@ -63,11 +64,21 @@ class WindowsContext
     {
         const auto& win32 = ce::platform::GetPlatform<ce::platform::Win32>();
         m_window = std::static_pointer_cast<ce::platform::Win32Window>(win32.new_window());
-        return m_window->create(1920/2, 1080/2);
+        return m_window->create(1920, 1080);
     }
 public:
     bool create(const std::vector<std::string>& args) noexcept
     {
+        const bool server_mode = std::ranges::contains(args, "server");
+        headless = std::ranges::contains(args, "headless");
+        if (headless)
+        {
+            std::println("Starting headless server");
+            app.init(false, server_mode, true);
+            initialized = true;
+            return true;
+        }
+
         const auto& xr = app.xr() = std::make_shared<ce::xr::Context>();
         const auto& vk = app.vk() = std::make_shared<ce::vk::Context>();
         bool xr_mode = false;
@@ -165,8 +176,7 @@ public:
             std::println("Failed to initialize Vulkan and OpenXR");
             return false;
         }
-        const bool server_mode = std::ranges::contains(args, "server");
-        app.init(xr_mode, server_mode);
+        app.init(xr_mode, server_mode, false);
         if (!xr_mode)
         {
             app.on_resize(m_window->width(), m_window->height());

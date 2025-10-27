@@ -82,6 +82,7 @@ struct GamepadState
 
 class AppBase final
 {
+
     std::shared_ptr<xr::Context> m_xr;
     std::shared_ptr<vk::Context> m_vk;
     shaders::SolidFlatShader::PerFrameConstants uniform{};
@@ -91,7 +92,6 @@ class AppBase final
 
     world::World m_world;
 
-    bool xrmode = false;
     std::array<bool, 256> keys{false};
     uint32_t m_swapchain_count = 0;
     uint64_t m_timeline_value = 0;
@@ -112,69 +112,65 @@ public:
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
 
-    void init(const bool xr_mode, const bool server_mode) noexcept
+    void init(const bool xr_mode, const bool server_mode, const bool headless) noexcept
     {
-        xrmode = xr_mode;
+        globals::xrmode = xr_mode;
+        globals::server_mode = server_mode;
+        globals::headless = headless;
 
-        if (xrmode)
+        if (!headless)
         {
-            m_renderpass = m_xr->renderpass();
-            m_sample_count = m_xr->sample_count();
-            m_swapchain_count = m_xr->swapchain_count();
-        }
-        else
-        {
-            m_renderpass = m_vk->renderpass();
-            m_sample_count = m_vk->samples_count();
-            m_swapchain_count = m_vk->swapchain_count();
-        }
-
-        shaders::create_shaders({
-            .vk = m_vk,
-            .renderpass = m_renderpass,
-            .swapchain_count = m_swapchain_count,
-            .sample_count = m_sample_count
-        });
-
-        globals::m_resources = std::make_shared<resources::VulkanResources>();
-        globals::m_resources->create_buffers(m_vk);
-        globals::m_resources->texture = vk::texture::load_texture(m_vk,
-            "assets/grass.png", globals::m_resources->staging_buffer).value();
-        globals::m_resources->sampler = vk::texture::create_sampler(m_vk).value();
-
-        systems::create_systems({
-            .xr_mode = xr_mode,
-            .server_mode = server_mode,
-        });
-        m_world.create(m_vk, server_mode);
-
-        // Create the grid object
-        //m_grid = std::make_shared<Grid>();
-        //m_grid->create(m_vk, 0);
-
-
-        m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
-            if (xrmode)
+            if (globals::xrmode)
             {
-                m_xr->init_resources(cmd);
+                m_renderpass = m_xr->renderpass();
+                m_sample_count = m_xr->sample_count();
+                m_swapchain_count = m_xr->swapchain_count();
             }
             else
             {
-                m_vk->init_resources(cmd);
+                m_renderpass = m_vk->renderpass();
+                m_sample_count = m_vk->samples_count();
+                m_swapchain_count = m_vk->swapchain_count();
             }
-        });
+
+            shaders::create_shaders({
+                .vk = m_vk,
+                .renderpass = m_renderpass,
+                .swapchain_count = m_swapchain_count,
+                .sample_count = m_sample_count
+            });
+
+            globals::m_resources = std::make_shared<resources::VulkanResources>();
+            globals::m_resources->create_buffers(m_vk);
+            globals::m_resources->texture = vk::texture::load_texture(m_vk,
+                "assets/grass.png", globals::m_resources->staging_buffer).value();
+            globals::m_resources->sampler = vk::texture::create_sampler(m_vk).value();
+
+            m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){
+                if (globals::xrmode)
+                {
+                    m_xr->init_resources(cmd);
+                }
+                else
+                {
+                    m_vk->init_resources(cmd);
+                }
+            });
+        }
+        systems::create_systems();
+        m_world.create(m_vk);
     }
-    void update(const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
+    void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
     {
         ZoneScoped;
         shaders::reset_descriptors(frame.present_index);
-        if (m_world.m_server_mode)
+        if (globals::server_mode)
         {
             systems::m_server_system->player_pos = m_world.m_camera.cam_pos;
             systems::m_server_system->player_rot = glm::gtc::quat_cast(view);
             systems::m_server_system->player_vel = glm::gtc::make_vec3(
                 m_world.m_player.character->GetLinearVelocity().mF32);
-            systems::m_server_system->update(frame, view);
+            systems::m_server_system->update(dt, frame, view);
         }
         else
         {
@@ -182,9 +178,9 @@ public:
             systems::m_client_system->player_rot = glm::gtc::quat_cast(view);
             systems::m_client_system->player_vel = glm::gtc::make_vec3(
                 m_world.m_player.character->GetLinearVelocity().mF32);
-            systems::m_client_system->update(frame, view);
+            systems::m_client_system->update(dt, frame, view);
         }
-        m_world.update(frame, view);
+        m_world.update(dt, frame, view);
         shaders::update_descriptors();
     }
     void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) noexcept
@@ -251,7 +247,7 @@ public:
 
         // Begin rendering
 
-        if (xrmode)
+        if (globals::xrmode)
         {
             const VkViewport viewport = m_xr->viewport();
             vkCmdSetViewportWithCount(cmd, 1, &viewport);
@@ -377,6 +373,7 @@ public:
             {
                 const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
                 m_world.chunks_manager.break_block(m_world.m_camera.cam_pos, forward);
+                // m_world.break_block()
             }
         }
 #ifdef _WIN32
@@ -437,7 +434,7 @@ public:
                 update_flying_camera_pos(dt, gamepad, m_xr->touch_controllers(), head_rot * cam_rot);
                 for (uint32_t i = 0; i < 2; i++)
                     frame_fixed.view[i] = frame.view[i] * glm::inverse(cam_rot * glm::gtx::translate(m_world.m_camera.cam_pos));
-                update(frame_fixed, head_rot * cam_rot);
+                update(dt, frame_fixed, head_rot * cam_rot);
             },
             [this, dt, &frame_fixed](const vk::utils::FrameContext& frame){
                 frame_fixed.cmd = frame.cmd;
@@ -466,7 +463,7 @@ public:
             frame_fixed.projection[0][1][1] *= -1.0f; // flip Y for Vulkan
             frame_fixed.view[0] = glm::inverse(glm::gtx::translate(m_world.m_camera.cam_pos) * cam_rot);
 
-            update(frame_fixed, frame.view[0] * glm::inverse(cam_rot));
+            update(dt, frame_fixed, frame.view[0] * glm::inverse(cam_rot));
         },
         [this, dt, &frame_fixed](const vk::utils::FrameContext& frame)
         {
@@ -488,7 +485,7 @@ public:
     void tick(const float dt, const GamepadState& gamepad) noexcept
     {
         ZoneScoped;
-        if (m_world.m_server_mode)
+        if (globals::server_mode)
         {
             systems::m_physics_system->tick(dt);
             systems::m_server_system->tick(dt);
@@ -498,19 +495,22 @@ public:
             systems::m_client_system->tick(dt);
             systems::m_physics_system->tick(dt);
         }
-        m_world.tick(dt);
 
-        if (xrmode)
+        if (!globals::headless)
         {
-            m_timeline_value = m_xr->timeline_value().value_or(0);
-            globals::m_resources->garbage_collect(m_timeline_value);
-            tick_xrmode(dt, gamepad);
-        }
-        else
-        {
-            m_timeline_value = m_vk->timeline_value().value_or(0);
-            globals::m_resources->garbage_collect(m_timeline_value);
-            tick_windowed(dt, gamepad);
+            m_world.tick(dt);
+            if (globals::xrmode)
+            {
+                m_timeline_value = m_xr->timeline_value().value_or(0);
+                globals::m_resources->garbage_collect(m_timeline_value);
+                tick_xrmode(dt, gamepad);
+            }
+            else
+            {
+                m_timeline_value = m_vk->timeline_value().value_or(0);
+                globals::m_resources->garbage_collect(m_timeline_value);
+                tick_windowed(dt, gamepad);
+            }
         }
     }
     void on_resize(const uint32_t width, const uint32_t height) noexcept

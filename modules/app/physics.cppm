@@ -195,9 +195,9 @@ public:
 	    JPH::RegisterTypes();
 
 	    job_system = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
-	                                                            static_cast<int32_t>(std::thread::hardware_concurrency()) - 1);
+			static_cast<int32_t>(std::thread::hardware_concurrency()) - 1);
 	    physics_system.Init(physMaxBodies, physMaxBodies, physMaxBodies, physMaxBodies,
-	                        broad_phase_layer_interface, object_vs_broadphase_layer_filter, object_vs_object_layer_filter);
+	    broad_phase_layer_interface, object_vs_broadphase_layer_filter, object_vs_object_layer_filter);
 	    // physics_system.SetBodyActivationListener(&body_activation_listener);
 	    // physics_system.SetContactListener(&contact_listener);
 	    temp_allocator = std::make_unique<JPH::TempAllocatorImpl>(10 * 1024 * 1024);
