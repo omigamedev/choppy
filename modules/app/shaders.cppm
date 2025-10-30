@@ -8,7 +8,7 @@ import ce.vk.shader;
 import ce.shaders.solidcolor;
 import ce.shaders.solidflat;
 
-namespace ce::shaders
+export namespace ce::shaders
 {
 std::shared_ptr<SolidFlatShader> shader_opaque;
 std::shared_ptr<SolidFlatShader> shader_transparent;

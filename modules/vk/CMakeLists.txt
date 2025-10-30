@@ -16,7 +16,7 @@ FetchContent_Declare(
     GIT_TAG a8da8ef3368482b0ee9b0ec0c6079a16a89c6924) # vulkan-sdk-1.4.321
 if (WIN32)
     set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
-else()
+elseif(ANDROID)
     set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_ANDROID_KHR)
 endif()
 FetchContent_MakeAvailable(Volk)

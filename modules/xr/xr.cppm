@@ -5,7 +5,7 @@ module;
 #include <android/log.h>
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
-#elifdef _WIN32
+#else
 #define LOGE(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #endif

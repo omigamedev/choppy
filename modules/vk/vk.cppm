@@ -20,7 +20,7 @@ module;
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
 #include <vulkan/vulkan_android.h>
-#elifdef _WIN32
+#else
 #define LOGE(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #endif
@@ -226,7 +226,7 @@ public:
             VK_KHR_SURFACE_EXTENSION_NAME,
 #ifdef __ANDROID__
             VK_KHR_ANDROID_SURFACE_EXTENSION_NAME
-#else
+#elif WIN32
             VK_KHR_WIN32_SURFACE_EXTENSION_NAME
 #endif
         };

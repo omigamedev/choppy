@@ -6,9 +6,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_definitions(-DUNICODE -D_UNICODE)
 
-# Request libc++ as the standard library
-add_compile_options("-stdlib=libc++")
-add_link_options("-stdlib=libc++")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
 
 set(MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../modules)
 add_subdirectory(${MODULES_DIR}/app modules/app)

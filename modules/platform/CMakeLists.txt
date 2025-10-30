@@ -1,9 +1,11 @@
 add_library(platform OBJECT)
 if(WIN32)
     set(PLATFORM_SRC windows.cppm)
-else()
+elseif(ANDROID)
     set(PLATFORM_SRC android.cppm)
     target_link_libraries(platform PUBLIC game-activity::game-activity_static)
+else()
+    #set(PLATFORM_SRC linux.cppm)
 endif()
 target_sources(platform PUBLIC
     FILE_SET CXX_MODULES
