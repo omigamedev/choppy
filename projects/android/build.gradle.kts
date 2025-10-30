@@ -3,6 +3,9 @@ plugins {
     kotlin("android") version "2.1.10"
 }
 
+val ndkHome = System.getenv("ANDROID_NDK_HOME") as String
+val vcpkgHome = System.getenv("VCPKG_ROOT") as String
+
 android {
     namespace = "com.omixlab.choppyengine"
     compileSdk = 35
@@ -21,8 +24,8 @@ android {
                 arguments += "-DANDROID_STL=c++_shared" // ?? is this needed, AI generated
                 // requires env ANDROID_NDK_HOME
                 // NOTE: if it fails read the file logs, it contains more info that console
-                arguments += "-DCMAKE_TOOLCHAIN_FILE=D:/vcpkg/scripts/buildsystems/vcpkg.cmake"
-                arguments += "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=C:/Users/omara/AppData/Local/Android/Sdk/ndk/29.0.13599879/build/cmake/android.toolchain.cmake"
+                arguments += "-DCMAKE_TOOLCHAIN_FILE=$vcpkgHome/scripts/buildsystems/vcpkg.cmake"
+                arguments += "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$ndkHome/build/cmake/android.toolchain.cmake"
                 arguments += "-DVCPKG_TARGET_TRIPLET=arm64-android"
                 targets += "main"
             }
@@ -51,10 +54,10 @@ android {
     externalNativeBuild {
         cmake {
             path = file("CMakeLists.txt")
-            version = "4.0.2"
+            version = "4.1.2"
         }
     }
-    ndkVersion = "29.0.13599879"
+    ndkVersion = "29.0.14206865"
 }
 
 dependencies {
