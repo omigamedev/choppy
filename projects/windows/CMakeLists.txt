@@ -17,7 +17,19 @@ add_subdirectory(${MODULES_DIR}/platform modules/platform)
 add_subdirectory(${MODULES_DIR}/shaders modules/shaders)
 
 add_executable(ce_windows src/win_main.cpp)
-#target_link_directories(ce_windows PRIVATE $ENV{VULKAN_SDK}/Include
 target_link_libraries(ce_windows PRIVATE app vk xr rtmp platform shaders gameinput)
 target_include_directories(ce_windows PRIVATE "$ENV{WindowsSdkDir}Include/$ENV{WindowsSDKVersion}/cppwinrt")
-#set_target_properties(ce_windows PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+
+# --- Copy DLLs to output directory ---
+add_custom_command(TARGET ce_windows POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "$<TARGET_FILE:datachannel>"
+    "$<TARGET_FILE_DIR:ce_windows>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "$<TARGET_FILE_DIR:datachannel>/libssl-3-x64.dll"
+    "$<TARGET_FILE_DIR:ce_windows>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "$<TARGET_FILE_DIR:datachannel>/libcrypto-3-x64.dll"
+    "$<TARGET_FILE_DIR:ce_windows>"
+    COMMENT "Copying libdatachannel DLL to output directory"
+)

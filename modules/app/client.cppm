@@ -7,6 +7,7 @@ module;
 #include <format>
 #include <unordered_map>
 #include <tracy/Tracy.hpp>
+#include <rtc/rtc.hpp>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -30,6 +31,8 @@ class ClientSystem : utils::NoCopy
 {
     static constexpr std::string_view ServerHost = "192.168.1.62";
     static constexpr uint16_t ServerPort = 7777;
+    static constexpr uint16_t WebSoketPort = 7778;
+    std::shared_ptr<rtc::WebSocket> ws;
     ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
     std::unordered_map<uint32_t, player::PlayerState> players;
@@ -132,6 +135,8 @@ public:
         try_connecting = false;
         if (connect_result.valid())
             connect_result.get();
+        if (ws && ws->isOpen())
+            ws->close();
         if (server)
             enet_peer_reset(server);
         enet_host_destroy(client);
@@ -144,9 +149,55 @@ public:
         enet_peer_send(peer, 0, packet);
         //LOGI("sent message of type: %s", messages::to_string(message.type));
     }
+    template<typename T>
+    void ws_send_message(const T& message) const noexcept
+    {
+        const auto buffer = message.serialize();
+        if (ws && ws->isOpen())
+        {
+            ws->send(reinterpret_cast<const std::byte*>(buffer.data()), buffer.size());
+        }
+    }
     [[nodiscard]] auto get_players() noexcept
     {
         return std::views::values(players);
+    }
+    void connect_websocket() noexcept
+    {
+        ws = std::make_shared<rtc::WebSocket>();
+        ws->open(std::format("ws://{}:{}", ServerHost, WebSoketPort));
+        ws->onOpen([this]
+        {
+            LOGI("web-socket connected, signaling ready");
+            ws_send_message(messages::JoinResponseMessage{.new_id = player_id});
+        });
+        ws->onClosed([]{ LOGI("web-socket closed"); });
+        ws->onError([](const std::string &error){ LOGE( "web-socket failed %s: ", error.c_str()); });
+        ws->onMessage([&](const rtc::message_variant& data){
+            LOGI("web-socket on message");
+            if (std::holds_alternative<rtc::binary>(data))
+            {
+                const auto& bin = std::get<rtc::binary>(data);
+                ws_parse_message({reinterpret_cast<const uint8_t*>(bin.data()), bin.size()});
+            }
+            else
+            {
+                LOGE("web-socket on message: string data %s", std::get<std::string>(data).c_str());
+            }
+        });
+    }
+    void ws_parse_message(std::span<const uint8_t> message) noexcept
+    {
+        const messages::MessageType type = *reinterpret_cast<const messages::MessageType*>(message.data());
+        switch (type)
+        {
+        case messages::MessageType::WorldData:
+            if (const auto world_data = messages::WorldDataMessage::deserialize(message))
+            {
+                LOGI("RECEIVED WORLD DATA of %llu bytes", world_data->data.size());
+            }
+            break;
+        }
     }
     void parse_message(ENetPeer* peer, const std::span<const uint8_t> message) noexcept
     {
@@ -160,6 +211,7 @@ public:
                 {
                     player_id = response->new_id;
                     LOGI("join accepted with id: %d", player_id);
+                    connect_websocket();
                 }
                 else
                 {
@@ -247,6 +299,8 @@ public:
                 server = nullptr;
                 removed_players.append_range(std::views::values(players));
                 players.clear();
+                if (ws && ws->isOpen())
+                    ws->close();
                 connect_async();
                 break;
             case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
@@ -254,6 +308,8 @@ public:
                 server = nullptr;
                 removed_players.append_range(std::views::values(players));
                 players.clear();
+                if (ws && ws->isOpen())
+                    ws->close();
                 connect_async();
                 break;
             case ENET_EVENT_TYPE_NONE:

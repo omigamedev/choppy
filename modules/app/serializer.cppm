@@ -25,15 +25,17 @@ struct MessageReader
     }
     template<> std::string read<std::string>() noexcept
     {
-        std::string value;
-        read(value);
-        return value;
-    }
-    template<> void read(std::string& out) noexcept
-    {
         const uint16_t size = read<uint16_t>();
-        out = std::string(reinterpret_cast<const char*>(message.data() + sizeof(size)), size);
+        const std::string out(reinterpret_cast<const char*>(message.data() + offset), size);
         offset += out.size();
+        return out;
+    }
+    template<> std::vector<uint8_t> read<std::vector<uint8_t>>() noexcept
+    {
+        const uint32_t size = read<uint32_t>();
+        const std::vector out(message.data() + offset, message.data() + offset + size);
+        offset += out.size();
+        return out;
     }
 };
 struct MessageWriter
@@ -52,6 +54,11 @@ struct MessageWriter
     {
         write<uint16_t>(value.size());
         buffer.append_range(std::span(reinterpret_cast<const uint8_t*>(value.c_str()), value.size()));
+    }
+    template<> void write(const std::vector<uint8_t>& value) noexcept
+    {
+        write<uint32_t>(value.size());
+        buffer.append_range(value);
     }
 };
 

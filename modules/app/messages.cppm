@@ -18,6 +18,7 @@ enum class MessageType : uint16_t
     PlayerState,
     PlayerRemoved,
     BlockAction,
+    WorldData,
 };
 const char* to_string(const MessageType t)
 {
@@ -28,6 +29,7 @@ const char* to_string(const MessageType t)
     case MessageType::JoinRequest: return "JoinRequest";
     case MessageType::JoinResponse: return "JoinResponse";
     case MessageType::PlayerRemoved: return "PlayerRemoved";
+    case MessageType::WorldData: return "WorldData";
     default: return "Unknown";
     }
 }
@@ -153,6 +155,28 @@ struct PlayerRemovedMessage
         return PlayerRemovedMessage{
             .type = r.read<MessageType>(),
             .id = r.read<uint32_t>(),
+        };
+    }
+};
+
+struct WorldDataMessage
+{
+    MessageType type = MessageType::WorldData;
+    std::vector<uint8_t> data;
+    [[nodiscard]] std::vector<uint8_t> serialize() const noexcept
+    {
+        serializer::MessageWriter w;
+        w.write(type);
+        w.write(data);
+        return std::move(w.buffer);
+    }
+    [[nodiscard]] static std::optional<WorldDataMessage> deserialize(
+        const std::span<const uint8_t>& message) noexcept
+    {
+        serializer::MessageReader r(message);
+        return WorldDataMessage{
+            .type = r.read<MessageType>(),
+            .data = r.read<std::vector<uint8_t>>(),
         };
     }
 };

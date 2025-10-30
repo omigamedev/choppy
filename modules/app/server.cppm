@@ -6,6 +6,7 @@ module;
 #include <format>
 #include <unordered_map>
 #include <tracy/Tracy.hpp>
+#include <rtc/rtc.hpp>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -30,6 +31,8 @@ export namespace ce::app::server
 class ServerSystem : utils::NoCopy
 {
     static constexpr uint32_t MaxClients = 32;
+    std::shared_ptr<rtc::WebSocketServer> wss;
+    std::vector<std::shared_ptr<rtc::WebSocket>> ws_clients;
     ENetHost* server = nullptr;
     uint32_t client_ids = 1;
     std::unordered_map<ENetPeer*, player::PlayerState> clients;
@@ -64,6 +67,42 @@ public:
             LOGE("An error occurred while trying to create an ENet server host.");
             return false;
         }
+        wss = std::make_shared<rtc::WebSocketServer>(rtc::WebSocketServerConfiguration{
+            .port = 7778,
+            .enableTls = false,
+            // .bindAddress = ,
+            // .connectionTimeout = ,
+            // .maxMessageSize =
+        });
+        wss->onClient([this](const std::shared_ptr<rtc::WebSocket>& socket)
+        {
+            LOGI("web-socket new client");
+            ws_clients.push_back(socket);
+            socket->onMessage([this, socket](const rtc::message_variant& data)
+            {
+                LOGI("web-socket on message");
+                if (std::holds_alternative<rtc::binary>(data))
+                {
+                    const auto& bin = std::get<rtc::binary>(data);
+                    ws_parse_message(socket, {reinterpret_cast<const uint8_t*>(bin.data()), bin.size()});
+                }
+                else
+                {
+                    LOGE("web-socket on message: string data %s",
+                        std::get<std::string>(data).c_str());
+                }
+            });
+            socket->onClosed([this, socket]
+            {
+                LOGI("web-socket on close");
+                std::erase(ws_clients, socket);
+            });
+            socket->onError([this, socket](const std::string& error)
+            {
+                LOGI("web-socket on error: %s", error.c_str());
+                std::erase(ws_clients, socket);
+            });
+        });
         return true;
     }
     void destroy_system() noexcept
@@ -87,6 +126,15 @@ public:
         ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
         enet_peer_send(peer, 0, packet);
         //LOGI("sent message of type: %s", messages::to_string(message.type));
+    }
+    template<typename T>
+    void ws_send_message(const std::shared_ptr<rtc::WebSocket>& socket, const T& message) const noexcept
+    {
+        const auto buffer = message.serialize();
+        if (socket && socket->isOpen())
+        {
+            socket->send(reinterpret_cast<const std::byte*>(buffer.data()), buffer.size());
+        }
     }
     void add_player(ENetPeer* peer) noexcept
     {
@@ -113,6 +161,20 @@ public:
     [[nodiscard]] auto get_players() noexcept
     {
         return std::views::values(clients);
+    }
+    void ws_parse_message(const std::shared_ptr<rtc::WebSocket>& socket, std::span<const uint8_t> message) noexcept
+    {
+        const messages::MessageType type = *reinterpret_cast<const messages::MessageType*>(message.data());
+        switch (type)
+        {
+        case messages::MessageType::JoinResponse:
+            LOGI("WS: MessageType::JoinResponse");
+            if (const auto response = messages::JoinResponseMessage::deserialize(message))
+            {
+                ws_send_message(socket, messages::WorldDataMessage{.data = std::vector<uint8_t>(1024)});
+            }
+            break;
+        }
     }
     void parse_message(ENetPeer* peer, const std::span<const uint8_t> message) noexcept
     {

@@ -18,10 +18,16 @@ FetchContent_Declare(tracy
 FetchContent_Declare(enet
     GIT_REPOSITORY https://github.com/zpl-c/enet.git
     GIT_TAG 8647b6eaea881c86471ae29f732620d299fc20d7) # v2.6.5
+FetchContent_Declare(datachannel
+    GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
+    GIT_TAG 9e6a13abbb6846c003d817d0387b6706466e2b03) # v0.23.2
+set(NO_EXAMPLES 1)
+set(NO_TESTS 1)
 FetchContent_Declare(jolt
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
     GIT_TAG 036ea7b1d717b3e713ac9d8cbd47118fb9cd5d60) # v5.4.0
-FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet)
+
+FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet datachannel)
 
 set(JOLT_PHYSICS_ROOT ${jolt_SOURCE_DIR}/Jolt)
 set(JOLT_PHYSICS_SRC_FILES
@@ -465,8 +471,6 @@ add_library(glmcppm OBJECT)
 target_link_libraries(glmcppm PUBLIC glm::glm)
 target_compile_definitions(glmcppm PUBLIC
     GLM_ENABLE_EXPERIMENTAL
-    #GLM_FORCE_RADIANS
-    #GLM_FORCE_DEPTH_ZERO_TO_ONE
 )
 target_sources(glmcppm PUBLIC
     FILE_SET CXX_MODULES
@@ -486,7 +490,9 @@ else()
 endif()
 
 add_library(app OBJECT stb.cpp)
-target_link_libraries(app PUBLIC platform xr vk glmcppm shaders perlin jolt miniaudio enet_static)
+target_link_libraries(app PUBLIC
+    platform xr vk glmcppm shaders perlin
+    jolt miniaudio enet_static datachannel)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES

@@ -16,6 +16,17 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_STL=c++_shared" // ?? is this needed, AI generated
+                // requires env ANDROID_NDK_HOME
+                // NOTE: if it fails read the file logs, it contains more info that console
+                arguments += "-DCMAKE_TOOLCHAIN_FILE=D:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                arguments += "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=C:/Users/omara/AppData/Local/Android/Sdk/ndk/29.0.13599879/build/cmake/android.toolchain.cmake"
+                arguments += "-DVCPKG_TARGET_TRIPLET=arm64-android"
+                targets += "main"
+            }
+        }
     }
     buildTypes {
         release {
