@@ -75,7 +75,7 @@ int main(const int argc, const char** argv)
     for (int i = 0; i < argc; ++i)
         args.emplace_back(argv[i]);
     LinuxContext context;
-    context.create(args);
-    context.main_loop();
+    if (context.create(args))
+        context.main_loop();
     return 0;
 }
