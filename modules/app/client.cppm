@@ -53,6 +53,7 @@ public:
     glm::quat player_rot = glm::gtc::identity<glm::quat>();
     glm::vec3 player_vel = glm::vec3(0, 0, 0);
     std::function<void(const messages::BlockActionMessage&)> on_block_action;
+    std::function<void(const messages::ChunkDataMessage&)> on_chunk_data;
     [[nodiscard]] bool connected() const noexcept { return server != nullptr; }
     bool create_system() noexcept
     {
@@ -261,6 +262,12 @@ public:
                 }
             }
             break;
+        case messages::MessageType::ChunkData:
+            if (const auto chunk = messages::ChunkDataMessage::deserialize(message))
+            {
+                LOGI("received chunk data: %d", (int)chunk->data.size());
+                on_chunk_data(chunk.value());
+            }
         }
     }
     void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept

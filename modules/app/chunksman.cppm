@@ -71,14 +71,16 @@ struct ChunksManager
     std::unordered_map<BlockLayer, ChunksState> m_chunks_state;
     std::vector<glm::ivec3> m_regenerate_sectors;
     std::atomic_bool needs_update = false;
+    std::vector<std::pair<glm::ivec3, std::vector<uint8_t>>> chunks_to_sync;
     bool m_running = true;
     Frustum m_frustum;
     glm::vec3 cam_pos = { 0, 100, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
 
-    bool create() noexcept
+    bool create(const bool load_terrain) noexcept
     {
-        generator.load();
+        if (load_terrain)
+            generator.load();
         m_chunks_thread = std::thread(&ChunksManager::generate_thread, this);
         return true;
     }
@@ -290,6 +292,29 @@ struct ChunksManager
                 .max = min_corner + glm::vec3(chunk_world_size),
             };
 
+            if (!globals::server_mode && systems::m_client_system->connected())
+            {
+                if (!chunk.net_requested)
+                {
+                    systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
+                        .message_direction = messages::MessageDirection::Request,
+                        .sector = chunk.sector,
+                    });
+                    chunk.net_requested = true;
+                }
+                else if (!chunk.net_sync)
+                {
+                    if (const auto it = std::ranges::find(chunks_to_sync, chunk.sector,
+                        &std::pair<glm::ivec3, std::vector<uint8_t>>::first); it != chunks_to_sync.end())
+                    {
+                        generator.deserialize_apply(chunk.sector, it->second);
+                        chunk.net_sync = true;
+                        chunk.regenerate = true;
+                        chunks_to_sync.erase(it);
+                    }
+                }
+            }
+
             // if (!m_frustum.is_box_visible(chunk_aabb))
             //     continue; // Skip this chunk, it's not visible
 
@@ -346,6 +371,7 @@ struct ChunksManager
             chunk.dirty = false;
             // chunk.mesh.clear();
         }
+
         //LOGI("drawing %d polys", polys / 3);
         clear_chunks_state(frame.timeline_value);
         for (const auto& [layer, batch] : batches)

@@ -19,6 +19,7 @@ enum class MessageType : uint16_t
     PlayerRemoved,
     BlockAction,
     WorldData,
+    ChunkData,
 };
 const char* to_string(const MessageType t)
 {
@@ -30,6 +31,20 @@ const char* to_string(const MessageType t)
     case MessageType::JoinResponse: return "JoinResponse";
     case MessageType::PlayerRemoved: return "PlayerRemoved";
     case MessageType::WorldData: return "WorldData";
+    default: return "Unknown";
+    }
+}
+enum class MessageDirection : uint8_t
+{
+    Request,
+    Response,
+};
+const char* to_string(const MessageDirection t)
+{
+    switch (t)
+    {
+    case MessageDirection::Request: return "Request";
+    case MessageDirection::Response: return "Response";
     default: return "Unknown";
     }
 }
@@ -81,31 +96,6 @@ struct JoinResponseMessage
     }
 };
 
-// struct PlayersStateMessage
-// {
-//     MessageType type = MessageType::JoinResponse;
-//     std::vector<uint32_t> ids;
-//     std::vector<std::string> names;
-//     [[nodiscard]] std::vector<uint8_t> serialize() const noexcept
-//     {
-//         serializer::MessageWriter w;
-//         w.write(type);
-//         w.write(ids);
-//         w.write(names);
-//         return std::move(w.buffer);
-//     }
-//     [[nodiscard]] static std::optional<PlayersStateMessage> deserialize(
-//         const std::span<const uint8_t>& message) noexcept
-//     {
-//         serializer::MessageReader r(message);
-//         return PlayersStateMessage{
-//             .type = r.read<MessageType>(),
-//             .ids = r.read<std::vector<uint32_t>>(),
-//             .names = r.read<std::vector<std::string>>()
-//         };
-//     }
-// };
-
 struct PlayerStateMessage
 {
     MessageType type = MessageType::PlayerState;
@@ -155,6 +145,34 @@ struct PlayerRemovedMessage
         return PlayerRemovedMessage{
             .type = r.read<MessageType>(),
             .id = r.read<uint32_t>(),
+        };
+    }
+};
+
+struct ChunkDataMessage
+{
+    MessageType type = MessageType::ChunkData;
+    MessageDirection message_direction;
+    glm::ivec3 sector;
+    std::vector<uint8_t> data;
+    [[nodiscard]] std::vector<uint8_t> serialize() const noexcept
+    {
+        serializer::MessageWriter w;
+        w.write(type);
+        w.write(message_direction);
+        w.write(sector);
+        w.write(data);
+        return std::move(w.buffer);
+    }
+    [[nodiscard]] static std::optional<ChunkDataMessage> deserialize(
+        const std::span<const uint8_t>& message) noexcept
+    {
+        serializer::MessageReader r(message);
+        return ChunkDataMessage{
+            .type = r.read<MessageType>(),
+            .message_direction = r.read<MessageDirection>(),
+            .sector = r.read<glm::ivec3>(),
+            .data = r.read<std::vector<uint8_t>>(),
         };
     }
 };

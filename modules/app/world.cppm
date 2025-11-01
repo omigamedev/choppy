@@ -102,10 +102,18 @@ struct World
                 {
                     chunks_manager.break_block(block.world_cell);
                 }
-                else if (block.action == messages::BlockActionMessage::ActionType::Build)
+                else
                 {
                     chunks_manager.build_block(block.world_cell);
                 }
+            };
+            systems::m_server_system->on_chunk_data_request = [this](ENetPeer* peer, const messages::ChunkDataMessage& chunk)
+            {
+                systems::m_server_system->send_message(peer, ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
+                    .message_direction = messages::MessageDirection::Response,
+                    .sector = chunk.sector,
+                    .data = chunks_manager.generator.serialize(chunk.sector),
+                });
             };
         }
         if (systems::m_client_system)
@@ -116,14 +124,23 @@ struct World
                 {
                     chunks_manager.break_block(block.world_cell);
                 }
-                else if (block.action == messages::BlockActionMessage::ActionType::Build)
+                else
                 {
                     chunks_manager.build_block(block.world_cell);
                 }
             };
+            systems::m_client_system->on_chunk_data = [this](const messages::ChunkDataMessage& chunk)
+            {
+                if (!chunk.data.empty())
+                {
+                    // chunks_manager.generator.deserialize_apply(chunk.sector, chunk.data);
+                    chunks_manager.chunks_to_sync.emplace_back(chunk.sector, std::move(chunk.data));
+                }
+            };
         }
 
-        chunks_manager.create();
+        const bool load_terrain = globals::server_mode ? true : false;
+        chunks_manager.create(load_terrain);
         return true;
     }
     void destroy() noexcept

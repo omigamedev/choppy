@@ -86,7 +86,6 @@ struct GamepadState
 
 class AppBase final
 {
-
     std::shared_ptr<xr::Context> m_xr;
     std::shared_ptr<vk::Context> m_vk;
     shaders::SolidFlatShader::PerFrameConstants uniform{};

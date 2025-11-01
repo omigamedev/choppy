@@ -8,6 +8,7 @@ module;
 export module ce.app:chunkgen;
 import :utils;
 import glm;
+import :serializer;
 
 export namespace ce::app
 {
@@ -172,6 +173,36 @@ public:
                 block = BlockType::Dirt;
         }
         return block;
+    }
+    [[nodiscard]] std::vector<uint8_t> serialize(const glm::ivec3& sector) const noexcept
+    {
+        serializer::MessageWriter w;
+        if (const auto it = m_edits.find(sector); it != m_edits.end())
+        {
+            const auto& map = it->second;
+            w.write<uint16_t>(map.size());
+            for (const auto& [cell, block] : map)
+            {
+                w.write(cell);
+                w.write(block);
+            }
+        }
+        return std::move(w.buffer);
+    }
+    void deserialize_apply(const glm::ivec3& sector, const std::vector<uint8_t>& data) noexcept
+    {
+        if (data.empty())
+            return;
+        serializer::MessageReader r(data);
+        auto& map = m_edits[sector];
+        map.clear();
+        const auto size = r.read<uint16_t>();
+        for (uint16_t i = 0; i < size; i++)
+        {
+            const auto cell = r.read<glm::u8vec3>();
+            const auto block = r.read<BlockType>();
+            map[cell] = block;
+        }
     }
     void edit(const glm::ivec3& sector, const glm::u8vec3& local_cell, const BlockType block_type) noexcept
     {

@@ -318,6 +318,8 @@ struct Chunk final
     ChunkData data;
     JPH::RefConst<JPH::Shape> shape;
     JPH::BodyID body_id;
+    bool net_sync = false;
+    bool net_requested = false;
     //uint32_t size = 0;
     //uint32_t height = 0;
     //uint32_t descriptor_set_index = 0;
