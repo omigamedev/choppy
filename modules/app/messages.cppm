@@ -184,7 +184,7 @@ struct WorldDataMessage
 struct BlockActionMessage
 {
     MessageType type = MessageType::BlockAction;
-    enum class ActionType : uint8_t { Build, Destroy } action;
+    enum class ActionType : uint8_t { Build, Break } action;
     glm::ivec3 world_cell;
     [[nodiscard]] std::vector<uint8_t> serialize() const noexcept
     {

@@ -3,9 +3,9 @@ module;
 #include <ranges>
 #include <string>
 #include <cstdio>
-#include <enet.h>
 #include <format>
 #include <unordered_map>
+#include <enet.h>
 #include <tracy/Tracy.hpp>
 #include <rtc/rtc.hpp>
 
@@ -39,7 +39,7 @@ class ClientSystem : utils::NoCopy
     std::vector<player::PlayerState> removed_players;
     std::future<bool> connect_result;
     bool try_connecting = false;
-    std::string address2str(const ENetAddress& address) const noexcept
+    [[nodiscard]] std::string address2str(const ENetAddress& address) const noexcept
     {
         char ipStr[INET6_ADDRSTRLEN] = {0};
         // ENetAddress can contain either IPv4 or IPv6.
@@ -52,6 +52,8 @@ public:
     glm::vec3 player_pos = glm::vec3(0, 0, 0);
     glm::quat player_rot = glm::gtc::identity<glm::quat>();
     glm::vec3 player_vel = glm::vec3(0, 0, 0);
+    std::function<void(const messages::BlockActionMessage&)> on_block_action;
+    [[nodiscard]] bool connected() const noexcept { return server != nullptr; }
     bool create_system() noexcept
     {
         if (enet_initialize() != 0)
@@ -110,7 +112,7 @@ public:
         {
             LOGI("Connection to %s succeeded.", address2str(address).c_str());
             server = event.peer;
-            send_message(server, ENET_PACKET_FLAG_RELIABLE, messages::JoinRequestMessage{
+            send_message(ENET_PACKET_FLAG_RELIABLE, messages::JoinRequestMessage{
                 .username = std::format("random_user_{}", rand())
             });
         }
@@ -142,11 +144,11 @@ public:
         enet_host_destroy(client);
     }
     template<typename T>
-    void send_message(ENetPeer* peer, const uint32_t enet_flags, const T& message) const noexcept
+    void send_message(const uint32_t enet_flags, const T& message) const noexcept
     {
         const auto buffer = message.serialize();
         ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
-        enet_peer_send(peer, 0, packet);
+        enet_peer_send(server, 0, packet);
         //LOGI("sent message of type: %s", messages::to_string(message.type));
     }
     template<typename T>
@@ -249,6 +251,16 @@ public:
                 }
             }
             break;
+        case messages::MessageType::BlockAction:
+            if (const auto block = messages::BlockActionMessage::deserialize(message))
+            {
+                LOGI("received block action: %d", block->action);
+                if (on_block_action)
+                {
+                    on_block_action(*block);
+                }
+            }
+            break;
         }
     }
     void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
@@ -273,7 +285,7 @@ public:
         if (server && update_timer > 0.03f && player_id > 0)
         {
             update_timer = 0.0f;
-            send_message(server, 0, messages::PlayerStateMessage{
+            send_message(0, messages::PlayerStateMessage{
                 .id = player_id,
                 .position = player_pos,
                 .rotation = player_rot,

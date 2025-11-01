@@ -37,7 +37,7 @@ class ServerSystem : utils::NoCopy
     uint32_t client_ids = 1;
     std::unordered_map<ENetPeer*, player::PlayerState> clients;
     std::vector<player::PlayerState> removed_players;
-    std::string address2str(const ENetAddress& address) const noexcept
+    [[nodiscard]] std::string address2str(const ENetAddress& address) const noexcept
     {
         char ipStr[INET6_ADDRSTRLEN] = {0};
         // ENetAddress can contain either IPv4 or IPv6.
@@ -50,6 +50,7 @@ public:
     glm::vec3 player_pos = glm::vec3(0, 0, 0);
     glm::quat player_rot = glm::gtc::identity<glm::quat>();
     glm::vec3 player_vel = glm::vec3(0, 0, 0);
+    std::function<void(const messages::BlockActionMessage&)> on_block_action;
     bool create_system() noexcept
     {
         if (enet_initialize() != 0)
@@ -125,6 +126,15 @@ public:
         const auto buffer = message.serialize();
         ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
         enet_peer_send(peer, 0, packet);
+        //LOGI("sent message of type: %s", messages::to_string(message.type));
+    }
+    template<typename T>
+    void broadcast_message(const uint32_t enet_flags, const T& message) const noexcept
+    {
+        const auto buffer = message.serialize();
+        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
+        for (ENetPeer* peer : std::views::keys(clients))
+            enet_peer_send(peer, 0, packet);
         //LOGI("sent message of type: %s", messages::to_string(message.type));
     }
     template<typename T>
@@ -212,32 +222,13 @@ public:
             }
             break;
         case messages::MessageType::BlockAction:
-            if (const auto action = messages::BlockActionMessage::deserialize(message))
+            if (const auto block = messages::BlockActionMessage::deserialize(message))
             {
-                if (action->action == messages::BlockActionMessage::ActionType::Build)
+                LOGI("received block action: %d", block->action);
+                if (on_block_action)
                 {
-                    /*
-                    generator.edit(sector, *cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
-                    std::lock_guard lock(m_chunks_mutex);
-                    if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
-                    {
-                        // auto blocks_data = generator.generate(sector);
-                        // auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                        // it->mesh = std::move(chunk_data);
-                        // it->data = std::move(blocks_data);
-                        // it->sector = sector;
-                        // it->dirty = true;
-                        // m_physics_system.remove_body(it->body_id);
-                        // if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, it->data, it->sector))
-                        // {
-                        //     std::tie(it->body_id, it->shape) = result.value();
-                        // }
-                        // needs_update = true;
-                        it->regenerate = true;
-                    }
-                    */
+                    on_block_action(*block);
                 }
-                LOGI("received block action: %d", action->action);
             }
             break;
         }

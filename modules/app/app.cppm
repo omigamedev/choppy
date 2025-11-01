@@ -17,6 +17,7 @@ module;
 #include <tracy/TracyC.h>
 #include <tracy/TracyVulkan.hpp>
 #include <Jolt/Jolt.h>
+#include <ecs/ecs.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -98,6 +99,7 @@ class AppBase final
     std::array<bool, 256> keys{false};
     uint32_t m_swapchain_count = 0;
     uint64_t m_timeline_value = 0;
+    ecs::Manager manager;
 
 public:
     ~AppBase()
@@ -178,7 +180,7 @@ public:
         else
         {
             systems::m_client_system->player_pos = m_world.m_camera.cam_pos;
-            systems::m_client_system->player_rot = glm::gtc::quat_cast(view);
+            systems::m_client_system->player_rot = glm::gtc::quat_cast(glm::inverse(view));
             systems::m_client_system->player_vel = glm::gtc::make_vec3(
                 m_world.m_player.character->GetLinearVelocity().mF32);
             systems::m_client_system->update(dt, frame, view);
@@ -335,7 +337,8 @@ public:
             action_physics_record = action_physics_record_new;
             if (action_physics_record)
             {
-                systems::m_physics_system->start_recording();
+                //systems::m_physics_system->start_recording();
+                LOGE("Jolt recording disabled - enable to use the feature");
             }
         }
         static bool action_frustum = false;
@@ -376,7 +379,6 @@ public:
             {
                 const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
                 m_world.chunks_manager.break_block(m_world.m_camera.cam_pos, forward);
-                // m_world.break_block()
             }
         }
 #ifdef _WIN32

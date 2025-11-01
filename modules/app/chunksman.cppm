@@ -11,6 +11,7 @@ module;
 #include <map>
 #include <mutex>
 
+#include <enet.h>
 #include <volk.h>
 #include <vk_mem_alloc.h>
 #include <tracy/Tracy.hpp>
@@ -27,10 +28,6 @@ module;
 #define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
 #endif
 
-#ifdef WIN32
-#include <windows.h>
-#endif
-
 export module ce.app:chunksman;
 import glm;
 import :globals;
@@ -38,6 +35,7 @@ import :frustum;
 import :chunkmesh;
 import :systems;
 import :physics;
+import :client;
 
 export namespace ce::app::chunksman
 {
@@ -429,71 +427,57 @@ struct ChunksManager
         if (const auto hit = trace_dda(origin, direction, 10.0,
             [](const BlockType b){ return b != BlockType::Air && b != BlockType::Water; }))
         {
-            const auto [cell, b, p, n] = hit.value();
-            const glm::ivec3 sector = glm::floor(glm::vec3(cell) / static_cast<float>(globals::ChunkSize));
-            //if (!m_server_mode)
-            // {
-            //     const messages::BlockActionMessage message{
-            //         .action = messages::BlockActionMessage::ActionType::Destroy,
-            //         .world_cell = cell
-            //     };
-            //     systems::m_client_system->send_message(message);
-            // }
-            /*
-            generator.remove(sector, cell - sector * static_cast<int32_t>(ChunkSize));
-            std::lock_guard lock(m_chunks_mutex);
-            if (auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
+            const auto [world_cell, b, p, n] = hit.value();
+            if (!globals::server_mode && systems::m_client_system->connected())
             {
-                // auto blocks_data = generator.generate(sector);
-                // auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                // it->mesh = std::move(chunk_data);
-                // it->data = std::move(blocks_data);
-                // it->sector = sector;
-                // it->dirty = true;
-                // m_physics_system.remove_body(it->body_id);
-                // if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, it->data, it->sector))
-                // {
-                //     std::tie(it->body_id, it->shape) = result.value();
-                // }
-                // needs_update = true;
-                it->regenerate = true;
+                const messages::BlockActionMessage message{
+                    .action = messages::BlockActionMessage::ActionType::Break,
+                    .world_cell = world_cell
+                };
+                systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, message);
             }
-            */
+            else
+            {
+                break_block(world_cell);
+            }
+        }
+    }
+    void break_block(const glm::ivec3& world_cell) noexcept
+    {
+        const glm::ivec3 sector = glm::floor(glm::vec3(world_cell) / static_cast<float>(globals::ChunkSize));
+        generator.remove(sector, world_cell - sector * static_cast<int32_t>(globals::ChunkSize));
+        std::lock_guard lock(m_chunks_mutex);
+        if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
+        {
+            it->regenerate = true;
         }
     }
     void build_block(const glm::vec3& origin, const glm::vec3& direction) noexcept
     {
-        if (const auto cell = build_block_cell(origin, direction))
+        if (const auto world_cell = build_block_cell(origin, direction))
         {
-            const glm::ivec3 sector = glm::floor(glm::vec3(*cell) / static_cast<float>(globals::ChunkSize));
-            //if (!m_server_mode)
-            // {
-            //     const messages::BlockActionMessage message{
-            //         .action = messages::BlockActionMessage::ActionType::Build,
-            //         .world_cell = cell.value()
-            //     };
-            //     systems::m_client_system->send_message(message);
-            // }
-            /*
-            generator.edit(sector, *cell - sector * static_cast<int32_t>(ChunkSize), BlockType::Dirt);
-            std::lock_guard lock(m_chunks_mutex);
-            if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
+            if (!globals::server_mode && systems::m_client_system->connected())
             {
-                // auto blocks_data = generator.generate(sector);
-                // auto chunk_data = mesher.mesh(blocks_data, BlockSize);
-                // it->mesh = std::move(chunk_data);
-                // it->data = std::move(blocks_data);
-                // it->sector = sector;
-                // it->dirty = true;
-                // m_physics_system.remove_body(it->body_id);
-                // if (auto result = m_physics_system.create_chunk_body(ChunkSize, BlockSize, it->data, it->sector))
-                // {
-                //     std::tie(it->body_id, it->shape) = result.value();
-                // }
-                // needs_update = true;
-                it->regenerate = true;
+                const messages::BlockActionMessage message{
+                    .action = messages::BlockActionMessage::ActionType::Build,
+                    .world_cell = *world_cell
+                };
+                systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, message);
             }
-            */
+            else
+            {
+                build_block(*world_cell);
+            }
+        }
+    }
+    void build_block(const glm::ivec3& world_cell) noexcept
+    {
+        const glm::ivec3 sector = glm::floor(glm::vec3(world_cell) / static_cast<float>(globals::ChunkSize));
+            generator.edit(sector, world_cell - sector * static_cast<int32_t>(globals::ChunkSize), BlockType::Dirt);
+        std::lock_guard lock(m_chunks_mutex);
+        if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
+        {
+            it->regenerate = true;
         }
     }
     std::optional<glm::ivec3> build_block_cell(const glm::vec3& origin, const glm::vec3& direction) const noexcept

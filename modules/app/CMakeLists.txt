@@ -15,9 +15,17 @@ FetchContent_Declare(miniaudio
 FetchContent_Declare(tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
     GIT_TAG c556831ddc6fe26d2fce01c14c97205a9dad46d5) # v0.12.2
+FetchContent_Declare(ecs
+    GIT_REPOSITORY https://github.com/martinstarkov/ecs.git
+    GIT_TAG main
+)
 FetchContent_Declare(enet
     GIT_REPOSITORY https://github.com/zpl-c/enet.git
     GIT_TAG 8647b6eaea881c86471ae29f732620d299fc20d7) # v2.6.5
+set(ENET_STATIC ON)
+set(ENET_SHARED OFF)
+set(ENET_TEST OFF)
+set(ENET_USE_MORE_PEERS ON)
 FetchContent_Declare(datachannel
     GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
     GIT_TAG 9e6a13abbb6846c003d817d0387b6706466e2b03) # v0.23.2
@@ -27,7 +35,7 @@ FetchContent_Declare(jolt
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
     GIT_TAG 036ea7b1d717b3e713ac9d8cbd47118fb9cd5d60) # v5.4.0
 
-FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet datachannel)
+FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet datachannel ecs)
 
 set(JOLT_PHYSICS_ROOT ${jolt_SOURCE_DIR}/Jolt)
 set(JOLT_PHYSICS_SRC_FILES
@@ -467,6 +475,9 @@ target_include_directories(perlin INTERFACE ${perlin_SOURCE_DIR})
 add_library(stb INTERFACE)
 target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
 
+add_library(ecs INTERFACE)
+target_include_directories(ecs INTERFACE "${ecs_SOURCE_DIR}/include")
+
 add_library(glmcppm OBJECT)
 target_link_libraries(glmcppm PUBLIC glm::glm)
 target_compile_definitions(glmcppm PUBLIC
@@ -497,7 +508,7 @@ endif()
 add_library(app OBJECT stb.cpp)
 target_link_libraries(app PUBLIC
     platform xr vk glmcppm shaders perlin
-    jolt miniaudio enet_static datachannel)
+    jolt miniaudio enet_static datachannel ecs)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES
@@ -508,7 +519,7 @@ target_sources(app PUBLIC
         chunksman.cppm
         frustum.cppm
         player.cppm
-        ecs.cppm
+        # ecs.cppm
         audio.cppm
         server.cppm
         client.cppm

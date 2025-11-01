@@ -31,7 +31,6 @@ module;
 
 export module ce.app:physics;
 import glm;
-import :ecs;
 import :chunkgen;
 import :globals;
 
@@ -165,7 +164,7 @@ public:
 		LOGI("A body went to sleep");
 	}
 };
-class PhysicsSystem : public ecs::System
+class PhysicsSystem
 {
 	std::unique_ptr<JPH::JobSystemThreadPool> job_system;
 	std::unique_ptr<JPH::TempAllocatorImpl> temp_allocator;

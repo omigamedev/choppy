@@ -11,6 +11,7 @@ module;
 #include <map>
 #include <mutex>
 
+#include <enet.h>
 #include <volk.h>
 #include <vk_mem_alloc.h>
 #include <tracy/Tracy.hpp>
@@ -90,6 +91,36 @@ struct World
             m_vk->exec_immediate("init world resources", [this](VkCommandBuffer cmd){
                 globals::m_resources->exec_copy_buffers(cmd);
             });
+        }
+
+        if (systems::m_server_system)
+        {
+            systems::m_server_system->on_block_action = [this](const messages::BlockActionMessage& block)
+            {
+                systems::m_server_system->broadcast_message(ENET_PACKET_FLAG_RELIABLE, block);
+                if (block.action == messages::BlockActionMessage::ActionType::Break)
+                {
+                    chunks_manager.break_block(block.world_cell);
+                }
+                else if (block.action == messages::BlockActionMessage::ActionType::Build)
+                {
+                    chunks_manager.build_block(block.world_cell);
+                }
+            };
+        }
+        if (systems::m_client_system)
+        {
+            systems::m_client_system->on_block_action = [this](const messages::BlockActionMessage& block)
+            {
+                if (block.action == messages::BlockActionMessage::ActionType::Break)
+                {
+                    chunks_manager.break_block(block.world_cell);
+                }
+                else if (block.action == messages::BlockActionMessage::ActionType::Build)
+                {
+                    chunks_manager.build_block(block.world_cell);
+                }
+            };
         }
 
         chunks_manager.create();
@@ -244,8 +275,10 @@ struct World
                 {
                     if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
                     {
-                        glm::mat4 transform = glm::gtc::translate(player.position) *
-                            glm::gtc::mat4_cast(player.rotation);
+                        const glm::mat4 transform = glm::gtc::translate(player.position) *
+                            glm::gtc::mat4_cast(player.rotation) *
+                            glm::gtc::scale(glm::vec3(.25f)) *
+                            glm::gtc::translate(glm::vec3(-.5f));
                         *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
                             .ObjectTransform = glm::transpose(transform),
                             .Color = {1, 0, 0, 1}
@@ -276,8 +309,10 @@ struct World
                 {
                     if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
                     {
-                        glm::mat4 transform = glm::gtc::translate(player.position) *
-                            glm::gtc::mat4_cast(player.rotation);
+                        const glm::mat4 transform = glm::gtc::translate(player.position) *
+                            glm::gtc::mat4_cast(player.rotation) *
+                            glm::gtc::scale(glm::vec3(.25f)) *
+                            glm::gtc::translate(glm::vec3(-.5f));
                         *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
                             .ObjectTransform = glm::transpose(transform),
                             .Color = {1, 0, 0, 1}
@@ -378,7 +413,7 @@ struct World
 
             if (systems::m_server_system)
             {
-                for (auto& player : systems::m_server_system->get_players())
+                for (const auto& player : systems::m_server_system->get_players())
                 {
                     const std::array sets{shader_color_frame_set, player.cube.object_descriptor_set};
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -389,7 +424,7 @@ struct World
             }
             if (systems::m_client_system)
             {
-                for (auto& player : systems::m_client_system->get_players())
+                for (const auto& player : systems::m_client_system->get_players())
                 {
                     const std::array sets{shader_color_frame_set, player.cube.object_descriptor_set};
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
