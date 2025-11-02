@@ -138,9 +138,7 @@ struct World
                 }
             };
         }
-
-        const bool load_terrain = globals::server_mode ? true : false;
-        chunks_manager.create(load_terrain);
+        chunks_manager.create();
         return true;
     }
     void destroy() noexcept

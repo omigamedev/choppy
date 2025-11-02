@@ -268,7 +268,7 @@ public:
 	            for (uint32_t x = 0; x < chunk_size; ++x)
 	            {
 	                const auto& b = data.blocks[y * pow(chunk_size, 2) + z * chunk_size + x];
-	                if (b.type != BlockType::Water && b.type != BlockType::Air)
+	                if (b.type != BlockType::Water && b.type != BlockType::Air && b.face_mask != 0)
 	                {
 	                    const glm::vec3 p = glm::vec3(x, y, z) * block_size + block_size * 0.5f;
 	                    const JPH::Vec3 position = JPH::Vec3(p.x, p.y, p.z);

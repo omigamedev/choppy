@@ -336,8 +336,9 @@ public:
             action_physics_record = action_physics_record_new;
             if (action_physics_record)
             {
-                //systems::m_physics_system->start_recording();
-                LOGE("Jolt recording disabled - enable to use the feature");
+                LOGI("Jolt recording started");
+                systems::m_physics_system->start_recording();
+                //LOGE("Jolt recording disabled - enable to use the feature");
             }
         }
         static bool action_frustum = false;

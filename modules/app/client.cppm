@@ -29,7 +29,7 @@ export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
 {
-    static constexpr std::string_view ServerHost = "192.168.1.62";
+    static constexpr std::string_view ServerHost = "192.168.1.63";
     static constexpr uint16_t ServerPort = 7777;
     static constexpr uint16_t WebSoketPort = 7778;
     std::shared_ptr<rtc::WebSocket> ws;

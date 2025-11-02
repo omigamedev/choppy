@@ -77,9 +77,9 @@ struct ChunksManager
     glm::vec3 cam_pos = { 0, 100, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
 
-    bool create(const bool load_terrain) noexcept
+    bool create() noexcept
     {
-        if (load_terrain)
+        if (globals::server_mode)
             generator.load();
         m_chunks_thread = std::thread(&ChunksManager::generate_thread, this);
         return true;
@@ -98,7 +98,8 @@ struct ChunksManager
         m_running = false;
         if (m_chunks_thread.joinable())
             m_chunks_thread.join();
-        generator.save();
+        if (globals::server_mode)
+            generator.save();
         for (auto& c : m_chunks)
         {
             for (auto& [k, b] : c.buffer)

@@ -55,9 +55,9 @@ public:
         const ChunkData& data, const float block_size) const noexcept = 0;
 };
 
-bool operator&(Block::Mask lhs, Block::Mask rhs)
+bool operator&(const uint8_t lhs, const Block::Mask rhs)
 {
-    return static_cast<uint8_t>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
+    return lhs & static_cast<uint8_t>(rhs);
 }
 
 /// @brief Packs vertex data into a single 32-bit integer.

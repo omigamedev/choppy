@@ -67,8 +67,10 @@ const std::unordered_map<BlockType, BlockMaterial> materials {
 struct Block final
 {
     BlockType type;
-    enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, L = 16, R = 32 } face_mask;
     enum class FaceIndex : uint8_t { U, D, F, B, L, R };
+    enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, L = 16, R = 32 };
+    // Bits mask using Block::Mask enum
+    uint8_t face_mask = 0;
 };
 struct ChunkData final
 {
@@ -327,7 +329,7 @@ public:
                         }
                     }
                     // const BlockType type = mask == 0 ? BlockType::Air : C;
-                    blocks.emplace_back(C, static_cast<Block::Mask>(mask));
+                    blocks.emplace_back(C, mask);
                     full |= C != BlockType::Air;
                 }
             }
