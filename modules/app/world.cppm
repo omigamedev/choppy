@@ -384,7 +384,7 @@ struct World
     }
     void render(const float dt, VkCommandBuffer cmd) noexcept
     {
-        if (chunks_manager.m_chunks_state.size() > 1)
+        if (chunks_manager.m_chunks_state.size() > 0)
         {
             const std::vector layers{
                 std::pair(shaders::shader_opaque, chunks_manager.m_chunks_state[BlockLayer::Solid]),

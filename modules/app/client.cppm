@@ -52,6 +52,7 @@ public:
     glm::vec3 player_pos = glm::vec3(0, 0, 0);
     glm::quat player_rot = glm::gtc::identity<glm::quat>();
     glm::vec3 player_vel = glm::vec3(0, 0, 0);
+    std::function<void()> on_connected;
     std::function<void(const messages::BlockActionMessage&)> on_block_action;
     std::function<void(const messages::ChunkDataMessage&)> on_chunk_data;
     [[nodiscard]] bool connected() const noexcept { return server != nullptr; }

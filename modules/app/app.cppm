@@ -8,7 +8,6 @@ module;
 #include <concepts>
 #include <functional>
 #include <thread>
-#include <map>
 #include <mutex>
 
 #include <volk.h>
@@ -18,6 +17,7 @@ module;
 #include <tracy/TracyVulkan.hpp>
 #include <Jolt/Jolt.h>
 #include <ecs/ecs.h>
+#include <entityx/entityx.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -99,6 +99,7 @@ class AppBase final
     uint32_t m_swapchain_count = 0;
     uint64_t m_timeline_value = 0;
     ecs::Manager manager;
+    entityx::EntityX ex;
 
 public:
     ~AppBase()

@@ -74,13 +74,15 @@ struct ChunksManager
     std::vector<std::pair<glm::ivec3, std::vector<uint8_t>>> chunks_to_sync;
     bool m_running = true;
     Frustum m_frustum;
-    glm::vec3 cam_pos = { 0, 100, 0 };
+    glm::vec3 cam_pos = { 0, 10, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
 
     bool create() noexcept
     {
         if (globals::server_mode)
             generator.load();
+        if (generate_chunks(3))
+            needs_update.store(true);
         m_chunks_thread = std::thread(&ChunksManager::generate_thread, this);
         return true;
     }
@@ -89,7 +91,7 @@ struct ChunksManager
         tracy::SetThreadName("generate_thread");
         while (m_running)
         {
-            if (generate_chunks())
+            if (generate_chunks(1))
                 needs_update.store(true);
         }
     }
@@ -128,19 +130,19 @@ struct ChunksManager
         }
         return neighbors;
     }
-    [[nodiscard]] bool generate_chunks() noexcept
+    [[nodiscard]] bool generate_chunks(uint32_t chunks_to_generate) noexcept
     {
         constexpr uint32_t chunk_count =
             (globals::ChunkRings * 2 + 1) * (globals::ChunkRings * 2 + 1) * (3);
 
-        const glm::vec3 cur_sector =
+        const glm::ivec3 cur_sector =
             glm::floor(cam_pos / (globals::ChunkSize * globals::BlockSize));
 
         auto neighbors = generate_neighbors(cur_sector, globals::ChunkRings);
         std::ranges::sort(neighbors, [cur_sector](const glm::ivec3 a, const glm::ivec3 b)
         {
-            const float dist1 = glm::gtx::distance2(glm::vec3(a), cur_sector);
-            const float dist2 = glm::gtx::distance2(glm::vec3(b), cur_sector);
+            const float dist1 = glm::gtx::distance2(glm::vec3(a), glm::vec3(cur_sector));
+            const float dist2 = glm::gtx::distance2(glm::vec3(b), glm::vec3(cur_sector));
             return dist1 < dist2;
         });
 
@@ -158,12 +160,12 @@ struct ChunksManager
         //const glm::vec3 dist = glm::abs(cur_sector - glm::vec3(m_player.cam_sector));
         if (m_chunks.size() < chunk_count ||
             !chunk_indices.empty() ||
-            cam_sector != glm::ivec3(glm::floor(cur_sector)))
+            cam_sector != cur_sector)
         {
             cam_sector = cur_sector;
             if (m_chunks.size() < chunk_count)
             {
-                LOGI("Loading world: %d%%",
+                LOGI("Loading world: %d%%\r",
                     static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
             }
             else
@@ -178,7 +180,6 @@ struct ChunksManager
         ZoneScoped;
 
         size_t chunk_indices_offset = 0;
-        uint32_t chunks_to_generate = 1;
         std::lock_guard lock(m_chunks_mutex);
         for (const auto& sector : neighbors)
         {
