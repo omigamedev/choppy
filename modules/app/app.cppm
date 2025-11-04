@@ -202,7 +202,7 @@ public:
                 }
                 else
                 {
-                    m_vk->init_resources(cmd);
+                    m_vk->init_swapchain(cmd);
                 }
             });
         }
@@ -573,6 +573,7 @@ public:
     {
         LOGI("resize %d %d", width, height);
         m_size = { width, height };
+        // m_vk->resize_swapchain();
     }
     void on_mouse_wheel(const int32_t x, const int32_t y, const float delta) noexcept
     {

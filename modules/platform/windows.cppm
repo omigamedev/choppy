@@ -19,7 +19,7 @@ class Win32Window final : public Window
 {
     HWND m_hWnd = nullptr;
     friend LRESULT CALLBACK ::WindowProc(HWND hwnd, const UINT uMsg, const WPARAM wParam, const LPARAM lParam);
-    LRESULT HandleWindowProc(HWND hWnd, const UINT uMsg, const WPARAM wParam, const LPARAM lParam) const
+    LRESULT HandleWindowProc(HWND hWnd, const UINT uMsg, const WPARAM wParam, const LPARAM lParam)
     {
         switch (uMsg)
         {
@@ -34,6 +34,8 @@ class Win32Window final : public Window
             {
                 const int32_t x = GET_X_LPARAM(lParam);
                 const int32_t y = GET_Y_LPARAM(lParam);
+                m_width = x;
+                m_height = y;
                 on_resize(x, y);
             }
             break;

@@ -53,6 +53,7 @@ class Context final
     VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;
     VkPhysicalDeviceLimits m_physical_device_limits = {};
 
+    glm::uvec2 m_swapchain_size{};
     std::vector<VkImage> m_color_swapchain_images;
     std::vector<VkImageView> m_color_swapchain_views;
     VkImage m_color_image = VK_NULL_HANDLE;
@@ -73,6 +74,9 @@ class Context final
     VkSemaphore m_timeline_semaphore = VK_NULL_HANDLE;
     uint64_t m_timeline_counter = 0;
     std::vector<uint64_t> m_timeline_values;
+
+    bool resize_needed = false;
+    uint64_t resize_timeline = 0;
 
     std::shared_ptr<platform::Window> m_window;
     uint32_t m_queue_family_index = std::numeric_limits<uint32_t>::max();
@@ -173,15 +177,13 @@ public:
     }
     [[nodiscard]] VkViewport viewport() const noexcept
     {
-        const auto [width, height] = m_window->size();
         return VkViewport{0, 0,
-            static_cast<float>(width),
-            static_cast<float>(height), 0, 1};
+            static_cast<float>(m_swapchain_size.x),
+            static_cast<float>(m_swapchain_size.y), 0, 1};
     }
     [[nodiscard]] VkRect2D scissor() const noexcept
     {
-        const auto [width, height] = m_window->size();
-        return VkRect2D{0, 0, width, height};
+        return VkRect2D{0, 0, m_swapchain_size.x, m_swapchain_size.y};
     }
     bool create_from(VkInstance instance, VkDevice device,
         VkPhysicalDevice physical_device, uint32_t queue_family_index) noexcept
@@ -471,6 +473,184 @@ public:
 
         return create_vulkan_objects();
     }
+    void destroy_swapchain() noexcept
+    {
+        vkDeviceWaitIdle(m_device);
+        m_swapchain_size = { 0, 0 };
+        vkDestroyImageView(m_device, m_depth_view, nullptr);
+        m_depth_view = VK_NULL_HANDLE;
+        vmaDestroyImage(m_vma, m_depth_image, m_depth_allocation);
+        m_depth_image = VK_NULL_HANDLE;
+        m_depth_allocation = VK_NULL_HANDLE;
+        m_depth_allocation_info = VmaAllocationInfo{};
+        vkDestroyImageView(m_device, m_color_view, nullptr);
+        m_color_view = VK_NULL_HANDLE;
+        vmaDestroyImage(m_vma, m_color_image, m_color_allocation);
+        m_color_image = VK_NULL_HANDLE;
+        m_color_allocation = VK_NULL_HANDLE;
+        m_color_allocation_info = VmaAllocationInfo{};
+        for (VkImageView view : m_color_swapchain_views)
+        {
+            vkDestroyImageView(m_device, view, nullptr);
+        }
+        m_color_swapchain_views.clear();
+        m_color_swapchain_images.clear();
+        vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+        m_swapchain = VK_NULL_HANDLE;
+    }
+    bool resize_swapchain() noexcept
+    {
+        destroy_swapchain();
+        const auto [width, height] = m_window->size();
+        m_swapchain_size = { width, height };
+        const VkSwapchainCreateInfoKHR create_info{
+            .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .surface = m_surface,
+            .minImageCount = 3,
+            .imageFormat = m_color_format,
+            .imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+            .imageExtent = VkExtent2D{width, height},
+            .imageArrayLayers = 1,
+            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+            .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .presentMode = VK_PRESENT_MODE_FIFO_KHR,
+            .clipped = true,
+            .oldSwapchain = VK_NULL_HANDLE,
+        };
+        if (const VkResult result = vkCreateSwapchainKHR(m_device, &create_info, nullptr, &m_swapchain);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create Vulkan swapchain: %s", utils::to_string(result));
+            return false;
+        }
+        m_color_swapchain_images = [this]{
+            uint32_t count = 0;
+            vkGetSwapchainImagesKHR(m_device, m_swapchain, &count, nullptr);
+            std::vector<VkImage> images(count);
+            vkGetSwapchainImagesKHR(m_device, m_swapchain, &count, images.data());
+            return images;
+        }();
+        m_color_swapchain_views.reserve(m_color_swapchain_images.size());
+        for (VkImage image : m_color_swapchain_images)
+        {
+            debug_name("color_swapchain", image);
+            VkImageView& view = m_color_swapchain_views.emplace_back();
+            // Color
+            const VkImageViewCreateInfo color_create_info{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+				.image = image,
+				.viewType = VK_IMAGE_VIEW_TYPE_2D,
+				.format = m_color_format,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1
+                }
+            };
+            if (const VkResult result = vkCreateImageView(m_device, &color_create_info, nullptr, &view);
+                result != VK_SUCCESS)
+            {
+                LOGE("Failed to create Vulkan image view: %s", utils::to_string(result));
+                return false;
+            }
+            debug_name("color_swapchain_view", view);
+        }
+        // Multisampled color image
+        VkImageCreateInfo color_image_create_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = m_color_format,
+            .extent = VkExtent3D{width, height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = samples_count(),
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo color_memory_info{
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        if (const VkResult result = vmaCreateImage(m_vma, &color_image_create_info, &color_memory_info,
+            &m_color_image, &m_color_allocation, &m_color_allocation_info); result != VK_SUCCESS)
+        {
+            LOGE("vmaCreateImage failed: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("color_msaa_image", m_color_image);
+        const VkImageViewCreateInfo color_view_create_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = m_color_image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = m_color_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        if (const VkResult result = vkCreateImageView(m_device, &color_view_create_info, nullptr, &m_color_view);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create Vulkan image view: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("color_msaa_view", m_color_view);
+        // Multisampled depth image
+        VkImageCreateInfo depth_image_create_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = m_depth_format,
+            .extent = VkExtent3D{width, height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = samples_count(),
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo depth_memory_info{
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        if (const VkResult result = vmaCreateImage(m_vma, &depth_image_create_info, &depth_memory_info,
+            &m_depth_image, &m_depth_allocation, &m_depth_allocation_info); result != VK_SUCCESS)
+        {
+            LOGE("vmaCreateImage failed: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("depth_msaa_image", m_depth_image);
+        const VkImageViewCreateInfo depth_view_create_info{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = m_depth_image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = m_depth_format,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        if (const VkResult result = vkCreateImageView(m_device, &depth_view_create_info, nullptr, &m_depth_view);
+            result != VK_SUCCESS)
+        {
+            LOGE("Failed to create Vulkan image view: %s", utils::to_string(result));
+            return false;
+        }
+        debug_name("depth_msaa_view", m_depth_view);
+        exec("init_swapchain_recreate", [this](VkCommandBuffer cmd)
+        {
+            init_swapchain(cmd);
+        });
+        return true;
+    }
     bool create_swapchain() noexcept
     {
         constexpr std::array desired_color_formats{
@@ -488,6 +668,7 @@ public:
         m_color_format = utils::find_format(m_physical_device, desired_color_formats,
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
         const auto [width, height] = m_window->size();
+        m_swapchain_size = { width, height };
         const VkSwapchainCreateInfoKHR create_info{
             .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
             .surface = m_surface,
@@ -912,15 +1093,19 @@ public:
         debug_name("ce_windowedrenderpass", m_renderpass);
         return true;
     }
+    void destroy_framebuffer() noexcept
+    {
+        vkDestroyFramebuffer(m_device, m_framebuffer, nullptr);
+        m_framebuffer = VK_NULL_HANDLE;
+    }
     bool create_framebuffer() noexcept
     {
-        const auto [width, height] = m_window->size();
         const std::array attachment_images_info{
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                .width = width,
-                .height = height,
+                .width = m_swapchain_size.x,
+                .height = m_swapchain_size.y,
                 .layerCount = 1,
                 .viewFormatCount = 1,
                 .pViewFormats = &m_color_format,
@@ -928,8 +1113,8 @@ public:
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
                 .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                .width = width,
-                .height = height,
+                .width = m_swapchain_size.x,
+                .height = m_swapchain_size.y,
                 .layerCount = 1,
                 .viewFormatCount = 1,
                 .pViewFormats = &m_depth_format,
@@ -937,8 +1122,8 @@ public:
             VkFramebufferAttachmentImageInfo{
                 .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO,
                 .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                .width = width,
-                .height = height,
+                .width = m_swapchain_size.x,
+                .height = m_swapchain_size.y,
                 .layerCount = 1,
                 .viewFormatCount = 1,
                 .pViewFormats = &m_color_format,
@@ -955,8 +1140,8 @@ public:
             .flags = VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT,  // Key flag
             .renderPass = m_renderpass,
             .attachmentCount = static_cast<uint32_t>(attachment_images_info.size()),
-            .width = width,
-            .height = height,
+            .width = m_swapchain_size.x,
+            .height = m_swapchain_size.y,
             .layers = 1, // must be one if multiview is used
         };
         if (const VkResult result = vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffer);
@@ -968,7 +1153,7 @@ public:
         debug_name("ce_framebuffer", m_framebuffer);
         return true;
     }
-    void init_resources(VkCommandBuffer cmd) const noexcept
+    void init_swapchain(VkCommandBuffer cmd) const noexcept
     {
         std::vector barriers{
             VkImageMemoryBarrier{
@@ -1036,6 +1221,23 @@ public:
             vkWaitSemaphores(m_device, &wait_info, UINT64_MAX);
         }
 
+        if (resize_needed)
+        {
+            resize_needed = false;
+            ZoneScopedN("wait semaphores for resize");
+            ZoneValue(resize_timeline);
+            const VkSemaphoreWaitInfo wait_info{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                .semaphoreCount = 1,
+                .pSemaphores = &m_timeline_semaphore,
+                .pValues = &resize_timeline,
+            };
+            vkWaitSemaphores(m_device, &wait_info, UINT64_MAX);
+            resize_swapchain();
+            destroy_framebuffer();
+            create_framebuffer();
+        }
+
         m_timeline_values[m_present_index] = ++m_timeline_counter;
         ZoneValue(m_timeline_values[m_present_index]);
 
@@ -1049,10 +1251,9 @@ public:
             }
         }
 
-        const auto [width, height] = m_window->size();
         utils::FrameContext frame{
             .cmd = VK_NULL_HANDLE,
-            .size = {width, height},
+            .size = {m_swapchain_size.x, m_swapchain_size.y},
             .color_image = m_color_image,
             .depth_image = m_depth_image,
             .resolve_color_image = m_color_swapchain_images[swapchain_index],
@@ -1118,6 +1319,8 @@ public:
                 result != VK_SUCCESS)
             {
                 LOGE("vkQueuePresentKHR failed: %s", utils::to_string(result));
+                resize_needed = true;
+                resize_timeline = m_timeline_values[m_present_index];
             }
             FrameMark;
         }

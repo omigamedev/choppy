@@ -57,6 +57,7 @@ class WindowsContext
     HWND m_wnd = nullptr;
     bool initialized = false;
     bool headless = false;
+    bool minimized = false;
     std::shared_ptr<ce::platform::Win32Window> m_window;
     IGameInput* gameInput = nullptr;
     IGameInputDevice* device = nullptr;
@@ -135,6 +136,11 @@ public:
                 if (width != 0 && height != 0)
                 {
                     app.on_resize(width, height);
+                    minimized = false;
+                }
+                else
+                {
+                    minimized = true;
                 }
             };
             m_window->on_mouse_move = [this](const int32_t x, const int32_t y)
@@ -251,7 +257,8 @@ public:
                 const auto current_time = std::chrono::high_resolution_clock::now();
                 const float delta_time = std::chrono::duration<float>(current_time - start_time).count();
                 start_time = current_time;
-                app.tick(delta_time, gamepad);
+                if (!minimized)
+                    app.tick(delta_time, gamepad);
             }
         }
     }
