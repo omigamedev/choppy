@@ -84,6 +84,50 @@ struct GamepadState
     float trigger_right{0};
 };
 
+struct TransformComponent
+{
+    glm::vec3 position;
+    glm::quat rotation;
+    glm::vec3 scale;
+};
+
+struct AppStartedEvent : public entityx::Event<AppStartedEvent>
+{
+
+};
+
+class AppSystem final : public entityx::System<AppSystem>, public entityx::Receiver<AppSystem>
+{
+public:
+    void update(entityx::EntityManager& entities, entityx::EventManager& events, entityx::TimeDelta dt) override
+    {
+        //LOGI("AppSystem update");
+    }
+
+    void configure(entityx::EntityManager& entities, entityx::EventManager& events) override
+    {
+        events.subscribe<entityx::EntityCreatedEvent>(*this);
+        events.subscribe<entityx::ComponentAddedEvent<TransformComponent>>(*this);
+        events.subscribe<AppStartedEvent>(*this);
+        LOGI("AppSystem configure");
+    }
+
+    void receive(const entityx::EntityCreatedEvent& event) noexcept
+    {
+        LOGI("AppSystem received: entity create event");
+    }
+
+    void receive(const entityx::ComponentAddedEvent<TransformComponent>& event) noexcept
+    {
+        LOGI("AppSystem received: added TransformComponent event");
+    }
+
+    void receive(const AppStartedEvent& event) noexcept
+    {
+        LOGI("AppSystem received: app started event");
+    }
+};
+
 class AppBase final
 {
     std::shared_ptr<xr::Context> m_xr;
@@ -164,6 +208,11 @@ public:
         }
         systems::create_systems();
         m_world.create(m_vk);
+        ex.systems.add<AppSystem>();
+        ex.systems.configure();
+        entityx::Entity ent = ex.entities.create();
+        ent.assign<TransformComponent>();
+        ex.events.emit(AppStartedEvent{});
     }
     void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
     {
@@ -187,6 +236,7 @@ public:
         }
         m_world.update(dt, frame, view);
         shaders::update_descriptors();
+        ex.systems.update_all(dt);
     }
     void render(const vk::utils::FrameContext& frame, const float dt, VkCommandBuffer cmd) noexcept
     {
