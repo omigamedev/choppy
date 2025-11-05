@@ -68,6 +68,7 @@ struct World
     player::PlayerState m_player{};
     player::PlayerCamera m_camera{};
     resources::Geometry m_cube;
+    std::vector<resources::Geometry> m_obj_meshes;
 
     vk::BufferSuballocation shader_flat_frame{};
     vk::BufferSuballocation shader_color_frame{};
@@ -139,6 +140,16 @@ struct World
             };
         }
         chunks_manager.create();
+
+        if (const auto result = globals::m_resources->load_obj<shaders::SolidColorShader::VertexInput>(
+            "assets/models/tr-and-d-issue-43.obj"))
+        {
+            m_obj_meshes = result.value();
+        }
+        else
+        {
+            LOGE("failed to load cube.obj");
+        }
         return true;
     }
     void destroy() noexcept
@@ -146,6 +157,11 @@ struct World
         if (m_vk)
         {
             globals::m_resources->destroy_geometry(m_cube, 0);
+            for (auto& geo : m_obj_meshes)
+            {
+                globals::m_resources->destroy_geometry(geo, 0);
+            }
+            m_obj_meshes.clear();
         }
         m_player.destroy();;
         chunks_manager.destroy();
@@ -350,6 +366,35 @@ struct World
                 }
             }
         }
+        // update OBJ meshes
+        for (auto& geo : m_obj_meshes)
+        {
+            if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+            {
+                if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
+                {
+                    const glm::mat4 transform = glm::gtc::identity<glm::mat4>();
+                    *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                        .ObjectTransform = glm::transpose(transform),
+                        .Color = {1, 0, 0, 1}
+                    };
+                    globals::m_resources->copy_buffers.emplace_back(globals::m_resources->object_buffer, *sb, dst_sb->offset);
+                    geo.uniform_buffer = *dst_sb;
+                    globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                        std::pair(std::ref(globals::m_resources->object_buffer), *dst_sb));
+                }
+                // defer suballocation deletion
+                globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                    std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
+            }
+            if (const auto set = shaders::shader_color->alloc_descriptor(frame.present_index, 1))
+            {
+                geo.object_descriptor_set = *set;
+                shaders::shader_color->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
+                    geo.uniform_buffer.offset, geo.uniform_buffer.size,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+            }
+        }
     }
     void tick(const float dt) noexcept
     {
@@ -448,6 +493,29 @@ struct World
                     vkCmdDraw(cmd, player.cube.vertex_count, 1, 0, 0);
                 }
             }
+        }
+
+        // draw OBJ
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shaders::shader_color->pipeline());
+            vkCmdSetLineWidth(cmd, 2.f);
+            vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+            //vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_LINE);
+
+            const std::array vertex_buffers{globals::m_resources->vertex_buffer.buffer()};
+
+            for (const auto& geo : m_obj_meshes)
+            {
+                const std::array vertex_buffers_offset{geo.vertex_buffer.offset};
+                vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
+                    vertex_buffers.data(), vertex_buffers_offset.data());
+
+                const std::array sets{shader_color_frame_set, geo.object_descriptor_set};
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+
+                vkCmdDraw(cmd, geo.vertex_count, 1, 0, 0);
+           }
         }
     }
 };

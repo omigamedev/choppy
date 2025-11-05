@@ -19,6 +19,10 @@ FetchContent_Declare(ecs
     GIT_REPOSITORY https://github.com/martinstarkov/ecs.git
     GIT_TAG main
 )
+FetchContent_Declare(tinyobjloader
+    GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+    GIT_TAG release
+)
 FetchContent_Declare(entityx
     GIT_REPOSITORY https://github.com/alecthomas/entityx.git
     GIT_TAG master
@@ -41,7 +45,7 @@ FetchContent_Declare(jolt
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
     GIT_TAG 036ea7b1d717b3e713ac9d8cbd47118fb9cd5d60) # v5.4.0
 
-FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet datachannel ecs entityx)
+FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet datachannel ecs entityx tinyobjloader)
 
 set(JOLT_PHYSICS_ROOT ${jolt_SOURCE_DIR}/Jolt)
 set(JOLT_PHYSICS_SRC_FILES
@@ -511,10 +515,10 @@ else()
         ${CMAKE_BINARY_DIR}/assets)
 endif()
 
-add_library(app OBJECT stb.cpp)
+add_library(app OBJECT stb.cpp obj.cpp)
 target_link_libraries(app PUBLIC
     platform xr vk glmcppm shaders perlin
-    jolt miniaudio enet_static datachannel ecs entityx)
+    jolt miniaudio enet_static datachannel ecs entityx tinyobjloader)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES

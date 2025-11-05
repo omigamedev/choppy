@@ -7,6 +7,7 @@ module;
 #include <volk.h>
 #include <vk_mem_alloc.h>
 #include <tracy/Tracy.hpp>
+#include <tiny_obj_loader.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -26,6 +27,8 @@ import glm;
 import ce.vk;
 import ce.vk.buffer;
 import ce.vk.texture;
+import ce.platform.globals;
+import ce.shaders.solidcolor;
 import :utils;
 
 export namespace ce::app::resources
@@ -38,7 +41,15 @@ struct Geometry
     vk::BufferSuballocation vertex_buffer{};
     vk::BufferSuballocation uniform_buffer{};
     uint32_t vertex_count = 0;
-    // void destroy() noexcept;
+};
+struct IndexedGeometry
+{
+    VulkanResources* vkr = nullptr;
+    VkDescriptorSet object_descriptor_set = VK_NULL_HANDLE;
+    vk::BufferSuballocation vertex_buffer{};
+    vk::BufferSuballocation index_buffer{};
+    vk::BufferSuballocation uniform_buffer{};
+    uint32_t indices_count = 0;
 };
 struct VulkanResources : utils::NoCopy
 {
@@ -130,7 +141,8 @@ struct VulkanResources : utils::NoCopy
         }
         delete_buffers = std::move(not_deleted);
     }
-    template<typename ShaderType> [[nodiscard]] Geometry create_cube() noexcept
+    template<typename ShaderType>
+    [[nodiscard]] Geometry create_cube() noexcept
     {
         ZoneScoped;
         Geometry cube{this};
@@ -181,7 +193,7 @@ struct VulkanResources : utils::NoCopy
         {
             if (const auto dst_sb = vertex_buffer.suballoc(sb->size, 64))
             {
-                std::ranges::copy(vertices, static_cast<ShaderType::VertexInput*>(sb->ptr));
+                std::ranges::copy(vertices, static_cast<typename ShaderType::VertexInput*>(sb->ptr));
                 copy_buffers.emplace_back(vertex_buffer, *sb, dst_sb->offset);
                 cube.vertex_buffer = *dst_sb;
             }
@@ -198,6 +210,76 @@ struct VulkanResources : utils::NoCopy
             std::pair(std::ref(vertex_buffer), geo.vertex_buffer));
         geo.uniform_buffer.alloc = VK_NULL_HANDLE;
         geo.vertex_buffer.alloc = VK_NULL_HANDLE;
+    }
+    template<typename ShaderType>
+    [[nodiscard]] std::optional<std::vector<Geometry>> load_obj(const std::string& asset_path) noexcept
+    {
+        ZoneScoped;
+        const auto& p = platform::GetPlatform();
+        if (const auto result = p.read_file(asset_path))
+        {
+            tinyobj::ObjReaderConfig reader_config;
+            tinyobj::ObjReader reader;
+
+            if (const std::string data(result->data(), result->data() + result->size());
+                !reader.ParseFromString(data, {}, reader_config))
+            {
+                if (!reader.Error().empty())
+                {
+                    LOGE("TinyObjReader: %s", reader.Error().c_str());
+                }
+                return std::nullopt;
+            }
+
+            if (!reader.Warning().empty())
+            {
+                LOGE("TinyObjReader: %s", reader.Warning().c_str());
+            }
+
+            const auto& attrib = reader.GetAttrib();
+            const auto& shapes = reader.GetShapes();
+            const auto& materials = reader.GetMaterials();
+
+            std::vector<Geometry> geometries;
+            for (const auto & shape : shapes)
+            {
+                Geometry& geo = geometries.emplace_back(this);
+                std::vector<typename ShaderType::VertexInput> vertices;
+
+                size_t index_offset = 0;
+                for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
+                {
+                    const size_t fv = shape.mesh.num_face_vertices[f];
+                    for (size_t v = 0; v < fv; v++)
+                    {
+                        const auto [vi, ni, ti] = shape.mesh.indices[index_offset + v];
+
+                        const tinyobj::real_t vx = attrib.vertices[3 * vi + 0];
+                        const tinyobj::real_t vy = attrib.vertices[3 * vi + 1];
+                        const tinyobj::real_t vz = attrib.vertices[3 * vi + 2];
+
+                        vertices.emplace_back(glm::vec4(vx, vy, vz, 1.f));
+                    }
+                    index_offset += fv;
+                }
+
+                geo.vertex_count = static_cast<uint32_t>(vertices.size());
+                if (const auto sb = staging_buffer.suballoc(vertices.size() *
+                    sizeof(typename ShaderType::VertexInput), 64))
+                {
+                    if (const auto dst_sb = vertex_buffer.suballoc(sb->size, 64))
+                    {
+                        std::ranges::copy(vertices, static_cast<typename ShaderType::VertexInput*>(sb->ptr));
+                        copy_buffers.emplace_back(vertex_buffer, *sb, dst_sb->offset);
+                        geo.vertex_buffer = *dst_sb;
+                    }
+                    // defer suballocation deletion
+                    delete_buffers.emplace(1, std::pair(std::ref(staging_buffer), *sb));
+                }
+            }
+            return geometries;
+        }
+        return std::nullopt;
     }
     void exec_copy_buffers(VkCommandBuffer cmd) noexcept
     {
