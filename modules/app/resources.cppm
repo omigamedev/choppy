@@ -34,6 +34,11 @@ import :utils;
 export namespace ce::app::resources
 {
 struct VulkanResources;
+struct Material
+{
+    VulkanResources* vkr = nullptr;
+    VkDescriptorSet material_descriptor_set = VK_NULL_HANDLE;
+};
 struct Geometry
 {
     VulkanResources* vkr = nullptr;

@@ -72,8 +72,11 @@ struct World
 
     vk::BufferSuballocation shader_flat_frame{};
     vk::BufferSuballocation shader_color_frame{};
+    vk::BufferSuballocation shader_textured_frame{};
     VkDescriptorSet shader_flat_frame_set = VK_NULL_HANDLE;
     VkDescriptorSet shader_color_frame_set = VK_NULL_HANDLE;
+    VkDescriptorSet shader_textured_frame_set = VK_NULL_HANDLE;
+    VkDescriptorSet shader_textured_material_set = VK_NULL_HANDLE;
 
     chunksman::ChunksManager chunks_manager;
 
@@ -141,14 +144,17 @@ struct World
         }
         chunks_manager.create();
 
-        if (const auto result = globals::m_resources->load_obj<shaders::SolidColorShader::VertexInput>(
-            "assets/models/tr-and-d-issue-43.obj"))
+        if (!globals::server_mode)
         {
-            m_obj_meshes = result.value();
-        }
-        else
-        {
-            LOGE("failed to load cube.obj");
+            if (const auto result = globals::m_resources->load_obj<shaders::TexturedShader::VertexInput>(
+                "assets/models/tr-and-d-issue-43.obj"))
+            {
+                m_obj_meshes = result.value();
+            }
+            else
+            {
+                LOGE("failed to load cube.obj");
+            }
         }
         return true;
     }
@@ -243,6 +249,40 @@ struct World
                 shaders::shader_color->write_buffer(*set, 0, globals::m_resources->frame_buffer.buffer(),
                     dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
             }
+        }
+
+        if (const auto sb = globals::m_resources->staging_buffer.suballoc(
+            sizeof(shaders::TexturedShader::PerFrameConstants), 64))
+        {
+            const auto dst_sb = globals::m_resources->frame_buffer.suballoc(sb->size, 64);
+            *static_cast<shaders::TexturedShader::PerFrameConstants*>(sb->ptr) = {
+                .ViewProjection = {
+                    glm::transpose(frame.projection[0] * frame.view[0]),
+                    glm::transpose(frame.projection[1] * frame.view[1]),
+                }
+            };
+            // defer copy
+            globals::m_resources->copy_buffers.emplace_back(
+                globals::m_resources->frame_buffer, *sb, dst_sb->offset);
+            shader_textured_frame = *dst_sb;
+            // defer suballocation deletion
+            globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
+            globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                std::pair(std::ref(globals::m_resources->frame_buffer), *dst_sb));
+            if (const auto set = shaders::shader_textured->alloc_descriptor(frame.present_index, 0))
+            {
+                shader_textured_frame_set = *set;
+                shaders::shader_textured->write_buffer(*set, 0, globals::m_resources->frame_buffer.buffer(),
+                    dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+            }
+        }
+
+        if (const auto set = shaders::shader_textured->alloc_descriptor(frame.present_index, 2))
+        {
+            shader_textured_material_set = *set;
+            shaders::shader_textured->write_texture(*set, 0,
+                globals::m_resources->texture.image_view, globals::m_resources->sampler);
         }
 
         for (auto& [k, state] : chunks_manager.m_chunks_state)
@@ -369,14 +409,14 @@ struct World
         // update OBJ meshes
         for (auto& geo : m_obj_meshes)
         {
-            if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+            if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::TexturedShader::PerObjectBuffer), 64))
             {
                 if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
                 {
-                    const glm::mat4 transform = glm::gtc::identity<glm::mat4>();
-                    *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                    const glm::mat4 transform = glm::gtc::translate(glm::vec3(0, 10, 0)) *
+                        glm::gtc::scale(glm::vec3(.25f));
+                    *static_cast<shaders::TexturedShader::PerObjectBuffer*>(sb->ptr) = {
                         .ObjectTransform = glm::transpose(transform),
-                        .Color = {1, 0, 0, 1}
                     };
                     globals::m_resources->copy_buffers.emplace_back(globals::m_resources->object_buffer, *sb, dst_sb->offset);
                     geo.uniform_buffer = *dst_sb;
@@ -387,10 +427,10 @@ struct World
                 globals::m_resources->delete_buffers.emplace(frame.timeline_value,
                     std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
             }
-            if (const auto set = shaders::shader_color->alloc_descriptor(frame.present_index, 1))
+            if (const auto set = shaders::shader_textured->alloc_descriptor(frame.present_index, 1))
             {
                 geo.object_descriptor_set = *set;
-                shaders::shader_color->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
+                shaders::shader_textured->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
                     geo.uniform_buffer.offset, geo.uniform_buffer.size,
                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
             }
@@ -431,10 +471,15 @@ struct World
     {
         if (chunks_manager.m_chunks_state.size() > 0)
         {
-            const std::vector layers{
-                std::pair(shaders::shader_opaque, chunks_manager.m_chunks_state[BlockLayer::Solid]),
-                std::pair(shaders::shader_transparent, chunks_manager.m_chunks_state[BlockLayer::Transparent]),
-            };
+            std::vector<std::pair<std::shared_ptr<vk::ShaderModule>, chunksman::ChunksState>> layers{};
+            if (chunks_manager.m_chunks_state.contains(BlockLayer::Solid))
+            {
+                layers.emplace_back(shaders::shader_opaque, chunks_manager.m_chunks_state[BlockLayer::Solid]);
+            }
+            if (chunks_manager.m_chunks_state.contains(BlockLayer::Transparent))
+            {
+                layers.emplace_back(shaders::shader_transparent, chunks_manager.m_chunks_state[BlockLayer::Transparent]);
+            }
             for (const auto& [shader, state] : layers)
             {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shader->pipeline());
@@ -497,10 +542,7 @@ struct World
 
         // draw OBJ
         {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shaders::shader_color->pipeline());
-            vkCmdSetLineWidth(cmd, 2.f);
-            vkCmdSetPrimitiveTopology(cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-            //vkCmdSetPolygonModeEXT(cmd, VK_POLYGON_MODE_LINE);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shaders::shader_textured->pipeline());
 
             const std::array vertex_buffers{globals::m_resources->vertex_buffer.buffer()};
 
@@ -510,9 +552,9 @@ struct World
                 vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vertex_buffers.size()),
                     vertex_buffers.data(), vertex_buffers_offset.data());
 
-                const std::array sets{shader_color_frame_set, geo.object_descriptor_set};
+                const std::array sets{shader_textured_frame_set, geo.object_descriptor_set, shader_textured_material_set};
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+                    shaders::shader_textured->layout(), 0, sets.size(), sets.data(), 0, nullptr);
 
                 vkCmdDraw(cmd, geo.vertex_count, 1, 0, 0);
            }
