@@ -18,6 +18,7 @@ module;
 #include <Jolt/Jolt.h>
 #include <ecs/ecs.h>
 #include <entityx/entityx.h>
+#include <rtc/rtc.hpp>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -163,6 +164,8 @@ public:
 
     void init(const bool xr_mode, const bool server_mode, const bool headless) noexcept
     {
+        rtc::InitLogger(rtc::LogLevel::Info);
+
         globals::xrmode = xr_mode;
         globals::server_mode = server_mode;
         globals::headless = headless;

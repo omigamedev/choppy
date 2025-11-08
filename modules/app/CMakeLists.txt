@@ -9,6 +9,9 @@ FetchContent_Declare(perlin
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG fede005abaf93d9d7f3a679d1999b2db341b360f) # Sep 7, 2025
+FetchContent_Declare(nlohmann-json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG develop)
 FetchContent_Declare(miniaudio
     GIT_REPOSITORY https://github.com/mackron/miniaudio.git
     GIT_TAG f40cf03f80cdb7e741d43e53b7e706e8c1394bcf) # 0.11.23
@@ -38,14 +41,15 @@ set(ENET_TEST OFF)
 set(ENET_USE_MORE_PEERS ON)
 FetchContent_Declare(datachannel
     GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
-    GIT_TAG 9e6a13abbb6846c003d817d0387b6706466e2b03) # v0.23.2
+    GIT_TAG master) # v0.23.2
 set(NO_EXAMPLES 1)
 set(NO_TESTS 1)
 FetchContent_Declare(jolt
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
     GIT_TAG 036ea7b1d717b3e713ac9d8cbd47118fb9cd5d60) # v5.4.0
 
-FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet datachannel ecs entityx tinyobjloader)
+FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet
+    datachannel ecs entityx tinyobjloader nlohmann-json)
 
 set(JOLT_PHYSICS_ROOT ${jolt_SOURCE_DIR}/Jolt)
 set(JOLT_PHYSICS_SRC_FILES
@@ -518,7 +522,7 @@ endif()
 add_library(app OBJECT stb.cpp obj.cpp)
 target_link_libraries(app PUBLIC
     platform xr vk glmcppm shaders perlin
-    jolt miniaudio enet_static datachannel ecs entityx tinyobjloader)
+    jolt miniaudio enet_static datachannel-static ecs entityx tinyobjloader nlohmann_json)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES

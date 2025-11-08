@@ -8,6 +8,7 @@ module;
 #include <enet.h>
 #include <tracy/Tracy.hpp>
 #include <rtc/rtc.hpp>
+#include <nlohmann/json.hpp>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -29,10 +30,12 @@ export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
 {
-    static constexpr std::string_view ServerHost = "192.168.1.64";
+    static constexpr std::string_view ServerHost = "192.168.1.65";
     static constexpr uint16_t ServerPort = 7777;
     static constexpr uint16_t WebSoketPort = 7778;
     std::shared_ptr<rtc::WebSocket> ws;
+    std::shared_ptr<rtc::PeerConnection> rtc_peer;
+    std::shared_ptr<rtc::Track> rtc_track;
     ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
     std::unordered_map<uint32_t, player::PlayerState> players;
@@ -216,6 +219,7 @@ public:
                     player_id = response->new_id;
                     LOGI("join accepted with id: %d", player_id);
                     connect_websocket();
+                    connect_rtc();
                 }
                 else
                 {
@@ -266,10 +270,92 @@ public:
         case messages::MessageType::ChunkData:
             if (const auto chunk = messages::ChunkDataMessage::deserialize(message))
             {
-                LOGI("received chunk data: %d", (int)chunk->data.size());
+                //LOGI("received chunk data: %d", (int)chunk->data.size());
                 on_chunk_data(chunk.value());
             }
+            break;
+        case messages::MessageType::RTCJson:
+            if (const auto json = messages::RTCJsonMessage::deserialize(message))
+            {
+                const nlohmann::json j = nlohmann::json::parse(json->json_string);
+                const auto sdp_type = j["type"].get<std::string>();
+                if (sdp_type == "answer")
+                {
+                    //connect_rtc();
+                    const auto sdp = j["description"].get<std::string>();
+                    rtc_peer->setRemoteDescription(rtc::Description(sdp, sdp_type));
+                }
+                else if (sdp_type == "candidate")
+                {
+                    auto sdp = j["candidate"].get<std::string>();
+                    auto mid = j["mid"].get<std::string>();
+                    rtc_peer->addRemoteCandidate(rtc::Candidate(sdp, mid));
+                }
+                LOGI("RTC Json: %s", json->json_string.c_str());
+            }
+            break;
         }
+    }
+    bool connect_rtc() noexcept
+    {
+        LOGI("connect_rtc");
+        rtc::Configuration config;
+        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+        rtc_peer = std::make_shared<rtc::PeerConnection>(config);
+        rtc_peer->onStateChange([](const rtc::PeerConnection::State state)
+        {
+            LOGI("RTC: onStateChange: %d", std::to_underlying(state));
+        });
+        rtc_peer->onGatheringStateChange([](const rtc::PeerConnection::GatheringState state)
+        {
+            LOGI("RTC: Gathering State: %d", std::to_underlying(state));
+        });
+        rtc_peer->onLocalDescription([this](const rtc::Description& description)
+        {
+            const nlohmann::json message = {
+                {"type", description.typeString()},
+                {"description", std::string(description)}
+            };
+            LOGI("RTC: onLocalDescription: %s", message.dump().c_str());
+            send_message(ENET_PACKET_FLAG_RELIABLE,
+                messages::RTCJsonMessage{
+                    .id = player_id,
+                    .json_string = message.dump()
+                });
+        });
+        rtc_peer->onLocalCandidate([this](const rtc::Candidate& candidate)
+        {
+            const nlohmann::json message = {
+                {"type", "candidate"},
+                {"candidate", std::string(candidate)},
+                {"mid", candidate.mid()}
+            };
+            LOGI("RTC: onLocalCandidate: %s", message.dump().c_str());
+            send_message(ENET_PACKET_FLAG_RELIABLE,
+                messages::RTCJsonMessage{
+                    .id = player_id,
+                    .json_string = message.dump()
+                });
+        });
+
+        const std::string audio_cname = "audio-track";
+        rtc::Description::Audio audio{audio_cname, rtc::Description::Direction::SendRecv};
+        audio.addOpusCodec(111);
+        audio.addSSRC(1, audio_cname, "stream1");
+        rtc_track = rtc_peer->addTrack(static_cast<rtc::Description::Media>(audio));
+        auto depacketizer = std::make_shared<rtc::OpusRtpDepacketizer>();
+        rtc_track->setMediaHandler(depacketizer);
+        rtc_track->onOpen([]
+        {
+            LOGI("RTC: Audio Track onOpen");
+        });
+        rtc_track->onFrame([](const rtc::binary& data, const rtc::FrameInfo& frame)
+        {
+            LOGI("RTC: onFrame");
+        });
+        //auto offer = rtc_peer->createOffer();
+        rtc_peer->setLocalDescription();
+        return true;
     }
     void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
     {

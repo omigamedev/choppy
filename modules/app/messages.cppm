@@ -20,6 +20,7 @@ enum class MessageType : uint16_t
     BlockAction,
     WorldData,
     ChunkData,
+    RTCJson,
 };
 const char* to_string(const MessageType t)
 {
@@ -220,6 +221,31 @@ struct BlockActionMessage
             .type = r.read<MessageType>(),
             .action = r.read<ActionType>(),
             .world_cell = r.read<glm::ivec3>()
+        };
+    }
+};
+
+struct RTCJsonMessage
+{
+    MessageType type = MessageType::RTCJson;
+    uint32_t id;
+    std::string json_string;
+    [[nodiscard]] std::vector<uint8_t> serialize() const noexcept
+    {
+        serializer::MessageWriter w;
+        w.write(type);
+        w.write(id);
+        w.write(json_string);
+        return std::move(w.buffer);
+    }
+    [[nodiscard]] static std::optional<RTCJsonMessage> deserialize(
+        const std::span<const uint8_t>& message) noexcept
+    {
+        serializer::MessageReader r(message);
+        return RTCJsonMessage{
+            .type = r.read<MessageType>(),
+            .id = r.read<uint32_t>(),
+            .json_string = r.read<std::string>(),
         };
     }
 };

@@ -7,6 +7,7 @@ module;
 #include <unordered_map>
 #include <tracy/Tracy.hpp>
 #include <rtc/rtc.hpp>
+#include <nlohmann/json.hpp>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -28,6 +29,14 @@ import ce.vk.utils;
 
 export namespace ce::app::server
 {
+struct RTCPeer
+{
+    std::shared_ptr<rtc::PeerConnection> peer;
+    std::shared_ptr<rtc::Track> audio_track;
+    std::shared_ptr<rtc::DataChannel> data_channel;
+    std::chrono::duration<double> timestamp;
+    bool connected = false;
+};
 class ServerSystem : utils::NoCopy
 {
     static constexpr uint32_t MaxClients = 32;
@@ -36,6 +45,7 @@ class ServerSystem : utils::NoCopy
     ENetHost* server = nullptr;
     uint32_t client_ids = 1;
     std::unordered_map<ENetPeer*, player::PlayerState> clients;
+    std::unordered_map<ENetPeer*, RTCPeer> rtc_peers;
     std::vector<player::PlayerState> removed_players;
     [[nodiscard]] std::string address2str(const ENetAddress& address) const noexcept
     {
@@ -160,6 +170,14 @@ public:
         const uint32_t id = clients[peer].id;
         removed_players.emplace_back(clients[peer]);  // TODO: in headless mode just remove it, no need to garbage collect
         clients.erase(peer);
+
+        if (rtc_peers[peer].audio_track)
+            rtc_peers[peer].audio_track->close();
+        if (rtc_peers[peer].data_channel)
+            rtc_peers[peer].data_channel->close();
+        rtc_peers[peer].peer->close();
+        rtc_peers.erase(peer);
+
         for (const auto& [send_peer, player] : clients)
         {
             if (peer != send_peer)
@@ -202,6 +220,7 @@ public:
                     .accepted = true,
                     .new_id = new_id
                 });
+                //connect_rtc(peer);
             }
             break;
         case messages::MessageType::PlayerState:
@@ -239,9 +258,103 @@ public:
                     chunk->sector.x, chunk->sector.y, chunk->sector.z);
                 on_chunk_data_request(peer, chunk.value());
             }
+            break;
+        case messages::MessageType::RTCJson:
+            if (const auto json = messages::RTCJsonMessage::deserialize(message))
+            {
+                const nlohmann::json j = nlohmann::json::parse(json->json_string);
+                const auto sdp_type = j["type"].get<std::string>();
+                LOGI("RTC Json: %s", json->json_string.c_str());
+                if (sdp_type == "offer")
+                {
+                    connect_rtc(peer);
+                    const auto sdp = j["description"].get<std::string>();
+                    rtc_peers[peer].peer->setRemoteDescription(rtc::Description(sdp, sdp_type));
+                }
+                else if (sdp_type == "candidate")
+                {
+                    auto sdp = j["candidate"].get<std::string>();
+                    auto mid = j["mid"].get<std::string>();
+                    rtc_peers[peer].peer->addRemoteCandidate(rtc::Candidate(sdp, mid));
+                }
+                else
+                {
+                    LOGE("shouldn't happen");
+                }
+            }
+            break;
         }
     }
-    void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
+    bool connect_rtc(ENetPeer* peer) noexcept
+    {
+        LOGI("connect_rtc");
+        rtc::Configuration config;
+        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+        auto rtc_peer = std::make_shared<rtc::PeerConnection>(config);
+        rtc_peer->onStateChange([this, peer](const rtc::PeerConnection::State state)
+        {
+            LOGI("RTC: onStateChange: %d", std::to_underlying(state));
+            if (state == rtc::PeerConnection::State::Connected)
+            {
+                rtc_peers[peer].connected = true;
+            }
+            if (state == rtc::PeerConnection::State::Closed)
+            {
+                LOGI("RTC: onStateChange: Closed");
+                rtc_peers[peer].connected = false;
+            }
+        });
+        rtc_peer->onGatheringStateChange([](const rtc::PeerConnection::GatheringState state)
+        {
+            LOGI("RTC: Gathering State: %d", std::to_underlying(state));
+        });
+        rtc_peer->onLocalDescription([this, peer](const rtc::Description& description)
+        {
+            const nlohmann::json message = {
+                {"type", description.typeString()},
+                {"description", std::string(description)}
+            };
+            LOGI("RTC: onLocalDescription: %s", message.dump().c_str());
+            send_message(peer, ENET_PACKET_FLAG_RELIABLE,
+                messages::RTCJsonMessage{
+                    .json_string = message.dump()
+                });
+        });
+        rtc_peer->onLocalCandidate([this, peer](const rtc::Candidate& candidate)
+        {
+            const nlohmann::json message = {
+                {"type", "candidate"},
+                {"candidate", std::string(candidate)},
+                {"mid", candidate.mid()}
+            };
+            LOGI("RTC: onLocalCandidate: %s", message.dump().c_str());
+            send_message(peer, ENET_PACKET_FLAG_RELIABLE,
+                messages::RTCJsonMessage{
+                    .json_string = message.dump()
+                });
+        });
+        rtc_peer->onTrack([this, peer](const std::shared_ptr<rtc::Track>& track)
+        {
+            LOGI("RTC: onTrack: %s", track->mid().c_str());
+            // create RTP configuration
+            auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(1, track->mid(), 111,
+                rtc::OpusRtpPacketizer::DefaultClockRate);
+            auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
+            auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
+            packetizer->addToChain(srReporter);
+            auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
+            packetizer->addToChain(nackResponder);
+            track->setMediaHandler(packetizer);
+            track->onFrame([](const rtc::binary& data, const rtc::FrameInfo& frame)
+            {
+                LOGI("RTC: onFrame");
+            });
+            rtc_peers[peer].audio_track = track;
+        });
+        rtc_peers.emplace(peer, RTCPeer{.peer = rtc_peer});
+        return true;
+    }
+    void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4& view) noexcept
     {
         static float update_timer = 0.0f;
         update_timer += dt;
@@ -275,6 +388,16 @@ public:
     }
     void tick(const float dt) noexcept
     {
+        for (auto& [peer, rtc_peer] : rtc_peers)
+        {
+            if (rtc_peer.connected && rtc_peer.audio_track->isOpen())
+            {
+                std::string hello = "Hello";
+                rtc_peer.timestamp += std::chrono::duration<double>(dt);
+                rtc_peer.audio_track->sendFrame(reinterpret_cast<const std::byte*>(hello.data()),
+                    hello.length(), rtc::FrameInfo{rtc_peer.timestamp});
+            }
+        }
         ENetEvent event{};
         if (enet_host_service(server, &event, 0) > 0)
         {
