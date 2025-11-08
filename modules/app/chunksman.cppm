@@ -165,12 +165,12 @@ struct ChunksManager
             cam_sector = cur_sector;
             if (m_chunks.size() < chunk_count)
             {
-                LOGI("Loading world: %d%%\r",
-                    static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
+                //LOGI("Loading world: %d%%\r",
+                //    static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
             }
             else
             {
-                LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
+                //LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
             }
         }
         else

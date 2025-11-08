@@ -33,3 +33,16 @@ add_custom_command(TARGET ce_windows POST_BUILD
     "$<TARGET_FILE_DIR:ce_windows>"
     COMMENT "Copying libdatachannel DLL to output directory"
 )
+if (WIN32)
+    # The executable target name is 'MyExe'
+    add_custom_command(
+        TARGET ce_windows
+        POST_BUILD
+        # Use a generator expression to get the list of required DLLs
+        # and copy them to the executable's output directory.
+        COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_RUNTIME_DLLS:ce_windows>
+        $<TARGET_FILE_DIR:ce_windows>
+        COMMAND_EXPAND_LISTS # Essential for expanding the list of DLLs
+    )
+endif()

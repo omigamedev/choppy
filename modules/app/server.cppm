@@ -8,6 +8,7 @@ module;
 #include <tracy/Tracy.hpp>
 #include <rtc/rtc.hpp>
 #include <nlohmann/json.hpp>
+#include <opus.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -36,6 +37,8 @@ struct RTCPeer
     std::shared_ptr<rtc::DataChannel> data_channel;
     std::chrono::duration<double> timestamp;
     bool connected = false;
+    OpusEncoder* enc = nullptr;
+    uint64_t encoded_samples = 0;
 };
 class ServerSystem : utils::NoCopy
 {
@@ -350,6 +353,9 @@ public:
                 LOGI("RTC: onFrame");
             });
             rtc_peers[peer].audio_track = track;
+
+            int error = 0;
+            rtc_peers[peer].enc = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
         });
         rtc_peers.emplace(peer, RTCPeer{.peer = rtc_peer});
         return true;
@@ -392,10 +398,27 @@ public:
         {
             if (rtc_peer.connected && rtc_peer.audio_track->isOpen())
             {
-                std::string hello = "Hello";
                 rtc_peer.timestamp += std::chrono::duration<double>(dt);
-                rtc_peer.audio_track->sendFrame(reinterpret_cast<const std::byte*>(hello.data()),
-                    hello.length(), rtc::FrameInfo{rtc_peer.timestamp});
+                const double audio_time = static_cast<double>(rtc_peer.encoded_samples) / 48000.0;
+                if (rtc_peer.timestamp.count() > audio_time)
+                {
+                    std::vector<float> samples(480); // 10ms
+                    for (size_t i = 0; i < samples.size(); ++i)
+                    {
+                        const double t = audio_time + static_cast<double>(i) / 48000.0;
+                        const double f = 440 + sinf(t) * 100;
+                        samples[i] = sinf(t * f);
+                    }
+                    std::vector<uint8_t> packet(size_t{4000});
+                    const int result = opus_encode_float(rtc_peer.enc, samples.data(),
+                        samples.size(), packet.data(), packet.size());
+                    if (result > 0)
+                    {
+                        rtc_peer.audio_track->sendFrame(reinterpret_cast<const std::byte*>(packet.data()),
+                            result, rtc::FrameInfo{rtc_peer.timestamp});
+                    }
+                    rtc_peer.encoded_samples += samples.size();
+                }
             }
         }
         ENetEvent event{};

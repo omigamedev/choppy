@@ -9,6 +9,7 @@ module;
 #include <tracy/Tracy.hpp>
 #include <rtc/rtc.hpp>
 #include <nlohmann/json.hpp>
+#include <opus.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -36,11 +37,13 @@ class ClientSystem : utils::NoCopy
     std::shared_ptr<rtc::WebSocket> ws;
     std::shared_ptr<rtc::PeerConnection> rtc_peer;
     std::shared_ptr<rtc::Track> rtc_track;
+    OpusDecoder* decoder = nullptr;
     ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
     std::unordered_map<uint32_t, player::PlayerState> players;
     std::vector<player::PlayerState> removed_players;
     std::future<bool> connect_result;
+    std::ofstream audio_dump;
     bool try_connecting = false;
     [[nodiscard]] std::string address2str(const ENetAddress& address) const noexcept
     {
@@ -345,13 +348,20 @@ public:
         rtc_track = rtc_peer->addTrack(static_cast<rtc::Description::Media>(audio));
         auto depacketizer = std::make_shared<rtc::OpusRtpDepacketizer>();
         rtc_track->setMediaHandler(depacketizer);
-        rtc_track->onOpen([]
+        rtc_track->onOpen([this]
         {
             LOGI("RTC: Audio Track onOpen");
+            int error = 0;
+            decoder = opus_decoder_create(48000, 1, &error);
+            audio_dump.open("audio.pcm", std::ios::binary);
         });
-        rtc_track->onFrame([](const rtc::binary& data, const rtc::FrameInfo& frame)
+        rtc_track->onFrame([this](const rtc::binary& data, const rtc::FrameInfo& frame)
         {
-            LOGI("RTC: onFrame");
+            std::vector<float> pcm(480);
+            int samples = opus_decode_float(decoder, reinterpret_cast<const uint8_t*>(data.data()),
+                data.size(), pcm.data(), pcm.size(), 0);
+            LOGI("RTC: onFrame %llu bytes to %d samples", data.size(), samples);
+            audio_dump.write(reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(float));
         });
         //auto offer = rtc_peer->createOffer();
         rtc_peer->setLocalDescription();

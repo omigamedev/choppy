@@ -47,9 +47,12 @@ set(NO_TESTS 1)
 FetchContent_Declare(jolt
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
     GIT_TAG 036ea7b1d717b3e713ac9d8cbd47118fb9cd5d60) # v5.4.0
+FetchContent_Declare(opus
+    GIT_REPOSITORY https://github.com/xiph/opus.git
+    GIT_TAG main)
 
 FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet
-    datachannel ecs entityx tinyobjloader nlohmann-json)
+    datachannel ecs entityx tinyobjloader nlohmann-json opus)
 
 set(JOLT_PHYSICS_ROOT ${jolt_SOURCE_DIR}/Jolt)
 set(JOLT_PHYSICS_SRC_FILES
@@ -522,7 +525,8 @@ endif()
 add_library(app OBJECT stb.cpp obj.cpp)
 target_link_libraries(app PUBLIC
     platform xr vk glmcppm shaders perlin
-    jolt miniaudio enet_static datachannel-static ecs entityx tinyobjloader nlohmann_json)
+    jolt miniaudio enet_static datachannel-static
+    ecs entityx tinyobjloader nlohmann_json opus)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES
