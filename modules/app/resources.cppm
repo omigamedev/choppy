@@ -255,15 +255,23 @@ struct VulkanResources : utils::NoCopy
                 for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
                 {
                     const size_t fv = shape.mesh.num_face_vertices[f];
-                    for (size_t v = 0; v < fv; v++)
+                    for (int32_t v = fv - 1; v >= 0; v--)
                     {
                         const auto [vi, ni, ti] = shape.mesh.indices[index_offset + v];
+                        typename ShaderType::VertexInput vertex;
 
-                        const tinyobj::real_t vx = attrib.vertices[3 * vi + 0];
-                        const tinyobj::real_t vy = attrib.vertices[3 * vi + 1];
-                        const tinyobj::real_t vz = attrib.vertices[3 * vi + 2];
+                        vertex.position.x = attrib.vertices[3 * vi + 0];
+                        vertex.position.y = attrib.vertices[3 * vi + 1];
+                        vertex.position.z = attrib.vertices[3 * vi + 2];
+                        vertex.position.w = 1.f;
 
-                        vertices.emplace_back(glm::vec4(vx, vy, vz, 1.f));
+                        if (ti > 0)
+                        {
+                            vertex.uvs.x = attrib.texcoords[2 * ti + 0];
+                            vertex.uvs.y = 1.f - attrib.texcoords[2 * ti + 1];
+                        }
+
+                        vertices.push_back(vertex);
                     }
                     index_offset += fv;
                 }

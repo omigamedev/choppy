@@ -69,6 +69,7 @@ struct World
     player::PlayerCamera m_camera{};
     resources::Geometry m_cube;
     std::vector<resources::Geometry> m_obj_meshes;
+    vk::texture::Texture m_obj_texture;
 
     vk::BufferSuballocation shader_flat_frame{};
     vk::BufferSuballocation shader_color_frame{};
@@ -138,7 +139,7 @@ struct World
                 if (!chunk.data.empty())
                 {
                     // chunks_manager.generator.deserialize_apply(chunk.sector, chunk.data);
-                    chunks_manager.chunks_to_sync.emplace_back(chunk.sector, std::move(chunk.data));
+                    chunks_manager.chunks_to_sync.emplace_back(chunk.sector, chunk.data);
                 }
             };
         }
@@ -147,9 +148,14 @@ struct World
         if (!globals::server_mode)
         {
             if (const auto result = globals::m_resources->load_obj<shaders::TexturedShader::VertexInput>(
-                "assets/models/tr-and-d-issue-43.obj"))
+                "assets/models/broccoli_v3.1_Cycles.obj"))
             {
                 m_obj_meshes = result.value();
+                if (const auto tex_result = vk::texture::load_texture(m_vk,
+                    "assets/models/broccoli_brobody_Mat_BaseColor.png", globals::m_resources->staging_buffer))
+                {
+                    m_obj_texture = tex_result.value();
+                }
             }
             else
             {
@@ -276,13 +282,6 @@ struct World
                 shaders::shader_textured->write_buffer(*set, 0, globals::m_resources->frame_buffer.buffer(),
                     dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
             }
-        }
-
-        if (const auto set = shaders::shader_textured->alloc_descriptor(frame.present_index, 2))
-        {
-            shader_textured_material_set = *set;
-            shaders::shader_textured->write_texture(*set, 0,
-                globals::m_resources->texture.image_view, globals::m_resources->sampler);
         }
 
         for (auto& [k, state] : chunks_manager.m_chunks_state)
@@ -413,8 +412,8 @@ struct World
             {
                 if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
                 {
-                    const glm::mat4 transform = glm::gtc::translate(glm::vec3(0, 10, 0)) *
-                        glm::gtc::scale(glm::vec3(.25f));
+                    const glm::mat4 transform = glm::gtc::translate(glm::vec3(0, 5, 0)) *
+                        glm::gtc::scale(glm::vec3(20.f));
                     *static_cast<shaders::TexturedShader::PerObjectBuffer*>(sb->ptr) = {
                         .ObjectTransform = glm::transpose(transform),
                     };
@@ -434,6 +433,13 @@ struct World
                     geo.uniform_buffer.offset, geo.uniform_buffer.size,
                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
             }
+        }
+
+        if (const auto set = shaders::shader_textured->alloc_descriptor(frame.present_index, 2))
+        {
+            shader_textured_material_set = *set;
+            shaders::shader_textured->write_texture(*set, 0,
+                m_obj_texture.image_view, globals::m_resources->sampler);
         }
     }
     void tick(const float dt) noexcept
