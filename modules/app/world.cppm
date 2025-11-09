@@ -140,6 +140,7 @@ struct World
                 {
                     // chunks_manager.generator.deserialize_apply(chunk.sector, chunk.data);
                     chunks_manager.chunks_to_sync.emplace_back(chunk.sector, chunk.data);
+                    chunks_manager.generator.set_net_ready(chunk.sector);
                 }
             };
         }

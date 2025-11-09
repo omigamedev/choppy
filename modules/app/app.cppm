@@ -164,7 +164,7 @@ public:
 
     void init(const bool xr_mode, const bool server_mode, const bool headless) noexcept
     {
-        rtc::InitLogger(rtc::LogLevel::Info);
+        rtc::InitLogger(rtc::LogLevel::Error);
 
         globals::xrmode = xr_mode;
         globals::server_mode = server_mode;
@@ -570,6 +570,18 @@ public:
                 globals::m_resources->garbage_collect(m_timeline_value);
                 tick_windowed(dt, gamepad);
             }
+        }
+        if (globals::server_mode)
+        {
+            constexpr float save_timeout = 10;
+            static float save_timer = 0;
+            if (save_timer > save_timeout)
+            {
+                save_timer = 0;
+                m_world.chunks_manager.generator.save();
+                LOGI("terrain saved");
+            }
+            save_timer += dt;
         }
     }
     void on_resize(const uint32_t width, const uint32_t height) noexcept

@@ -296,7 +296,7 @@ struct ChunksManager
 
             if (!globals::server_mode && systems::m_client_system->connected())
             {
-                if (!chunk.net_requested)
+                if (!chunk.net_requested && !generator.is_net_ready(chunk.sector))
                 {
                     LOGI("Request Chunk Data for sector [%d %d %d]",
                         chunk.sector.x, chunk.sector.y, chunk.sector.z);

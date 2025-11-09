@@ -130,6 +130,7 @@ class FlatGenerator final : public ChunkGenerator
 	// siv::PerlinNoise perlin{ std::random_device{} };
 	siv::PerlinNoise perlin{ 1 };
     std::unordered_map<glm::ivec3, std::unordered_map<glm::u8vec3, BlockType, U8Vec3Hash>, IVec3Hash> m_edits;
+    std::unordered_map<glm::ivec3, bool, IVec3Hash> m_net_ready;
     bool m_dirty = false;
     std::unordered_map<glm::ivec3, std::vector<BlockType>, IVec3Hash> m_blocks;
 
@@ -205,6 +206,16 @@ public:
             const auto block = r.read<BlockType>();
             map[cell] = block;
         }
+    }
+    [[nodiscard]] bool is_net_ready(const glm::ivec3& sector) const noexcept
+    {
+        if (m_net_ready.contains(sector))
+            return m_net_ready.at(sector);
+        return false;
+    }
+    void set_net_ready(const glm::ivec3& sector) noexcept
+    {
+        m_net_ready[sector] = true;
     }
     void edit(const glm::ivec3& sector, const glm::u8vec3& local_cell, const BlockType block_type) noexcept
     {

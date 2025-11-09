@@ -267,7 +267,7 @@ public:
             {
                 const nlohmann::json j = nlohmann::json::parse(json->json_string);
                 const auto sdp_type = j["type"].get<std::string>();
-                LOGI("RTC Json: %s", json->json_string.c_str());
+                // LOGI("RTC Json: %s", json->json_string.c_str());
                 if (sdp_type == "offer")
                 {
                     connect_rtc(peer);
@@ -276,8 +276,8 @@ public:
                 }
                 else if (sdp_type == "candidate")
                 {
-                    auto sdp = j["candidate"].get<std::string>();
-                    auto mid = j["mid"].get<std::string>();
+                    const auto sdp = j["candidate"].get<std::string>();
+                    const auto mid = j["mid"].get<std::string>();
                     rtc_peers[peer].peer->addRemoteCandidate(rtc::Candidate(sdp, mid));
                 }
                 else
@@ -296,20 +296,20 @@ public:
         auto rtc_peer = std::make_shared<rtc::PeerConnection>(config);
         rtc_peer->onStateChange([this, peer](const rtc::PeerConnection::State state)
         {
-            LOGI("RTC: onStateChange: %d", std::to_underlying(state));
+            // LOGI("RTC: onStateChange: %d", std::to_underlying(state));
             if (state == rtc::PeerConnection::State::Connected)
             {
                 rtc_peers[peer].connected = true;
             }
             if (state == rtc::PeerConnection::State::Closed)
             {
-                LOGI("RTC: onStateChange: Closed");
+                // LOGI("RTC: onStateChange: Closed");
                 rtc_peers[peer].connected = false;
             }
         });
         rtc_peer->onGatheringStateChange([](const rtc::PeerConnection::GatheringState state)
         {
-            LOGI("RTC: Gathering State: %d", std::to_underlying(state));
+            // LOGI("RTC: Gathering State: %d", std::to_underlying(state));
         });
         rtc_peer->onLocalDescription([this, peer](const rtc::Description& description)
         {
@@ -317,7 +317,7 @@ public:
                 {"type", description.typeString()},
                 {"description", std::string(description)}
             };
-            LOGI("RTC: onLocalDescription: %s", message.dump().c_str());
+            // LOGI("RTC: onLocalDescription: %s", message.dump().c_str());
             send_message(peer, ENET_PACKET_FLAG_RELIABLE,
                 messages::RTCJsonMessage{
                     .json_string = message.dump()
@@ -330,7 +330,7 @@ public:
                 {"candidate", std::string(candidate)},
                 {"mid", candidate.mid()}
             };
-            LOGI("RTC: onLocalCandidate: %s", message.dump().c_str());
+            // LOGI("RTC: onLocalCandidate: %s", message.dump().c_str());
             send_message(peer, ENET_PACKET_FLAG_RELIABLE,
                 messages::RTCJsonMessage{
                     .json_string = message.dump()
@@ -338,7 +338,7 @@ public:
         });
         rtc_peer->onTrack([this, peer](const std::shared_ptr<rtc::Track>& track)
         {
-            LOGI("RTC: onTrack: %s", track->mid().c_str());
+            // LOGI("RTC: onTrack: %s", track->mid().c_str());
             // create RTP configuration
             auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(1, track->mid(), 111,
                 rtc::OpusRtpPacketizer::DefaultClockRate);
@@ -407,7 +407,7 @@ public:
                     {
                         const double t = audio_time + static_cast<double>(i) / 48000.0;
                         const double f = 440 + sinf(t * 10) * 100;
-                        samples[i] = sinf(t * f);
+                        samples[i] = sinf(t * f) * 0.0f;
                     }
                     std::vector<uint8_t> packet(size_t{4000});
                     const int result = opus_encode_float(rtc_peer.enc, samples.data(),

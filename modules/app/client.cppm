@@ -44,7 +44,7 @@ static ma_result my_data_source_read(ma_data_source* pDataSource,
     const int32_t frames = std::min<int32_t>(frameCount, source->pcm.size());
     std::copy_n(source->pcm.data(), frames, out.begin());
     source->pcm.erase(source->pcm.begin(), source->pcm.begin() + frames);
-    LOGI("my_data_source_read read %d/%llu frames", frames, source->pcm.size());
+    // LOGI("my_data_source_read read %d/%llu frames", frames, source->pcm.size());
     if (pFramesRead) *pFramesRead = frames;
     return MA_SUCCESS;
 }
@@ -191,7 +191,7 @@ public:
             // received. Reset the peer in the event the 5 seconds
             // had run out without any significant event.
             enet_peer_reset(peer);
-            LOGE("Connection to %s failed.", address2str(address).c_str());
+            // LOGE("Connection to %s failed.", address2str(address).c_str());
             return false;
         }
         return true;
@@ -239,7 +239,7 @@ public:
         ws->open(std::format("ws://{}:{}", ServerHost, WebSoketPort));
         ws->onOpen([this]
         {
-            LOGI("web-socket connected, signaling ready");
+            // LOGI("web-socket connected, signaling ready");
             ws_send_message(messages::JoinResponseMessage{.new_id = player_id});
         });
         ws->onClosed([]{ LOGI("web-socket closed"); });
@@ -334,7 +334,7 @@ public:
         case messages::MessageType::ChunkData:
             if (const auto chunk = messages::ChunkDataMessage::deserialize(message))
             {
-                //LOGI("received chunk data: %d", (int)chunk->data.size());
+                LOGI("received chunk data: %llu", chunk->data.size());
                 on_chunk_data(chunk.value());
             }
             break;
@@ -351,11 +351,11 @@ public:
                 }
                 else if (sdp_type == "candidate")
                 {
-                    auto sdp = j["candidate"].get<std::string>();
-                    auto mid = j["mid"].get<std::string>();
+                    const auto sdp = j["candidate"].get<std::string>();
+                    const auto mid = j["mid"].get<std::string>();
                     rtc_peer->addRemoteCandidate(rtc::Candidate(sdp, mid));
                 }
-                LOGI("RTC Json: %s", json->json_string.c_str());
+                // LOGI("RTC Json: %s", json->json_string.c_str());
             }
             break;
         }
@@ -377,11 +377,11 @@ public:
         rtc_peer = std::make_shared<rtc::PeerConnection>(config);
         rtc_peer->onStateChange([](const rtc::PeerConnection::State state)
         {
-            LOGI("RTC: onStateChange: %d", std::to_underlying(state));
+            // LOGI("RTC: onStateChange: %d", std::to_underlying(state));
         });
         rtc_peer->onGatheringStateChange([](const rtc::PeerConnection::GatheringState state)
         {
-            LOGI("RTC: Gathering State: %d", std::to_underlying(state));
+            // LOGI("RTC: Gathering State: %d", std::to_underlying(state));
         });
         rtc_peer->onLocalDescription([this](const rtc::Description& description)
         {
@@ -389,7 +389,7 @@ public:
                 {"type", description.typeString()},
                 {"description", std::string(description)}
             };
-            LOGI("RTC: onLocalDescription: %s", message.dump().c_str());
+            // LOGI("RTC: onLocalDescription: %s", message.dump().c_str());
             send_message(ENET_PACKET_FLAG_RELIABLE,
                 messages::RTCJsonMessage{
                     .id = player_id,
@@ -403,7 +403,7 @@ public:
                 {"candidate", std::string(candidate)},
                 {"mid", candidate.mid()}
             };
-            LOGI("RTC: onLocalCandidate: %s", message.dump().c_str());
+            // LOGI("RTC: onLocalCandidate: %s", message.dump().c_str());
             send_message(ENET_PACKET_FLAG_RELIABLE,
                 messages::RTCJsonMessage{
                     .id = player_id,
@@ -429,7 +429,7 @@ public:
         });
         rtc_track->onOpen([this]
         {
-            LOGI("RTC: Audio Track onOpen");
+            // LOGI("RTC: Audio Track onOpen");
             int error = 0;
             decoder = opus_decoder_create(48000, 1, &error);
             // audio_dump.open(std::format("audio-{}.pcm", player_id), std::ios::binary);
@@ -456,7 +456,7 @@ public:
             const int samples = opus_decode_float(decoder, reinterpret_cast<const uint8_t*>(data.data()),
                 static_cast<opus_int32>(data.size()), pcm.data(), static_cast<int32_t>(pcm.size()), 0);
             audio_data_source.pcm.append_range(pcm);
-            LOGI("RTC: onFrame %llu bytes to %d samples", data.size(), samples);
+            // LOGI("RTC: onFrame %llu bytes to %d samples", data.size(), samples);
             // audio_dump.write(reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(float));
         });
         //auto offer = rtc_peer->createOffer();
