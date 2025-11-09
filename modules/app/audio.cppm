@@ -14,15 +14,16 @@ module;
 
 export module ce.app:audio;
 import :utils;
+import :globals;
+
 export namespace ce::app::audio
 {
 class AudioSystem : public utils::NoCopy
 {
-    ma_engine engine{};
 public:
     bool create_system() noexcept
     {
-        if (ma_engine_init(nullptr, &engine) != MA_SUCCESS)
+        if (ma_engine_init(nullptr, &globals::audio_engine) != MA_SUCCESS)
         {
             LOGE("failed to init miniaudio");
             return false;
@@ -31,12 +32,12 @@ public:
     }
     void destroy_system() noexcept
     {
-        ma_engine_uninit(&engine);
+        ma_engine_uninit(&globals::audio_engine);
     }
     void play_sound(const std::string& name) noexcept
     {
         const std::string path = "assets/audio/" + name;
-        if (ma_engine_play_sound(&engine, path.c_str(), nullptr) != MA_SUCCESS)
+        if (ma_engine_play_sound(&globals::audio_engine, path.c_str(), nullptr) != MA_SUCCESS)
         {
             LOGE("failed to play sound");
         }

@@ -406,7 +406,7 @@ public:
                     for (size_t i = 0; i < samples.size(); ++i)
                     {
                         const double t = audio_time + static_cast<double>(i) / 48000.0;
-                        const double f = 440 + sinf(t) * 100;
+                        const double f = 440 + sinf(t * 10) * 100;
                         samples[i] = sinf(t * f);
                     }
                     std::vector<uint8_t> packet(size_t{4000});

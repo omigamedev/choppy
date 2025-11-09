@@ -9,6 +9,7 @@ module;
 #include <tracy/Tracy.hpp>
 #include <rtc/rtc.hpp>
 #include <nlohmann/json.hpp>
+#include <miniaudio.h>
 #include <opus.h>
 
 #ifdef __ANDROID__
@@ -27,6 +28,65 @@ import :messages;
 import ce.shaders.solidcolor;
 import ce.vk.utils;
 
+struct my_data_source
+{
+    ma_data_source_base base;
+    std::vector<float> pcm;
+    ma_sound sound{};
+};
+
+static ma_result my_data_source_read(ma_data_source* pDataSource,
+    void* pFramesOut, ma_uint64 frameCount, ma_uint64* pFramesRead)
+{
+    // Read data here. Output in the same format returned by my_data_source_get_data_format().
+    auto* source = static_cast<my_data_source*>(pDataSource);
+    const std::span out = {static_cast<float*>(pFramesOut), source->pcm.size()};
+    const int32_t frames = std::min<int32_t>(frameCount, source->pcm.size());
+    std::copy_n(source->pcm.data(), frames, out.begin());
+    source->pcm.erase(source->pcm.begin(), source->pcm.begin() + frames);
+    LOGI("my_data_source_read read %d/%llu frames", frames, source->pcm.size());
+    if (pFramesRead) *pFramesRead = frames;
+    return MA_SUCCESS;
+}
+
+static ma_result my_data_source_seek(ma_data_source* pDataSource, ma_uint64 frameIndex)
+{
+    // Seek to a specific PCM frame here. Return MA_NOT_IMPLEMENTED if seeking is not supported.
+    return MA_NOT_IMPLEMENTED;
+}
+
+static ma_result my_data_source_get_data_format(ma_data_source* pDataSource,
+    ma_format* pFormat, ma_uint32* pChannels, ma_uint32* pSampleRate, ma_channel* pChannelMap, size_t channelMapCap)
+{
+    // Return the format of the data here.
+    if (pFormat) *pFormat = ma_format_f32;
+    if (pChannels) *pChannels = 1;
+    if (pSampleRate) *pSampleRate = 48000;
+    if (pChannelMap) *pChannelMap = MA_CHANNEL_MONO;
+    return MA_SUCCESS;
+}
+
+static ma_result my_data_source_get_cursor(ma_data_source* pDataSource, ma_uint64* pCursor)
+{
+    // Retrieve the current position of the cursor here. Return MA_NOT_IMPLEMENTED and set *pCursor to 0 if there is no notion of a cursor.
+    return MA_NOT_IMPLEMENTED;
+}
+
+static ma_result my_data_source_get_length(ma_data_source* pDataSource, ma_uint64* pLength)
+{
+    // Retrieve the length in PCM frames here. Return MA_NOT_IMPLEMENTED and set *pLength to 0 if there is no notion of a length or if the length is unknown.
+    return MA_NOT_IMPLEMENTED;
+}
+
+static ma_data_source_vtable g_my_data_source_vtable =
+{
+    my_data_source_read,
+    my_data_source_seek,
+    my_data_source_get_data_format,
+    my_data_source_get_cursor,
+    my_data_source_get_length
+};
+
 export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
@@ -37,6 +97,7 @@ class ClientSystem : utils::NoCopy
     std::shared_ptr<rtc::WebSocket> ws;
     std::shared_ptr<rtc::PeerConnection> rtc_peer;
     std::shared_ptr<rtc::Track> rtc_track;
+    my_data_source audio_data_source{};
     OpusDecoder* decoder = nullptr;
     ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
@@ -299,6 +360,15 @@ public:
             break;
         }
     }
+    void cleanup_rtc() noexcept
+    {
+        if (rtc_track)
+            rtc_track->close();
+        rtc_track.reset();
+        if (rtc_peer)
+            rtc_peer->close();
+        rtc_peer.reset();
+    }
     bool connect_rtc() noexcept
     {
         LOGI("connect_rtc");
@@ -346,28 +416,54 @@ public:
         audio.addOpusCodec(111);
         audio.addSSRC(1, audio_cname, "stream1");
         rtc_track = rtc_peer->addTrack(static_cast<rtc::Description::Media>(audio));
-        auto depacketizer = std::make_shared<rtc::OpusRtpDepacketizer>();
+        const auto depacketizer = std::make_shared<rtc::OpusRtpDepacketizer>();
         rtc_track->setMediaHandler(depacketizer);
+        rtc_track->onClosed([this]
+        {
+            opus_decoder_destroy(decoder);
+            decoder = nullptr;
+            ma_sound_start(&audio_data_source.sound);
+            ma_data_source_uninit(&audio_data_source.base);
+            ma_sound_uninit(&audio_data_source.sound);
+            // audio_dump.close();
+        });
         rtc_track->onOpen([this]
         {
             LOGI("RTC: Audio Track onOpen");
             int error = 0;
             decoder = opus_decoder_create(48000, 1, &error);
-            audio_dump.open("audio.pcm", std::ios::binary);
+            // audio_dump.open(std::format("audio-{}.pcm", player_id), std::ios::binary);
+
+            ma_data_source_config baseConfig = ma_data_source_config_init();
+            baseConfig.vtable = &g_my_data_source_vtable;
+            if (const ma_result result = ma_data_source_init(&baseConfig, &audio_data_source.base);
+                result != MA_SUCCESS)
+            {
+                LOGE("FAILED ma_data_source_init: %s", ma_result_description(result));
+            }
+            if (const ma_result result = ma_sound_init_from_data_source(&globals::audio_engine,
+                &audio_data_source.base, MA_SOUND_FLAG_STREAM | MA_SOUND_FLAG_LOOPING,
+                nullptr, &audio_data_source.sound);
+                result != MA_SUCCESS)
+            {
+                LOGE("FAILED ma_sound_init_from_data_source: %s", ma_result_description(result));
+            }
+            ma_sound_start(&audio_data_source.sound);
         });
         rtc_track->onFrame([this](const rtc::binary& data, const rtc::FrameInfo& frame)
         {
             std::vector<float> pcm(480);
-            int samples = opus_decode_float(decoder, reinterpret_cast<const uint8_t*>(data.data()),
-                data.size(), pcm.data(), pcm.size(), 0);
+            const int samples = opus_decode_float(decoder, reinterpret_cast<const uint8_t*>(data.data()),
+                static_cast<opus_int32>(data.size()), pcm.data(), static_cast<int32_t>(pcm.size()), 0);
+            audio_data_source.pcm.append_range(pcm);
             LOGI("RTC: onFrame %llu bytes to %d samples", data.size(), samples);
-            audio_dump.write(reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(float));
+            // audio_dump.write(reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(float));
         });
         //auto offer = rtc_peer->createOffer();
         rtc_peer->setLocalDescription();
         return true;
     }
-    void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4 view) noexcept
+    void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4& view) noexcept
     {
         // basic motion interpolation
         for (auto& player : std::views::values(players))
@@ -417,6 +513,7 @@ public:
                 players.clear();
                 if (ws && ws->isOpen())
                     ws->close();
+                cleanup_rtc();
                 connect_async();
                 break;
             case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
@@ -426,6 +523,7 @@ public:
                 players.clear();
                 if (ws && ws->isOpen())
                     ws->close();
+                cleanup_rtc();
                 connect_async();
                 break;
             case ENET_EVENT_TYPE_NONE:
