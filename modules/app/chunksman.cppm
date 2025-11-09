@@ -298,8 +298,8 @@ struct ChunksManager
             {
                 if (!chunk.net_requested && !generator.is_net_ready(chunk.sector))
                 {
-                    LOGI("Request Chunk Data for sector [%d %d %d]",
-                        chunk.sector.x, chunk.sector.y, chunk.sector.z);
+                    // LOGI("Request Chunk Data for sector [%d %d %d]",
+                    //     chunk.sector.x, chunk.sector.y, chunk.sector.z);
                     systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
                         .message_direction = messages::MessageDirection::Request,
                         .sector = chunk.sector,

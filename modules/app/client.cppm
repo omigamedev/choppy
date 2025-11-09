@@ -35,6 +35,8 @@ struct my_data_source
     ma_sound sound{};
 };
 
+static void mic_data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount);
+
 static ma_result my_data_source_read(ma_data_source* pDataSource,
     void* pFramesOut, ma_uint64 frameCount, ma_uint64* pFramesRead)
 {
@@ -96,9 +98,14 @@ class ClientSystem : utils::NoCopy
     static constexpr uint16_t WebSoketPort = 7778;
     std::shared_ptr<rtc::WebSocket> ws;
     std::shared_ptr<rtc::PeerConnection> rtc_peer;
-    std::shared_ptr<rtc::Track> rtc_track;
+    std::shared_ptr<rtc::Track> rtc_world_track;
+    std::shared_ptr<rtc::Track> rtc_mic_track;
+    ma_device mic_device{};
+    uint64_t mic_timestamp = 0;
+
     my_data_source audio_data_source{};
-    OpusDecoder* decoder = nullptr;
+    OpusDecoder* world_decoder = nullptr;
+    OpusEncoder* mic_encoder = nullptr;
     ENetPeer* server = nullptr;
     ENetHost* client = nullptr;
     std::unordered_map<uint32_t, player::PlayerState> players;
@@ -334,7 +341,7 @@ public:
         case messages::MessageType::ChunkData:
             if (const auto chunk = messages::ChunkDataMessage::deserialize(message))
             {
-                LOGI("received chunk data: %llu", chunk->data.size());
+                // LOGI("received chunk data: %llu", chunk->data.size());
                 on_chunk_data(chunk.value());
             }
             break;
@@ -362,9 +369,12 @@ public:
     }
     void cleanup_rtc() noexcept
     {
-        if (rtc_track)
-            rtc_track->close();
-        rtc_track.reset();
+        if (rtc_world_track)
+            rtc_world_track->close();
+        rtc_world_track.reset();
+        if (rtc_mic_track)
+            rtc_mic_track->close();
+        rtc_mic_track.reset();
         if (rtc_peer)
             rtc_peer->close();
         rtc_peer.reset();
@@ -411,27 +421,36 @@ public:
                 });
         });
 
+        create_rtc_world_track();
+        create_rtc_mic_track();
+
+        //auto offer = rtc_peer->createOffer();
+        rtc_peer->setLocalDescription();
+        return true;
+    }
+    void create_rtc_world_track() noexcept
+    {
         const std::string audio_cname = "audio-track";
-        rtc::Description::Audio audio{audio_cname, rtc::Description::Direction::SendRecv};
+        rtc::Description::Audio audio{audio_cname, rtc::Description::Direction::RecvOnly};
         audio.addOpusCodec(111);
         audio.addSSRC(1, audio_cname, "stream1");
-        rtc_track = rtc_peer->addTrack(static_cast<rtc::Description::Media>(audio));
+        rtc_world_track = rtc_peer->addTrack(static_cast<rtc::Description::Media>(audio));
         const auto depacketizer = std::make_shared<rtc::OpusRtpDepacketizer>();
-        rtc_track->setMediaHandler(depacketizer);
-        rtc_track->onClosed([this]
+        rtc_world_track->setMediaHandler(depacketizer);
+        rtc_world_track->onClosed([this]
         {
-            opus_decoder_destroy(decoder);
-            decoder = nullptr;
+            opus_decoder_destroy(world_decoder);
+            world_decoder = nullptr;
             ma_sound_start(&audio_data_source.sound);
             ma_data_source_uninit(&audio_data_source.base);
             ma_sound_uninit(&audio_data_source.sound);
             // audio_dump.close();
         });
-        rtc_track->onOpen([this]
+        rtc_world_track->onOpen([this]
         {
             // LOGI("RTC: Audio Track onOpen");
             int error = 0;
-            decoder = opus_decoder_create(48000, 1, &error);
+            world_decoder = opus_decoder_create(48000, 1, &error);
             // audio_dump.open(std::format("audio-{}.pcm", player_id), std::ios::binary);
 
             ma_data_source_config baseConfig = ma_data_source_config_init();
@@ -450,18 +469,62 @@ public:
             }
             ma_sound_start(&audio_data_source.sound);
         });
-        rtc_track->onFrame([this](const rtc::binary& data, const rtc::FrameInfo& frame)
+        rtc_world_track->onFrame([this](const rtc::binary& data, const rtc::FrameInfo& frame)
         {
             std::vector<float> pcm(480);
-            const int samples = opus_decode_float(decoder, reinterpret_cast<const uint8_t*>(data.data()),
+            const int samples = opus_decode_float(world_decoder, reinterpret_cast<const uint8_t*>(data.data()),
                 static_cast<opus_int32>(data.size()), pcm.data(), static_cast<int32_t>(pcm.size()), 0);
             audio_data_source.pcm.append_range(pcm);
             // LOGI("RTC: onFrame %llu bytes to %d samples", data.size(), samples);
             // audio_dump.write(reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(float));
         });
-        //auto offer = rtc_peer->createOffer();
-        rtc_peer->setLocalDescription();
-        return true;
+    }
+    void create_rtc_mic_track() noexcept
+    {
+        const std::string audio_cname = "mic-track";
+        rtc::Description::Audio audio{audio_cname, rtc::Description::Direction::SendOnly};
+        audio.addOpusCodec(111);
+        audio.addSSRC(2, audio_cname, "stream1");
+        rtc_mic_track = rtc_peer->addTrack(static_cast<rtc::Description::Media>(audio));
+        auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(2, audio_cname, 111,
+            rtc::OpusRtpPacketizer::DefaultClockRate);
+        auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
+        auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
+        packetizer->addToChain(srReporter);
+        auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
+        packetizer->addToChain(nackResponder);
+        rtc_mic_track->setMediaHandler(packetizer);
+        rtc_mic_track->onClosed([this]
+        {
+            opus_encoder_destroy(mic_encoder);
+            mic_encoder = nullptr;
+            ma_device_stop(&mic_device);
+            ma_device_uninit(&mic_device);
+        });
+        rtc_mic_track->onOpen([this]
+        {
+            // LOGI("RTC: Audio Track onOpen");
+            int error = 0;
+            mic_encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
+
+            ma_device_config config = ma_device_config_init(ma_device_type_capture);
+            // config.capture.pDeviceID = &pCaptureDeviceInfos[2].id;
+            config.capture.format   = ma_format_f32;   // Set to ma_format_unknown to use the device's native format.
+            config.capture.channels = 1;               // Set to 0 to use the device's native channel count.
+            // config.capture.shareMode = ma_share_mode_shared;
+            // config.wasapi.usage = ma_wasapi_usage_pro_audio;
+            config.noPreSilencedOutputBuffer = false;
+            config.periodSizeInFrames = 480;
+            config.sampleRate        = 48000;           // Set to 0 to use the device's native sample rate.
+            config.dataCallback      = mic_data_callback;   // This function will be called when miniaudio needs more data.
+            config.pUserData         = this;   // Can be accessed from the device object (device.pUserData).
+            if (const ma_result result = ma_device_init(nullptr, &config, &mic_device); result != MA_SUCCESS)
+            {
+                LOGE("FAILED ma_device_init: %s", ma_result_description(result));
+                return;
+            }
+            ma_device_start(&mic_device);     // The device is sleeping by default so you'll need to start it manually.
+        });
     }
     void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4& view) noexcept
     {
@@ -477,6 +540,21 @@ public:
             player.destroy();
         }
         removed_players.clear();
+    }
+    void send_mic_data(const std::span<const float> pcm) noexcept
+    {
+        if (rtc_mic_track && rtc_mic_track->isOpen())
+        {
+            std::vector<uint8_t> packet(size_t{4000});
+            const int result = opus_encode_float(mic_encoder, pcm.data(),
+                pcm.size(), packet.data(), packet.size());
+            if (result > 0)
+            {
+                const auto timestamp = std::chrono::duration<double>(static_cast<double>(mic_timestamp) / 48000.0);
+                rtc_mic_track->sendFrame(reinterpret_cast<const std::byte*>(packet.data()),
+                    result, rtc::FrameInfo{timestamp});
+            }
+        }
     }
     void tick(const float dt) noexcept
     {
@@ -532,4 +610,15 @@ public:
         }
     }
 };
+}
+
+static void mic_data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
+{
+    // In playback mode copy data to pOutput. In capture mode read data from pInput. In full-duplex mode, both
+    // pOutput and pInput will be valid and you can move data from pInput into pOutput. Never process more than
+    // frameCount frames.
+    auto* context = static_cast<ce::app::client::ClientSystem*>(pDevice->pUserData);
+    const auto data = std::span(static_cast<const float*>(pInput), frameCount);
+    context->send_mic_data(data);
+    LOGI("mic_data_callback");
 }

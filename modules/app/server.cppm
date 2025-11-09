@@ -34,10 +34,12 @@ struct RTCPeer
 {
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::Track> audio_track;
+    std::shared_ptr<rtc::Track> mic_track;
     std::shared_ptr<rtc::DataChannel> data_channel;
     std::chrono::duration<double> timestamp;
     bool connected = false;
     OpusEncoder* enc = nullptr;
+    OpusDecoder* dec = nullptr;
     uint64_t encoded_samples = 0;
 };
 class ServerSystem : utils::NoCopy
@@ -257,8 +259,8 @@ public:
         case messages::MessageType::ChunkData:
             if (const auto chunk = messages::ChunkDataMessage::deserialize(message))
             {
-                LOGI("received chunk request for [%d, %d, %d]",
-                    chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                // LOGI("received chunk request for [%d, %d, %d]",
+                //     chunk->sector.x, chunk->sector.y, chunk->sector.z);
                 on_chunk_data_request(peer, chunk.value());
             }
             break;
@@ -340,22 +342,32 @@ public:
         {
             // LOGI("RTC: onTrack: %s", track->mid().c_str());
             // create RTP configuration
-            auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(1, track->mid(), 111,
-                rtc::OpusRtpPacketizer::DefaultClockRate);
-            auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
-            auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
-            packetizer->addToChain(srReporter);
-            auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
-            packetizer->addToChain(nackResponder);
-            track->setMediaHandler(packetizer);
-            track->onFrame([](const rtc::binary& data, const rtc::FrameInfo& frame)
+            if (track->mid() == "audio-track")
             {
-                LOGI("RTC: onFrame");
-            });
-            rtc_peers[peer].audio_track = track;
-
-            int error = 0;
-            rtc_peers[peer].enc = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
+                auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(1, track->mid(), 111,
+                    rtc::OpusRtpPacketizer::DefaultClockRate);
+                auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
+                auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
+                packetizer->addToChain(srReporter);
+                auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
+                packetizer->addToChain(nackResponder);
+                track->setMediaHandler(packetizer);
+                rtc_peers[peer].audio_track = track;
+                int error = 0;
+                rtc_peers[peer].enc = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
+            }
+            else if (track->mid() == "mic-track")
+            {
+                const auto depacketizer = std::make_shared<rtc::OpusRtpDepacketizer>();
+                track->setMediaHandler(depacketizer);
+                track->onFrame([](const rtc::binary& data, const rtc::FrameInfo& frame)
+                {
+                    LOGI("RTC: onFrame");
+                });
+                rtc_peers[peer].mic_track = track;
+                int error = 0;
+                rtc_peers[peer].dec = opus_decoder_create(48000, 1, &error);
+            }
         });
         rtc_peers.emplace(peer, RTCPeer{.peer = rtc_peer});
         return true;
