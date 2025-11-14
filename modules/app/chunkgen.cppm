@@ -5,6 +5,15 @@ module;
 #include <unordered_map>
 #include <vector>
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ChoppyEngine", __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ChoppyEngine", __VA_ARGS__)
+#else
+#define LOGE(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
+#define LOGI(fmt, ...) printf(fmt "\n", ##__VA_ARGS__)
+#endif
+
 export module ce.app:chunkgen;
 import :utils;
 import glm;
@@ -262,6 +271,7 @@ public:
                 write(file, type);
             }
         }
+        LOGI("terrain saved");
     }
     template<typename T>
     T read(std::ifstream& file) const noexcept

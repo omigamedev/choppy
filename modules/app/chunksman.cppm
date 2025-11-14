@@ -72,6 +72,8 @@ struct ChunksManager
     std::vector<glm::ivec3> m_regenerate_sectors;
     std::atomic_bool needs_update = false;
     std::vector<std::pair<glm::ivec3, std::vector<uint8_t>>> chunks_to_sync;
+    enum class ChunkNetState{None, Wait, Ready, Sync};
+    std::unordered_map<glm::ivec3, ChunkNetState, IVec3Hash> chunks_netstate;
     bool m_running = true;
     Frustum m_frustum;
     glm::vec3 cam_pos = { 0, 10, 0 };
@@ -283,6 +285,7 @@ struct ChunksManager
             return dist1 < dist2;
         });
 
+        int polys = 0;
         std::unordered_map<BlockLayer, BatchDraw> batches;
         for (auto& chunk : sorted_chunks)
         {
@@ -296,17 +299,18 @@ struct ChunksManager
 
             if (!globals::server_mode && systems::m_client_system->connected())
             {
-                if (!chunk.net_requested && !generator.is_net_ready(chunk.sector))
+                if (chunks_netstate[chunk.sector] == ChunkNetState::None)
                 {
-                    // LOGI("Request Chunk Data for sector [%d %d %d]",
-                    //     chunk.sector.x, chunk.sector.y, chunk.sector.z);
+                    LOGI("Request Chunk Data for sector [%d %d %d]",
+                        chunk.sector.x, chunk.sector.y, chunk.sector.z);
                     systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
                         .message_direction = messages::MessageDirection::Request,
                         .sector = chunk.sector,
                     });
                     chunk.net_requested = true;
+                    chunks_netstate[chunk.sector] = ChunkNetState::Wait;
                 }
-                else if (!chunk.net_sync)
+                else if (chunks_netstate[chunk.sector] == ChunkNetState::Ready)
                 {
                     if (const auto it = std::ranges::find(chunks_to_sync, chunk.sector,
                         &std::pair<glm::ivec3, std::vector<uint8_t>>::first); it != chunks_to_sync.end())
@@ -315,6 +319,9 @@ struct ChunksManager
                         chunk.net_sync = true;
                         chunk.regenerate = true;
                         chunks_to_sync.erase(it);
+                        chunks_netstate[chunk.sector] = ChunkNetState::Sync;
+                        LOGI("Sync Chunk Data for sector [%d %d %d]",
+                            chunk.sector.x, chunk.sector.y, chunk.sector.z);
                     }
                 }
             }
@@ -370,6 +377,7 @@ struct ChunksManager
                         .firstInstance = 0
                     });
                     batches[layer].draw_count++;
+                    polys += m.vertices.size() / 3;
                 }
             }
             chunk.dirty = false;

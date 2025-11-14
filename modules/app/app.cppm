@@ -579,7 +579,6 @@ public:
             {
                 save_timer = 0;
                 m_world.chunks_manager.generator.save();
-                LOGI("terrain saved");
             }
             save_timer += dt;
         }

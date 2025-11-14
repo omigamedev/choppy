@@ -15,11 +15,6 @@ FetchContent_Declare(nlohmann-json
 FetchContent_Declare(miniaudio
     GIT_REPOSITORY https://github.com/mackron/miniaudio.git
     GIT_TAG master) # 0.11.23
-set(MINIAUDIO_ENABLE_ONLY_SPECIFIC_BACKENDS ON)
-set(MINIAUDIO_ENABLE_WASAPI ON)
-set(MINIAUDIO_ENABLE_AAUDIO ON)
-set(MINIAUDIO_NO_RUNTIME_LINKING ON)
-set(MINIAUDIO_DEBUG_OUTPUT ON)
 FetchContent_Declare(tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
     GIT_TAG c556831ddc6fe26d2fce01c14c97205a9dad46d5) # v0.12.2

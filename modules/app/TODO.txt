@@ -1,0 +1,9 @@
+Audio
+[x] dump audio track on the server side
+[x] forward audio packets to other players
+[ ] audio delay: clear client audio queue if it's too big
+[ ] use miniaudio for mixing?
+[ ] mix world audio with buffering
+[ ] add spatialization
+Networking
+[ ] make sure you don't generate chunks that are waiting on server data

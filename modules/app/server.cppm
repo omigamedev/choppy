@@ -36,17 +36,21 @@ struct RTCPeer
     std::shared_ptr<rtc::Track> audio_track;
     std::shared_ptr<rtc::Track> mic_track;
     std::shared_ptr<rtc::DataChannel> data_channel;
-    std::chrono::duration<double> timestamp;
+    std::chrono::duration<double> timestamp{0};
     bool connected = false;
     OpusEncoder* enc = nullptr;
     OpusDecoder* dec = nullptr;
     uint64_t encoded_samples = 0;
+    std::ofstream audio_dump;
+    std::vector<std::vector<float>> mic_buffer;
+    std::vector<std::vector<float>> audio_mix_buffer;
 };
 class ServerSystem : utils::NoCopy
 {
     static constexpr uint32_t MaxClients = 32;
     std::shared_ptr<rtc::WebSocketServer> wss;
     std::vector<std::shared_ptr<rtc::WebSocket>> ws_clients;
+    std::mutex audio_mutex;
     ENetHost* server = nullptr;
     uint32_t client_ids = 1;
     std::unordered_map<ENetPeer*, player::PlayerState> clients;
@@ -142,6 +146,7 @@ public:
         const auto buffer = message.serialize();
         ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
         enet_peer_send(peer, 0, packet);
+        enet_host_flush(server);
         //LOGI("sent message of type: %s", messages::to_string(message.type));
     }
     template<typename T>
@@ -151,6 +156,7 @@ public:
         ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
         for (ENetPeer* peer : std::views::keys(clients))
             enet_peer_send(peer, 0, packet);
+        enet_host_flush(server);
         //LOGI("sent message of type: %s", messages::to_string(message.type));
     }
     template<typename T>
@@ -177,11 +183,18 @@ public:
         clients.erase(peer);
 
         if (rtc_peers[peer].audio_track)
+        {
             rtc_peers[peer].audio_track->close();
+        }
         if (rtc_peers[peer].data_channel)
+        {
             rtc_peers[peer].data_channel->close();
-        rtc_peers[peer].peer->close();
-        rtc_peers.erase(peer);
+        }
+        if (rtc_peers[peer].peer)
+        {
+            rtc_peers[peer].peer->close();
+            rtc_peers.erase(peer);
+        }
 
         for (const auto& [send_peer, player] : clients)
         {
@@ -259,8 +272,8 @@ public:
         case messages::MessageType::ChunkData:
             if (const auto chunk = messages::ChunkDataMessage::deserialize(message))
             {
-                // LOGI("received chunk request for [%d, %d, %d]",
-                //     chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                LOGI("received chunk request for [%d, %d, %d]",
+                    chunk->sector.x, chunk->sector.y, chunk->sector.z);
                 on_chunk_data_request(peer, chunk.value());
             }
             break;
@@ -295,7 +308,10 @@ public:
         LOGI("connect_rtc");
         rtc::Configuration config;
         config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+        config.portRangeBegin = 7780;
+        config.portRangeEnd = 7790;
         auto rtc_peer = std::make_shared<rtc::PeerConnection>(config);
+        rtc_peers.emplace(peer, RTCPeer{.peer = rtc_peer});
         rtc_peer->onStateChange([this, peer](const rtc::PeerConnection::State state)
         {
             // LOGI("RTC: onStateChange: %d", std::to_underlying(state));
@@ -346,10 +362,10 @@ public:
             {
                 auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(1, track->mid(), 111,
                     rtc::OpusRtpPacketizer::DefaultClockRate);
-                auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
-                auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
+                const auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
+                const auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
                 packetizer->addToChain(srReporter);
-                auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
+                const auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
                 packetizer->addToChain(nackResponder);
                 track->setMediaHandler(packetizer);
                 rtc_peers[peer].audio_track = track;
@@ -360,16 +376,32 @@ public:
             {
                 const auto depacketizer = std::make_shared<rtc::OpusRtpDepacketizer>();
                 track->setMediaHandler(depacketizer);
-                track->onFrame([](const rtc::binary& data, const rtc::FrameInfo& frame)
+                track->onOpen([this, peer]
                 {
-                    LOGI("RTC: onFrame");
+                    int error = 0;
+                    rtc_peers[peer].dec = opus_decoder_create(48000, 1, &error);
+                    // rtc_peers[peer].audio_dump.open(
+                    //     std::format("audio-{}.pcm", clients[peer].id), std::ios::binary);
+                });
+                track->onFrame([this, peer](const rtc::binary& data, const rtc::FrameInfo& frame)
+                {
+                    // LOGI("RTC: onFrame");
+                    std::vector<float> pcm(480);
+                    const int samples = opus_decode_float(rtc_peers[peer].dec, reinterpret_cast<const uint8_t*>(data.data()),
+                        static_cast<opus_int32>(data.size()), pcm.data(), static_cast<int32_t>(pcm.size()), 0);
+                    // rtc_peers[peer].audio_dump.write(reinterpret_cast<const char*>(pcm.data()),
+                    //     pcm.size() * sizeof(float));
+                    std::lock_guard audio_lock(audio_mutex);
+                    rtc_peers[peer].mic_buffer.push_back(std::move(pcm));
+                });
+                track->onClosed([this, peer]
+                {
+                    opus_decoder_destroy(rtc_peers[peer].dec);
+                    // rtc_peers[peer].audio_dump.close();
                 });
                 rtc_peers[peer].mic_track = track;
-                int error = 0;
-                rtc_peers[peer].dec = opus_decoder_create(48000, 1, &error);
             }
         });
-        rtc_peers.emplace(peer, RTCPeer{.peer = rtc_peer});
         return true;
     }
     void update(const float dt, const vk::utils::FrameContext& frame, const glm::mat4& view) noexcept
@@ -404,37 +436,69 @@ public:
         }
         removed_players.clear();
     }
-    void tick(const float dt) noexcept
+    void audio_mixdown() noexcept
     {
+        std::lock_guard audio_lock(audio_mutex);
+        auto ready_peers = std::views::values(rtc_peers) |
+            std::views::filter([](const auto& peer){ return peer.connected && peer.audio_track->isOpen(); });
+        if (ready_peers.empty())
+            return;
+        const auto [min_frames, max_frames] = std::ranges::minmax(ready_peers |
+            std::views::transform([](const auto& peer){ return peer.mic_buffer.size(); }));
+        const auto frames_to_send = (max_frames - min_frames > 5) ? max_frames : min_frames;
+        if (frames_to_send == 0)
+            return;
+        std::vector<uint8_t> packet_buffer(size_t{4000});
         for (auto& [peer, rtc_peer] : rtc_peers)
         {
-            if (rtc_peer.connected && rtc_peer.audio_track->isOpen())
+            if (!rtc_peer.connected || !rtc_peer.audio_track->isOpen())
+                continue;
+
+            std::vector<std::vector<float>> frames;
+            for (size_t i = 0; i < frames_to_send; ++i)
+                frames.emplace_back(480);
+            for (const auto& [other_peer, other_rtc_peer] : rtc_peers)
             {
-                rtc_peer.timestamp += std::chrono::duration<double>(dt);
-                const double audio_time = static_cast<double>(rtc_peer.encoded_samples) / 48000.0;
-                if (rtc_peer.timestamp.count() > audio_time)
+                if (peer != other_peer)
                 {
-                    std::vector<float> samples(480); // 10ms
-                    for (size_t i = 0; i < samples.size(); ++i)
+                    const size_t frames_to_copy = std::min(frames_to_send, other_rtc_peer.mic_buffer.size());
+                    for (size_t i = 0; i < frames_to_copy; ++i)
                     {
-                        const double t = audio_time + static_cast<double>(i) / 48000.0;
-                        const double f = 440 + sinf(t * 10) * 100;
-                        samples[i] = sinf(t * f) * 0.0f;
+                        std::ranges::transform(frames[i], other_rtc_peer.mic_buffer[i],
+                            frames[i].begin(), std::plus{});
                     }
-                    std::vector<uint8_t> packet(size_t{4000});
-                    const int result = opus_encode_float(rtc_peer.enc, samples.data(),
-                        samples.size(), packet.data(), packet.size());
-                    if (result > 0)
-                    {
-                        rtc_peer.audio_track->sendFrame(reinterpret_cast<const std::byte*>(packet.data()),
-                            result, rtc::FrameInfo{rtc_peer.timestamp});
-                    }
-                    rtc_peer.encoded_samples += samples.size();
                 }
             }
+            for (const auto& frame : frames)
+            {
+                const double audio_time = static_cast<double>(rtc_peer.encoded_samples) / 48000.0;
+                const int result = opus_encode_float(rtc_peer.enc, frame.data(),
+                    frame.size(), packet_buffer.data(), packet_buffer.size());
+                if (result > 0)
+                {
+                    const auto timestamp = std::chrono::duration<double>{audio_time};
+                    rtc_peer.audio_track->sendFrame(reinterpret_cast<const std::byte*>(packet_buffer.data()),
+                        result, rtc::FrameInfo{timestamp});
+                }
+                rtc_peer.encoded_samples += frame.size();
+            }
         }
+
+        // remove processed frames
+        for (auto& rtc_peer : rtc_peers | std::views::values)
+        {
+            const auto frames_to_delete = std::min(rtc_peer.mic_buffer.size(), frames_to_send);
+            rtc_peer.mic_buffer.erase(rtc_peer.mic_buffer.begin(),
+               rtc_peer.mic_buffer.begin() + frames_to_delete);
+        }
+    }
+    void tick(const float dt) noexcept
+    {
+        if (!rtc_peers.empty())
+            audio_mixdown();
+
         ENetEvent event{};
-        if (enet_host_service(server, &event, 0) > 0)
+        while (enet_host_service(server, &event, 0) > 0)
         {
             switch (event.type)
             {
@@ -442,6 +506,7 @@ public:
                 LOGI("A new client connected from %s.", address2str(event.peer->address).c_str());
                 // Store any relevant client information here.
                 // event.peer->data = new player::PlayerState;
+                enet_peer_timeout(event.peer, 500, 10000, 30000);
                 add_player(event.peer);
                 break;
             case ENET_EVENT_TYPE_RECEIVE:
@@ -455,10 +520,12 @@ public:
                 break;
             case ENET_EVENT_TYPE_DISCONNECT:
                 LOGI("%s disconnected.", static_cast<const char*>(event.peer->data));
+                enet_peer_reset_queues(event.peer);
                 remove_player(event.peer);
                 break;
             case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
                 LOGI("%s disconnected due to timeout.", static_cast<const char*>(event.peer->data));
+                enet_peer_reset_queues(event.peer);
                 remove_player(event.peer);
                 break;
             case ENET_EVENT_TYPE_NONE:

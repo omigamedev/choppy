@@ -93,7 +93,7 @@ export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
 {
-    static constexpr std::string_view ServerHost = "192.168.1.65";
+    static constexpr std::string_view ServerHost = "192.168.1.60";
     static constexpr uint16_t ServerPort = 7777;
     static constexpr uint16_t WebSoketPort = 7778;
     std::shared_ptr<rtc::WebSocket> ws;
@@ -149,7 +149,8 @@ public:
             LOGE("An error occurred while trying to create an ENet client host.");
             return false;
         }
-        connect_async();
+        if (!connect())
+            connect_async();
         return true;
     }
     void connect_async() noexcept
@@ -188,6 +189,7 @@ public:
         {
             LOGI("Connection to %s succeeded.", address2str(address).c_str());
             server = event.peer;
+            enet_peer_timeout(event.peer, 500, 10000, 30000);
             send_message(ENET_PACKET_FLAG_RELIABLE, messages::JoinRequestMessage{
                 .username = std::format("random_user_{}", rand())
             });
@@ -225,6 +227,7 @@ public:
         const auto buffer = message.serialize();
         ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), enet_flags);
         enet_peer_send(server, 0, packet);
+        enet_host_flush(client);
         //LOGI("sent message of type: %s", messages::to_string(message.type));
     }
     template<typename T>
@@ -341,7 +344,7 @@ public:
         case messages::MessageType::ChunkData:
             if (const auto chunk = messages::ChunkDataMessage::deserialize(message))
             {
-                // LOGI("received chunk data: %llu", chunk->data.size());
+                LOGI("received chunk data: %llu", chunk->data.size());
                 on_chunk_data(chunk.value());
             }
             break;
@@ -488,10 +491,10 @@ public:
         rtc_mic_track = rtc_peer->addTrack(static_cast<rtc::Description::Media>(audio));
         auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(2, audio_cname, 111,
             rtc::OpusRtpPacketizer::DefaultClockRate);
-        auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
-        auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
+        const auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
+        const auto srReporter = std::make_shared<rtc::RtcpSrReporter>(rtpConfig);
         packetizer->addToChain(srReporter);
-        auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
+        const auto nackResponder = std::make_shared<rtc::RtcpNackResponder>();
         packetizer->addToChain(nackResponder);
         rtc_mic_track->setMediaHandler(packetizer);
         rtc_mic_track->onClosed([this]
@@ -573,7 +576,7 @@ public:
         }
 
         ENetEvent event{};
-        if (enet_host_service(client, &event, 0) > 0)
+        while (enet_host_service(client, &event, 0) > 0)
         {
             switch (event.type)
             {
@@ -620,5 +623,5 @@ static void mic_data_callback(ma_device* pDevice, void* pOutput, const void* pIn
     auto* context = static_cast<ce::app::client::ClientSystem*>(pDevice->pUserData);
     const auto data = std::span(static_cast<const float*>(pInput), frameCount);
     context->send_mic_data(data);
-    LOGI("mic_data_callback");
+    // LOGI("mic_data_callback");
 }
