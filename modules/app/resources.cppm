@@ -4,6 +4,7 @@ module;
 #include <tuple>
 #include <memory>
 #include <map>
+#include <optional>
 #include <volk.h>
 #include <vk_mem_alloc.h>
 #include <tracy/Tracy.hpp>

@@ -307,7 +307,15 @@ public:
 	}
 	void tick(const float dt) noexcept
 	{
-	    physics_system.Update(dt, 1, temp_allocator.get(), job_system.get());
+		static float tick_timer = 0.f;
+		static float physics_timer = 0.f;
+		tick_timer += dt;
+		while (physics_timer < tick_timer)
+		{
+			constexpr float update_frequency = 1.f / 120.f;
+			physics_system.Update(update_frequency, 1, temp_allocator.get(), job_system.get());
+			physics_timer += update_frequency;
+		}
 	    if (is_recording)
 	    {
 	        static float recorder_timer = 0;

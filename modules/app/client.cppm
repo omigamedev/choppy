@@ -28,11 +28,15 @@ import :messages;
 import ce.shaders.solidcolor;
 import ce.vk.utils;
 
+static constexpr uint32_t FrameSize = 480 * 6;
+static constexpr uint32_t Samplerate = 48000;
+
 struct my_data_source
 {
     ma_data_source_base base;
     std::vector<float> pcm;
     ma_sound sound{};
+    std::mutex mutex;
 };
 
 static void mic_data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount);
@@ -42,11 +46,16 @@ static ma_result my_data_source_read(ma_data_source* pDataSource,
 {
     // Read data here. Output in the same format returned by my_data_source_get_data_format().
     auto* source = static_cast<my_data_source*>(pDataSource);
-    const std::span out = {static_cast<float*>(pFramesOut), source->pcm.size()};
+    const std::span out = {static_cast<float*>(pFramesOut), frameCount};
+    if (source->pcm.size() < FrameSize * 2)
+    {
+        std::ranges::fill(out, 0);
+        return MA_SUCCESS;
+    }
+    std::lock_guard lock(source->mutex);
     const int32_t frames = std::min<int32_t>(frameCount, source->pcm.size());
     std::copy_n(source->pcm.data(), frames, out.begin());
     source->pcm.erase(source->pcm.begin(), source->pcm.begin() + frames);
-    // LOGI("my_data_source_read read %d/%llu frames", frames, source->pcm.size());
     if (pFramesRead) *pFramesRead = frames;
     return MA_SUCCESS;
 }
@@ -63,7 +72,7 @@ static ma_result my_data_source_get_data_format(ma_data_source* pDataSource,
     // Return the format of the data here.
     if (pFormat) *pFormat = ma_format_f32;
     if (pChannels) *pChannels = 1;
-    if (pSampleRate) *pSampleRate = 48000;
+    if (pSampleRate) *pSampleRate = Samplerate;
     if (pChannelMap) *pChannelMap = MA_CHANNEL_MONO;
     return MA_SUCCESS;
 }
@@ -93,7 +102,7 @@ export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
 {
-    static constexpr std::string_view ServerHost = "192.168.1.60";
+    static constexpr std::string_view ServerHost = "79.27.66.28";
     static constexpr uint16_t ServerPort = 7777;
     static constexpr uint16_t WebSoketPort = 7778;
     std::shared_ptr<rtc::WebSocket> ws;
@@ -453,7 +462,7 @@ public:
         {
             // LOGI("RTC: Audio Track onOpen");
             int error = 0;
-            world_decoder = opus_decoder_create(48000, 1, &error);
+            world_decoder = opus_decoder_create(Samplerate, 1, &error);
             // audio_dump.open(std::format("audio-{}.pcm", player_id), std::ios::binary);
 
             ma_data_source_config baseConfig = ma_data_source_config_init();
@@ -474,9 +483,12 @@ public:
         });
         rtc_world_track->onFrame([this](const rtc::binary& data, const rtc::FrameInfo& frame)
         {
-            std::vector<float> pcm(480);
+            std::vector<float> pcm(FrameSize);
             const int samples = opus_decode_float(world_decoder, reinterpret_cast<const uint8_t*>(data.data()),
                 static_cast<opus_int32>(data.size()), pcm.data(), static_cast<int32_t>(pcm.size()), 0);
+            std::lock_guard lock(audio_data_source.mutex);
+            if (audio_data_source.pcm.size() > FrameSize * 10)
+                audio_data_source.pcm.erase(audio_data_source.pcm.begin(), audio_data_source.pcm.begin() + FrameSize * 5);
             audio_data_source.pcm.append_range(pcm);
             // LOGI("RTC: onFrame %llu bytes to %d samples", data.size(), samples);
             // audio_dump.write(reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(float));
@@ -508,7 +520,7 @@ public:
         {
             // LOGI("RTC: Audio Track onOpen");
             int error = 0;
-            mic_encoder = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
+            mic_encoder = opus_encoder_create(Samplerate, 1, OPUS_APPLICATION_VOIP, &error);
 
             ma_device_config config = ma_device_config_init(ma_device_type_capture);
             // config.capture.pDeviceID = &pCaptureDeviceInfos[2].id;
@@ -517,8 +529,8 @@ public:
             // config.capture.shareMode = ma_share_mode_shared;
             // config.wasapi.usage = ma_wasapi_usage_pro_audio;
             config.noPreSilencedOutputBuffer = false;
-            config.periodSizeInFrames = 480;
-            config.sampleRate        = 48000;           // Set to 0 to use the device's native sample rate.
+            config.periodSizeInFrames = FrameSize;
+            config.sampleRate        = Samplerate;           // Set to 0 to use the device's native sample rate.
             config.dataCallback      = mic_data_callback;   // This function will be called when miniaudio needs more data.
             config.pUserData         = this;   // Can be accessed from the device object (device.pUserData).
             if (const ma_result result = ma_device_init(nullptr, &config, &mic_device); result != MA_SUCCESS)
@@ -553,7 +565,8 @@ public:
                 pcm.size(), packet.data(), packet.size());
             if (result > 0)
             {
-                const auto timestamp = std::chrono::duration<double>(static_cast<double>(mic_timestamp) / 48000.0);
+                const auto timestamp = std::chrono::duration<double>(
+                    static_cast<double>(mic_timestamp) / static_cast<double>(Samplerate));
                 rtc_mic_track->sendFrame(reinterpret_cast<const std::byte*>(packet.data()),
                     result, rtc::FrameInfo{timestamp});
             }

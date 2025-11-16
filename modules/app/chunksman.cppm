@@ -12,12 +12,18 @@ module;
 #include <mutex>
 
 #include <enet.h>
+#include <future>
 #include <volk.h>
 #include <vk_mem_alloc.h>
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 #include <tracy/TracyVulkan.hpp>
 #include <Jolt/Jolt.h>
+
+#include <Jolt/Jolt.h>
+#include <Jolt/Physics/Body/BodyID.h>
+#include <Jolt/Core/Reference.h>
+#include <Jolt/Physics/Collision/Shape/Shape.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -39,6 +45,45 @@ import :client;
 
 export namespace ce::app::chunksman
 {
+struct Chunk final
+{
+    bool valid = false;
+    glm::mat4 transform{};
+    glm::vec4 color{};
+    glm::ivec3 sector{};
+    std::unordered_map<BlockLayer, ChunkMesh<shaders::SolidFlatShader::VertexInput>> mesh;
+    std::unordered_map<BlockLayer, vk::BufferSuballocation> buffer{};
+    bool dirty = false;
+    bool regenerate = false;
+    ChunkData data;
+    JPH::RefConst<JPH::Shape> shape;
+    JPH::BodyID body_id;
+    bool net_sync = false;
+    bool net_requested = false;
+    std::future<void> generate_future;
+    bool async_generating = false;
+    void generate(const FlatGenerator& generator, const GreedyMesher<shaders::SolidFlatShader::VertexInput>& mesher,
+        const glm::ivec3& generate_sector) noexcept
+    {
+        auto blocks_data = generator.generate(generate_sector);
+        auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
+        // m_chunk_updates.emplace_back(m_chunks.size());
+        mesh = std::move(chunk_data);
+        data = std::move(blocks_data);
+        sector = generate_sector;
+        color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
+        transform = glm::gtc::translate(glm::vec3(sector) *
+            globals::ChunkSize * globals::BlockSize);
+        dirty = true;
+        regenerate = false;
+        systems::m_physics_system->remove_body(body_id);
+        if (auto result = systems::m_physics_system->create_chunk_body(
+            globals::ChunkSize, globals::BlockSize, data, sector))
+        {
+            std::tie(body_id, shape) = result.value();
+        }
+    }
+};
 struct ChunkUpdate
 {
     std::map<BlockType, ChunkMesh<shaders::SolidFlatShader::VertexInput>> data;
@@ -62,7 +107,7 @@ struct BatchDraw
 };
 struct ChunksManager
 {
-    std::vector<Chunk> m_chunks;
+    std::vector<std::shared_ptr<Chunk>> m_chunks;
     FlatGenerator generator{globals::ChunkSize, 10};
     GreedyMesher<shaders::SolidFlatShader::VertexInput> mesher{};
     // std::vector<uint32_t> m_chunk_updates;
@@ -74,10 +119,12 @@ struct ChunksManager
     std::vector<std::pair<glm::ivec3, std::vector<uint8_t>>> chunks_to_sync;
     enum class ChunkNetState{None, Wait, Ready, Sync};
     std::unordered_map<glm::ivec3, ChunkNetState, IVec3Hash> chunks_netstate;
+    std::unordered_map<glm::ivec3, std::vector<uint8_t>, IVec3Hash> chunks_netdata;
     bool m_running = true;
     Frustum m_frustum;
     glm::vec3 cam_pos = { 0, 10, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
+    uint64_t last_timeline_value = 0;
 
     bool create() noexcept
     {
@@ -106,7 +153,7 @@ struct ChunksManager
             generator.save();
         for (auto& c : m_chunks)
         {
-            for (auto& [k, b] : c.buffer)
+            for (auto& [k, b] : c->buffer)
                 globals::m_resources->vertex_buffer.subfree(b);
         }
         clear_chunks_state(0);
@@ -152,8 +199,8 @@ struct ChunksManager
         chunk_indices.reserve(chunk_count);
         for (size_t i = 0; i < m_chunks.size(); ++i)
         {
-            if (auto it = std::ranges::find(neighbors, m_chunks[i].sector);
-                it == neighbors.end() || m_chunks[i].regenerate)
+            if (auto it = std::ranges::find(neighbors, m_chunks[i]->sector);
+                it == neighbors.end() || m_chunks[i]->regenerate)
             {
                 chunk_indices.emplace_back(i);
             }
@@ -185,11 +232,13 @@ struct ChunksManager
         std::lock_guard lock(m_chunks_mutex);
         for (const auto& sector : neighbors)
         {
+            if (!generator.is_net_ready(sector))
+                continue;
             // check if it's already present
             if (auto it = std::ranges::find(m_chunks, sector,
-                [](auto& p){ return p.sector; }); it != m_chunks.end())
+                [](auto& p){ return p->sector; }); it != m_chunks.end())
             {
-                if (!it->regenerate)
+                if (!(*it)->regenerate)
                     continue;
             }
             if (m_chunks.size() < chunk_count)
@@ -197,20 +246,20 @@ struct ChunksManager
                 auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
                 // m_chunk_updates.emplace_back(m_chunks.size());
-                auto& chunk = m_chunks.emplace_back();
-                chunk.mesh = std::move(chunk_data);
-                chunk.data = std::move(blocks_data);
-                chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
-                chunk.sector = sector;
-                chunk.transform = glm::gtc::translate(glm::vec3(sector) *
+                auto& chunk = m_chunks.emplace_back(std::make_shared<Chunk>());
+                chunk->mesh = std::move(chunk_data);
+                chunk->data = std::move(blocks_data);
+                chunk->color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
+                chunk->sector = sector;
+                chunk->transform = glm::gtc::translate(glm::vec3(sector) *
                     globals::ChunkSize * globals::BlockSize);
-                chunk.dirty = true;
-                chunk.regenerate = false;
-                systems::m_physics_system->remove_body(chunk.body_id);
+                chunk->dirty = true;
+                chunk->regenerate = false;
+                systems::m_physics_system->remove_body(chunk->body_id);
                 if (auto result = systems::m_physics_system->create_chunk_body(
-                    globals::ChunkSize, globals::BlockSize, chunk.data, chunk.sector))
+                    globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
                 {
-                    std::tie(chunk.body_id, chunk.shape) = result.value();
+                    std::tie(chunk->body_id, chunk->shape) = result.value();
                 }
                 needs_update = true;
                 if (!--chunks_to_generate)
@@ -222,19 +271,19 @@ struct ChunksManager
                 auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
                 const uint32_t chunk_index = chunk_indices[chunk_indices_offset++];
                 auto& chunk = m_chunks[chunk_index];
-                chunk.mesh = std::move(chunk_data);
-                chunk.data = std::move(blocks_data);
-                chunk.color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
-                chunk.sector = sector;
-                chunk.transform = glm::gtc::translate(glm::vec3(sector) *
+                chunk->mesh = std::move(chunk_data);
+                chunk->data = std::move(blocks_data);
+                chunk->color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
+                chunk->sector = sector;
+                chunk->transform = glm::gtc::translate(glm::vec3(sector) *
                     globals::ChunkSize * globals::BlockSize);
-                chunk.dirty = true;
-                chunk.regenerate = false;
-                systems::m_physics_system->remove_body(chunk.body_id);
+                chunk->dirty = true;
+                chunk->regenerate = false;
+                systems::m_physics_system->remove_body(chunk->body_id);
                 if (auto result = systems::m_physics_system->create_chunk_body(
-                    globals::ChunkSize, globals::BlockSize, chunk.data, chunk.sector))
+                    globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
                 {
-                    std::tie(chunk.body_id, chunk.shape) = result.value();
+                    std::tie(chunk->body_id, chunk->shape) = result.value();
                 }
                 needs_update = true;
                 if (!--chunks_to_generate)
@@ -242,6 +291,25 @@ struct ChunksManager
             }
         }
         return true;
+    }
+    void clear_chunks() noexcept
+    {
+        std::lock_guard lock(m_chunks_mutex);
+
+        for (auto& chunk : m_chunks)
+        {
+            systems::m_physics_system->remove_body(chunk->body_id);
+            for (const auto& [layer, m] : chunk->mesh)
+            {
+                if (chunk->buffer[layer].alloc)
+                {
+                    globals::m_resources->delete_buffers.emplace(last_timeline_value,
+                        std::pair(std::ref(globals::m_resources->vertex_buffer), chunk->buffer[layer]));
+                }
+            }
+        }
+
+        m_chunks.clear();
     }
     void clear_chunks_state(const uint64_t timeline_value) noexcept
     {
@@ -267,9 +335,81 @@ struct ChunksManager
     {
         ZoneScoped;
 
+        last_timeline_value = frame.timeline_value;
         std::unique_lock lock(m_chunks_mutex, std::try_to_lock);
         if (!lock.owns_lock())
             return;
+
+        const glm::ivec3 cur_sector =
+            glm::floor(cam_pos / (globals::ChunkSize * globals::BlockSize));
+
+        auto neighbors = generate_neighbors(cur_sector, globals::ChunkRings);
+        std::ranges::sort(neighbors, [cur_sector](const glm::ivec3 a, const glm::ivec3 b)
+        {
+            const float dist1 = glm::gtx::distance2(glm::vec3(a), glm::vec3(cur_sector));
+            const float dist2 = glm::gtx::distance2(glm::vec3(b), glm::vec3(cur_sector));
+            return dist1 < dist2;
+        });
+
+        if (!globals::server_mode && systems::m_client_system->connected())
+        {
+            std::vector<glm::ivec3> sectors;
+            for (const auto& sector : neighbors)
+            {
+                if (chunks_netstate[sector] == ChunkNetState::None)
+                {
+                    chunks_netstate[sector] = ChunkNetState::Wait;
+                    sectors.push_back(sector);
+                }
+                else if (chunks_netstate[sector] == ChunkNetState::Ready)
+                {
+                    generator.deserialize_apply(sector, chunks_netdata[sector]);
+                    chunks_netstate[sector] = ChunkNetState::Sync;
+                    generator.set_net_ready(sector);
+                }
+            }
+            if (!sectors.empty())
+            {
+                systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
+                   .message_direction = messages::MessageDirection::Request,
+                   .sectors = sectors,
+               });
+            }
+        }
+
+        // for (auto& sector : neighbors)
+        // {
+        //     // check if it's already present
+        //     if (auto it = std::ranges::find(m_chunks, sector,
+        //         [](auto& p){ return p->sector; }); it != m_chunks.end())
+        //     {
+        //         auto& chunk = *it;
+        //         if (chunk->async_generating)
+        //             continue;
+        //         // if (chunk->regenerate)
+        //         // {
+        //         //     chunk->async_generating = true;
+        //         //     chunk->generate_future = std::async(std::launch::async, [this, chunk, sector]
+        //         //     {
+        //         //         LOGI("async regenerate begin for [%d, %d, %d]", sector.x, sector.y, sector.z);
+        //         //         chunk->generate(generator, mesher, sector);
+        //         //         LOGI("async regenerate end for [%d, %d, %d]", sector.x, sector.y, sector.z);
+        //         //     });
+        //         // }
+        //     }
+        //     else
+        //     {
+        //         auto& chunk = m_chunks.emplace_back(std::make_shared<Chunk>());
+        //         chunk->async_generating = true;
+        //         LOGI("start async for [%d, %d, %d]", sector.x, sector.y, sector.z);
+        //         chunk->generate_future = std::async(std::launch::async, [this, chunk, sector]
+        //         {
+        //             LOGI("async begin for [%d, %d, %d]", sector.x, sector.y, sector.z);
+        //             chunk->generate(generator, mesher, sector);
+        //             LOGI("async end for [%d, %d, %d]", sector.x, sector.y, sector.z);
+        //         });
+        //     }
+        // }
 
         // Update the frustum with the latest camera matrix for the primary view
         //if (update_frustum)
@@ -280,8 +420,8 @@ struct ChunksManager
 
         auto sorted_chunks = utils::sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
         {
-            const float dist1 = glm::gtx::distance2(glm::vec3(c1.sector), glm::vec3(cam_pos));
-            const float dist2 = glm::gtx::distance2(glm::vec3(c2.sector), glm::vec3(cam_pos));
+            const float dist1 = glm::gtx::distance2(glm::vec3(c1->sector), glm::vec3(cam_pos));
+            const float dist2 = glm::gtx::distance2(glm::vec3(c2->sector), glm::vec3(cam_pos));
             return dist1 < dist2;
         });
 
@@ -291,57 +431,57 @@ struct ChunksManager
         {
             // AABB Culling Check
             constexpr float chunk_world_size = globals::ChunkSize * globals::BlockSize;
-            const glm::vec3 min_corner = glm::vec3(chunk.sector) * chunk_world_size;
+            const glm::vec3 min_corner = glm::vec3(chunk->sector) * chunk_world_size;
             const AABB chunk_aabb{
                 .min = min_corner,
                 .max = min_corner + glm::vec3(chunk_world_size),
             };
 
-            if (!globals::server_mode && systems::m_client_system->connected())
-            {
-                if (chunks_netstate[chunk.sector] == ChunkNetState::None)
-                {
-                    LOGI("Request Chunk Data for sector [%d %d %d]",
-                        chunk.sector.x, chunk.sector.y, chunk.sector.z);
-                    systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
-                        .message_direction = messages::MessageDirection::Request,
-                        .sector = chunk.sector,
-                    });
-                    chunk.net_requested = true;
-                    chunks_netstate[chunk.sector] = ChunkNetState::Wait;
-                }
-                else if (chunks_netstate[chunk.sector] == ChunkNetState::Ready)
-                {
-                    if (const auto it = std::ranges::find(chunks_to_sync, chunk.sector,
-                        &std::pair<glm::ivec3, std::vector<uint8_t>>::first); it != chunks_to_sync.end())
-                    {
-                        generator.deserialize_apply(chunk.sector, it->second);
-                        chunk.net_sync = true;
-                        chunk.regenerate = true;
-                        chunks_to_sync.erase(it);
-                        chunks_netstate[chunk.sector] = ChunkNetState::Sync;
-                        LOGI("Sync Chunk Data for sector [%d %d %d]",
-                            chunk.sector.x, chunk.sector.y, chunk.sector.z);
-                    }
-                }
-            }
+            // if (!globals::server_mode && systems::m_client_system->connected())
+            // {
+            //     if (chunks_netstate[chunk->sector] == ChunkNetState::None)
+            //     {
+            //         LOGI("Request Chunk Data for sector [%d %d %d]",
+            //             chunk->sector.x, chunk->sector.y, chunk->sector.z);
+            //         systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
+            //             .message_direction = messages::MessageDirection::Request,
+            //             .sector = chunk->sector,
+            //         });
+            //         chunk->net_requested = true;
+            //         chunks_netstate[chunk->sector] = ChunkNetState::Wait;
+            //     }
+            //     else if (chunks_netstate[chunk->sector] == ChunkNetState::Ready)
+            //     {
+            //         if (const auto it = std::ranges::find(chunks_to_sync, chunk->sector,
+            //             &std::pair<glm::ivec3, std::vector<uint8_t>>::first); it != chunks_to_sync.end())
+            //         {
+            //             generator.deserialize_apply(chunk->sector, it->second);
+            //             chunk->net_sync = true;
+            //             chunk->regenerate = true;
+            //             chunks_to_sync.erase(it);
+            //             chunks_netstate[chunk->sector] = ChunkNetState::Sync;
+            //             LOGI("Sync Chunk Data for sector [%d %d %d]",
+            //                 chunk->sector.x, chunk->sector.y, chunk->sector.z);
+            //         }
+            //     }
+            // }
 
             // if (!m_frustum.is_box_visible(chunk_aabb))
             //     continue; // Skip this chunk, it's not visible
 
-            for (const auto& [layer, m] : chunk.mesh)
+            for (const auto& [layer, m] : chunk->mesh)
             {
                 if (m.vertices.empty())
                 {
-                    if (chunk.buffer[layer].alloc)
+                    if (chunk->buffer[layer].alloc)
                     {
                         globals::m_resources->delete_buffers.emplace(frame.timeline_value,
-                            std::pair(std::ref(globals::m_resources->vertex_buffer), chunk.buffer[layer]));
+                            std::pair(std::ref(globals::m_resources->vertex_buffer), chunk->buffer[layer]));
                     }
-                    chunk.buffer.erase(layer);
+                    chunk->buffer.erase(layer);
                     continue;
                 }
-                if (chunk.dirty)
+                if (chunk->dirty)
                 {
                     if (const auto sb = globals::m_resources->staging_buffer.suballoc(m.vertices.size() *
                         sizeof(shaders::SolidFlatShader::VertexInput), 64))
@@ -352,12 +492,12 @@ struct ChunksManager
                             globals::m_resources->copy_buffers.emplace_back(globals::m_resources->vertex_buffer, *sb, dst_sb->offset);
                             //m_chunks_state.vertex_buffer = *dst_sb;
 
-                            if (chunk.buffer[layer].alloc)
+                            if (chunk->buffer[layer].alloc)
                             {
                                 globals::m_resources->delete_buffers.emplace(frame.timeline_value,
-                                   std::pair(std::ref(globals::m_resources->vertex_buffer), chunk.buffer[layer]));
+                                   std::pair(std::ref(globals::m_resources->vertex_buffer), chunk->buffer[layer]));
                             }
-                            chunk.buffer[layer] = *dst_sb;
+                            chunk->buffer[layer] = *dst_sb;
                         }
                         // defer suballocation deletion
                         globals::m_resources->delete_buffers.emplace(frame.timeline_value,
@@ -367,9 +507,9 @@ struct ChunksManager
                 if (m_frustum.is_box_visible(chunk_aabb))
                 {
                     batches[layer].ubo.push_back({
-                        .ObjectTransform = glm::transpose(chunk.transform),
+                        .ObjectTransform = glm::transpose(chunk->transform),
                     });
-                    const auto vertex_offset = chunk.buffer[layer].offset / sizeof(shaders::SolidFlatShader::VertexInput);
+                    const auto vertex_offset = chunk->buffer[layer].offset / sizeof(shaders::SolidFlatShader::VertexInput);
                     batches[layer].draw_args.push_back({
                         .vertexCount = static_cast<uint32_t>(m.vertices.size()),
                         .instanceCount = 1,
@@ -380,11 +520,11 @@ struct ChunksManager
                     polys += m.vertices.size() / 3;
                 }
             }
-            chunk.dirty = false;
+            chunk->dirty = false;
             // chunk.mesh.clear();
         }
 
-        //LOGI("drawing %d polys", polys / 3);
+        // LOGI("drawing %d polys", polys / 3);
         clear_chunks_state(frame.timeline_value);
         for (const auto& [layer, batch] : batches)
         {
@@ -487,7 +627,7 @@ struct ChunksManager
         std::lock_guard lock(m_chunks_mutex);
         if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
         {
-            it->regenerate = true;
+            (*it)->regenerate = true;
         }
     }
     void build_block(const glm::vec3& origin, const glm::vec3& direction) noexcept
@@ -515,7 +655,7 @@ struct ChunksManager
         std::lock_guard lock(m_chunks_mutex);
         if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
         {
-            it->regenerate = true;
+            (*it)->regenerate = true;
         }
     }
     std::optional<glm::ivec3> build_block_cell(const glm::vec3& origin, const glm::vec3& direction) const noexcept

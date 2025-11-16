@@ -11,9 +11,8 @@ module;
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
-
-#include "Jolt/Core/Reference.h"
-#include "Jolt/Physics/Collision/Shape/Shape.h"
+#include <Jolt/Core/Reference.h>
+#include <Jolt/Physics/Collision/Shape/Shape.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -303,25 +302,5 @@ public:
         }
         return std::move(meshes);
     }
-};
-
-struct Chunk final
-{
-    bool valid = false;
-    glm::mat4 transform{};
-    glm::vec4 color{};
-    glm::ivec3 sector{};
-    std::unordered_map<BlockLayer, ChunkMesh<shaders::SolidFlatShader::VertexInput>> mesh;
-    std::unordered_map<BlockLayer, vk::BufferSuballocation> buffer{};
-    bool dirty = false;
-    bool regenerate = false;
-    ChunkData data;
-    JPH::RefConst<JPH::Shape> shape;
-    JPH::BodyID body_id;
-    bool net_sync = false;
-    bool net_requested = false;
-    //uint32_t size = 0;
-    //uint32_t height = 0;
-    //uint32_t descriptor_set_index = 0;
 };
 }

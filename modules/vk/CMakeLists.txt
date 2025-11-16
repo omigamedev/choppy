@@ -1,5 +1,8 @@
 include(FetchContent)
 
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if(WIN32)
 else()
 FetchContent_Declare(
@@ -32,7 +35,7 @@ target_sources(vk PUBLIC
     FILE_SET CXX_MODULES
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     FILES vk.cppm utils.cppm buffer.cppm shader.cppm texture.cppm)
-target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator platform glmcppm Tracy::TracyClient stb)
+target_link_libraries(vk PUBLIC volk VulkanMemoryAllocator platform glmcppm TracyClient stb)
 if(WIN32)
     target_compile_definitions(vk PUBLIC NOMINMAX)
 else()

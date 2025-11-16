@@ -18,11 +18,6 @@ struct MessageReader
         offset += sizeof(T);
         return value;
     }
-    template<typename T> void read(T& out) noexcept
-    {
-        out = *reinterpret_cast<const T*>(message.data() + offset);
-        offset += sizeof(T);
-    }
     template<> std::string read<std::string>() noexcept
     {
         const uint16_t size = read<uint16_t>();
@@ -30,11 +25,12 @@ struct MessageReader
         offset += out.size();
         return out;
     }
-    template<> std::vector<uint8_t> read<std::vector<uint8_t>>() noexcept
+    template<typename T> std::vector<T> read_vector() noexcept
     {
         const uint32_t size = read<uint32_t>();
-        const std::vector out(message.data() + offset, message.data() + offset + size);
-        offset += out.size();
+        const auto ptr = reinterpret_cast<const T*>(message.data() + offset);
+        const std::vector out(ptr, ptr + size);
+        offset += out.size() * sizeof(T);
         return out;
     }
 };
@@ -55,11 +51,10 @@ struct MessageWriter
         write<uint16_t>(value.size());
         buffer.append_range(std::span(reinterpret_cast<const uint8_t*>(value.c_str()), value.size()));
     }
-    template<> void write(const std::vector<uint8_t>& value) noexcept
+    template<typename T> void write_vector(const std::vector<T>& value) noexcept
     {
         write<uint32_t>(value.size());
-        buffer.append_range(value);
+        buffer.append_range(std::span(reinterpret_cast<const uint8_t*>(value.data()), value.size() * sizeof(T)));
     }
 };
-
 }

@@ -375,6 +375,7 @@ public:
             gamepad.buttons[std::to_underlying(GamepadButton::Menu)];
         const bool action_frustum_new = keys['C'];
         const bool action_physics_record_new = keys['R'];
+        const bool action_regenerate_new = keys['Q'];
         speed = speed + 3.f * static_cast<float>(gamepad.buttons[std::to_underlying(GamepadButton::ThumbLeft)]);
 #else
         const float speed = 3.f;
@@ -382,8 +383,19 @@ public:
         const bool action_break_new = touch.trigger_left > 0.5f;
         const bool action_respawn_new = touch.buttons[std::to_underlying(GamepadButton::Menu)];
         const bool action_frustum_new = touch.buttons[std::to_underlying(GamepadButton::X)];
+        const bool action_regenerate_new = touch.buttons[std::to_underlying(GamepadButton::Y)];
         const bool action_physics_record_new = false;
 #endif
+        static bool action_regenerate = false;
+        if (action_regenerate != action_regenerate_new)
+        {
+            action_regenerate = action_regenerate_new;
+            if (action_regenerate)
+            {
+                LOGI("Regenerate chunks");
+                m_world.chunks_manager.clear_chunks();
+            }
+        }
         static bool action_physics_record = false;
         if (action_physics_record != action_physics_record_new)
         {

@@ -3,11 +3,13 @@ module;
 #include <utility>
 #include <vector>
 #include <array>
+#include <cassert>
 #include <format>
 #include <functional>
 #include <string_view>
 #include <span>
 #include <ranges>
+#include <optional>
 
 #include <volk.h>
 #include <vk_mem_alloc.h>

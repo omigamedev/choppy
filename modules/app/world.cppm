@@ -114,11 +114,17 @@ struct World
             };
             systems::m_server_system->on_chunk_data_request = [this](ENetPeer* peer, const messages::ChunkDataMessage& chunk)
             {
-                systems::m_server_system->send_message(peer, ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
+                messages::ChunkDataMessage message {
                     .message_direction = messages::MessageDirection::Response,
-                    .sector = chunk.sector,
-                    .data = chunks_manager.generator.serialize(chunk.sector),
-                });
+                    .sectors = chunk.sectors,
+                };
+                for (const auto& sector : chunk.sectors)
+                {
+                    const auto buffer = chunks_manager.generator.serialize(sector);
+                    message.data.append_range(buffer);
+                    message.sizes.emplace_back(static_cast<uint32_t>(buffer.size()));
+                }
+                systems::m_server_system->send_message(peer, ENET_PACKET_FLAG_RELIABLE, message);
             };
         }
         if (systems::m_client_system)
@@ -136,12 +142,16 @@ struct World
             };
             systems::m_client_system->on_chunk_data = [this](const messages::ChunkDataMessage& chunk)
             {
-                if (!chunk.data.empty())
+                off_t offset = 0;
+                for (const auto& [sector, size] : std::views::zip(chunk.sectors, chunk.sizes))
                 {
-                    // chunks_manager.generator.deserialize_apply(chunk.sector, chunk.data);
-                    chunks_manager.chunks_to_sync.emplace_back(chunk.sector, chunk.data);
-                    chunks_manager.generator.set_net_ready(chunk.sector);
-                    chunks_manager.chunks_netstate[chunk.sector] = chunksman::ChunksManager::ChunkNetState::Ready;
+                    //chunks_manager.generator.deserialize_apply(sector, chunk.data);
+                    chunks_manager.chunks_to_sync.emplace_back(sector,
+                        std::vector(chunk.data.begin() + offset, chunk.data.begin() + offset + size));
+                    chunks_manager.chunks_netdata.insert_or_assign(sector,
+                        std::vector(chunk.data.begin() + offset, chunk.data.begin() + offset + size));
+                    offset += size;
+                    chunks_manager.chunks_netstate[sector] = chunksman::ChunksManager::ChunkNetState::Ready;
                 }
             };
         }

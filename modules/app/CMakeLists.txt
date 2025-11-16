@@ -18,6 +18,7 @@ FetchContent_Declare(miniaudio
 FetchContent_Declare(tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
     GIT_TAG c556831ddc6fe26d2fce01c14c97205a9dad46d5) # v0.12.2
+set(TRACY_ENABLE OFF)
 FetchContent_Declare(ecs
     GIT_REPOSITORY https://github.com/martinstarkov/ecs.git
     GIT_TAG main
@@ -482,7 +483,7 @@ set(JOLT_PHYSICS_SRC_FILES
     ${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterMean.cpp
     ${JOLT_PHYSICS_ROOT}/TriangleSplitter/TriangleSplitterMean.h
 )
-add_library(jolt ${JOLT_PHYSICS_SRC_FILES})
+add_library(jolt STATIC ${JOLT_PHYSICS_SRC_FILES})
 target_compile_definitions(jolt PUBLIC JPH_DEBUG_RENDERER)
 target_include_directories(jolt PUBLIC ${jolt_SOURCE_DIR})
 
@@ -526,7 +527,7 @@ add_library(app OBJECT stb.cpp obj.cpp)
 target_link_libraries(app PUBLIC
     platform xr vk glmcppm shaders perlin
     jolt miniaudio enet_static datachannel-static
-    ecs entityx tinyobjloader nlohmann_json opus)
+    ecs entityx tinyobjloader nlohmann_json opus TracyClient)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES

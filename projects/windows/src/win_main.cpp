@@ -1,7 +1,10 @@
 ﻿#include <memory>
 #include <print>
-#define WIN32_LEAN_AND_MEAN
 #include <chrono>
+#include <ranges>
+#include <algorithm>
+
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <volk.h>
 #include <GameInput.h>

@@ -28,6 +28,9 @@ import :messages;
 import ce.shaders.solidcolor;
 import ce.vk.utils;
 
+static constexpr uint32_t FrameSize = 480 * 6;
+static constexpr uint32_t Samplerate = 48000;
+
 export namespace ce::app::server
 {
 struct RTCPeer
@@ -272,8 +275,9 @@ public:
         case messages::MessageType::ChunkData:
             if (const auto chunk = messages::ChunkDataMessage::deserialize(message))
             {
-                LOGI("received chunk request for [%d, %d, %d]",
-                    chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                //LOGI("received chunk request for [%d, %d, %d]",
+                //    chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                LOGI("received request for %llu chunks", chunk->sectors.size());
                 on_chunk_data_request(peer, chunk.value());
             }
             break;
@@ -370,7 +374,7 @@ public:
                 track->setMediaHandler(packetizer);
                 rtc_peers[peer].audio_track = track;
                 int error = 0;
-                rtc_peers[peer].enc = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &error);
+                rtc_peers[peer].enc = opus_encoder_create(Samplerate, 1, OPUS_APPLICATION_VOIP, &error);
             }
             else if (track->mid() == "mic-track")
             {
@@ -379,14 +383,14 @@ public:
                 track->onOpen([this, peer]
                 {
                     int error = 0;
-                    rtc_peers[peer].dec = opus_decoder_create(48000, 1, &error);
+                    rtc_peers[peer].dec = opus_decoder_create(Samplerate, 1, &error);
                     // rtc_peers[peer].audio_dump.open(
                     //     std::format("audio-{}.pcm", clients[peer].id), std::ios::binary);
                 });
                 track->onFrame([this, peer](const rtc::binary& data, const rtc::FrameInfo& frame)
                 {
                     // LOGI("RTC: onFrame");
-                    std::vector<float> pcm(480);
+                    std::vector<float> pcm(FrameSize);
                     const int samples = opus_decode_float(rtc_peers[peer].dec, reinterpret_cast<const uint8_t*>(data.data()),
                         static_cast<opus_int32>(data.size()), pcm.data(), static_cast<int32_t>(pcm.size()), 0);
                     // rtc_peers[peer].audio_dump.write(reinterpret_cast<const char*>(pcm.data()),
@@ -456,7 +460,7 @@ public:
 
             std::vector<std::vector<float>> frames;
             for (size_t i = 0; i < frames_to_send; ++i)
-                frames.emplace_back(480);
+                frames.emplace_back(FrameSize);
             for (const auto& [other_peer, other_rtc_peer] : rtc_peers)
             {
                 if (peer != other_peer)
@@ -471,7 +475,7 @@ public:
             }
             for (const auto& frame : frames)
             {
-                const double audio_time = static_cast<double>(rtc_peer.encoded_samples) / 48000.0;
+                const double audio_time = static_cast<double>(rtc_peer.encoded_samples) / static_cast<double>(Samplerate);
                 const int result = opus_encode_float(rtc_peer.enc, frame.data(),
                     frame.size(), packet_buffer.data(), packet_buffer.size());
                 if (result > 0)

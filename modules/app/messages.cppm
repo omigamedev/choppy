@@ -154,15 +154,17 @@ struct ChunkDataMessage
 {
     MessageType type = MessageType::ChunkData;
     MessageDirection message_direction;
-    glm::ivec3 sector;
+    std::vector<glm::ivec3> sectors;
+    std::vector<uint32_t> sizes;
     std::vector<uint8_t> data;
     [[nodiscard]] std::vector<uint8_t> serialize() const noexcept
     {
         serializer::MessageWriter w;
         w.write(type);
         w.write(message_direction);
-        w.write(sector);
-        w.write(data);
+        w.write_vector(sectors);
+        w.write_vector(sizes);
+        w.write_vector(data);
         return std::move(w.buffer);
     }
     [[nodiscard]] static std::optional<ChunkDataMessage> deserialize(
@@ -172,8 +174,9 @@ struct ChunkDataMessage
         return ChunkDataMessage{
             .type = r.read<MessageType>(),
             .message_direction = r.read<MessageDirection>(),
-            .sector = r.read<glm::ivec3>(),
-            .data = r.read<std::vector<uint8_t>>(),
+            .sectors = r.read_vector<glm::ivec3>(),
+            .sizes = r.read_vector<uint32_t>(),
+            .data = r.read_vector<uint8_t>(),
         };
     }
 };
@@ -186,7 +189,7 @@ struct WorldDataMessage
     {
         serializer::MessageWriter w;
         w.write(type);
-        w.write(data);
+        w.write_vector(data);
         return std::move(w.buffer);
     }
     [[nodiscard]] static std::optional<WorldDataMessage> deserialize(
@@ -195,7 +198,7 @@ struct WorldDataMessage
         serializer::MessageReader r(message);
         return WorldDataMessage{
             .type = r.read<MessageType>(),
-            .data = r.read<std::vector<uint8_t>>(),
+            .data = r.read_vector<uint8_t>(),
         };
     }
 };

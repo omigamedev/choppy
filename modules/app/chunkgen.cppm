@@ -253,7 +253,7 @@ public:
     {
         file.write(reinterpret_cast<const char*>(&value), sizeof(T));
     }
-    void save() const noexcept
+    void save() noexcept
     {
         if (!m_dirty)
             return;
@@ -271,6 +271,7 @@ public:
                 write(file, type);
             }
         }
+        m_dirty = false;
         LOGI("terrain saved");
     }
     template<typename T>

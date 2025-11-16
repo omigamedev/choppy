@@ -1,6 +1,9 @@
 module;
 #include <optional>
 #include <span>
+#include <string>
+#include <memory>
+#include <algorithm>
 
 #include <volk.h>
 #include <vk_mem_alloc.h>
