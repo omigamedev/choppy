@@ -28,7 +28,7 @@ import :messages;
 import ce.shaders.solidcolor;
 import ce.vk.utils;
 
-static constexpr uint32_t FrameSize = 480 * 6;
+static constexpr uint32_t FrameSize = 480 * 4;
 static constexpr uint32_t Samplerate = 48000;
 
 struct my_data_source
@@ -49,7 +49,7 @@ static ma_result my_data_source_read(ma_data_source* pDataSource,
     const std::span out = {static_cast<float*>(pFramesOut), frameCount};
     if (source->pcm.size() < FrameSize * 2)
     {
-        std::ranges::fill(out, 0);
+        std::ranges::fill(out, 0.f);
         return MA_SUCCESS;
     }
     std::lock_guard lock(source->mutex);
@@ -102,7 +102,7 @@ export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
 {
-    static constexpr std::string_view ServerHost = "79.27.66.28";
+    static constexpr std::string_view ServerHost = "choppy.omigame.dev";
     static constexpr uint16_t ServerPort = 7777;
     static constexpr uint16_t WebSoketPort = 7778;
     std::shared_ptr<rtc::WebSocket> ws;

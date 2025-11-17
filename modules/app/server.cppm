@@ -28,7 +28,7 @@ import :messages;
 import ce.shaders.solidcolor;
 import ce.vk.utils;
 
-static constexpr uint32_t FrameSize = 480 * 6;
+static constexpr uint32_t FrameSize = 480 * 4;
 static constexpr uint32_t Samplerate = 48000;
 
 export namespace ce::app::server
