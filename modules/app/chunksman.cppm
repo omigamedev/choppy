@@ -129,10 +129,15 @@ struct ChunksManager
     bool create() noexcept
     {
         if (globals::server_mode)
+        {
             generator.load();
-        if (generate_chunks(32))
-            needs_update.store(true);
-        m_chunks_thread = std::thread(&ChunksManager::generate_thread, this);
+        }
+        else
+        {
+            if (generate_chunks(32))
+                needs_update.store(true);
+            m_chunks_thread = std::thread(&ChunksManager::generate_thread, this);
+        }
         return true;
     }
     void generate_thread() noexcept
