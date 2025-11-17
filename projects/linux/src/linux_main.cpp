@@ -1,6 +1,8 @@
 #include <print>
 #include <memory>
 #include <functional>
+#include <algorithm>
+#include <chrono>
 
 #include <tracy/Tracy.hpp>
 
