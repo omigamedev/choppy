@@ -46,9 +46,9 @@ if ($Build)
     {
         Run-Command "./gradlew installDebug" "Failed to build debug"
     }
-    adb shell pm grant com.omixlab.choppyengine android.permission.RECORD_AUDIO
+    adb shell pm grant com.omixlab.cubey android.permission.RECORD_AUDIO
 }
-adb shell am force-stop com.omixlab.choppyengine
-adb shell am start -n com.omixlab.choppyengine/.MainActivity
+adb shell am force-stop com.omixlab.cubey
+adb shell am start -n com.omixlab.cubey/.MainActivity
 sleep 1
-adb logcat --pid $(adb shell pidof -s com.omixlab.choppyengine) ChoppyEngine:D *:S
+adb logcat --pid $(adb shell pidof -s com.omixlab.cubey) ChoppyEngine:D *:S

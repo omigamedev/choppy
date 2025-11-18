@@ -5,16 +5,17 @@ plugins {
 
 val ndkHome = System.getenv("ANDROID_NDK_HOME") as String
 val vcpkgHome = System.getenv("VCPKG_ROOT") as String
+val versionCodeProp: String? = project.findProperty("versionCode") as String?
 
 android {
-    namespace = "com.omixlab.choppyengine"
-    compileSdk = 35
+    namespace = "com.omixlab.cubey"
+    compileSdk = 34
     defaultConfig {
-        applicationId = "com.omixlab.choppyengine"
+        applicationId = "com.omixlab.cubey"
         minSdk = 32
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 34
+        versionCode = versionCodeProp?.toIntOrNull() ?: 1
+        versionName = "0.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -31,11 +32,19 @@ android {
             }
         }
     }
+    signingConfigs {
+        create("release") {
+            storeFile = file(property("CUBEY_STORE_FILE") as String)
+            storePassword = property("CUBEY_STORE_PASSWORD") as String
+            keyAlias = property("CUBEY_KEY_ALIAS") as String
+            keyPassword = property("CUBEY_KEY_PASSWORD") as String
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     buildFeatures {
@@ -65,4 +74,35 @@ dependencies {
     implementation("androidx.games:games-activity:4.0.0")
     implementation("androidx.games:games-controller:2.0.2")
     //implementation("org.khronos.openxr:openxr_loader_for_android:1.1.47")
+}
+
+tasks.register<Exec>("deployAlpha") {
+    group = "deployment"
+    description = "Uploads release APK to Meta Quest"
+
+    dependsOn("assembleRelease")
+
+    doFirst {
+        val apkPath = project.layout.buildDirectory
+            .file("outputs/apk/release/android-release.apk")
+            .get()
+            .asFile
+            .absolutePath
+
+        val cli = project.findProperty("OVR_PLATFORM_UTIL") as? String
+            ?: throw GradleException("OVR_PLATFORM_UTIL not defined")
+        val appId = project.findProperty("CUBEY_APP_ID") as? String
+            ?: throw GradleException("CUBEY_APP_ID not defined")
+        val appSecret = project.findProperty("CUBEY_APP_SECRET") as? String
+            ?: throw GradleException("CUBEY_APP_SECRET not defined")
+
+        commandLine(
+            cli,
+            "upload-quest-build",
+            "--app-id", appId,
+            "--app-secret", appSecret,
+            "--apk", apkPath,
+            "--channel", "ALPHA"
+        )
+    }
 }

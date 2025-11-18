@@ -1,4 +1,4 @@
-package com.omixlab.choppyengine
+package com.omixlab.cubey
 
 import android.view.View
 import com.google.androidgamesdk.GameActivity
