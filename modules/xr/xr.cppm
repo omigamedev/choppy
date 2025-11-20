@@ -1904,7 +1904,7 @@ public:
         {
             XrMatrix4x4f projection_matrix;
             XrMatrix4x4f_CreateProjectionFov(&projection_matrix,
-                GRAPHICS_VULKAN, views[i].fov, 0.1f, 100.f);
+                GRAPHICS_VULKAN, views[i].fov, 0.1f, 1000.f);
             frame.projection[i] = glm::gtc::make_mat4(projection_matrix.m);
 
             XrMatrix4x4f viewMatrix;

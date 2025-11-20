@@ -61,13 +61,14 @@ bool operator&(const uint8_t lhs, const Block::Mask rhs)
 
 /// @brief Packs vertex data into a single 32-bit integer.
 /// Layout: [2b face_id | 6b v | 6b u | 6b z | 6b y | 6b x]
-uint32_t pack_vertex(const glm::uvec3& pos, const glm::uvec2& uv, const uint32_t face_id)
+uint32_t pack_vertex(const glm::uvec3& pos, const glm::uvec2& uv,
+    const glm::uvec2& uv_off, const uint32_t face_id)
 {
     const uint32_t px = pos.x & 0x3F; // 6 bits
     const uint32_t py = pos.y & 0x3F; // 6 bits
     const uint32_t pz = pos.z & 0x3F; // 6 bits
-    const uint32_t u = uv.x & 0x3F;   // 6 bits
-    const uint32_t v = uv.y & 0x3F;   // 6 bits
+    const uint32_t u = uv.x & 0x3F | uv_off.x << 5;   // 6 bits
+    const uint32_t v = uv.y & 0x3F | uv_off.y << 5;   // 6 bits
     const uint32_t fid = face_id & 0x03; // 2 bits
 
     return (px) | (py << 6) | (pz << 12) | (u << 18) | (v << 24) | (fid << 30);
@@ -155,21 +156,21 @@ public:
                         {
                             if (flip ? d > 0 : d < 0)
                             {
-                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(B, CB + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(D, CD + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], CA, 0));
+                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], CC, 0));
+                                mesh.vertices.emplace_back(pack_vertex(B, CB + mat[face_index], CB, 0));
+                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], CA, 0));
+                                mesh.vertices.emplace_back(pack_vertex(D, CD + mat[face_index], CD, 0));
+                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], CC, 0));
                             }
                             else
                             {
-                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(B, CB + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], 0));
-                                mesh.vertices.emplace_back(pack_vertex(D, CD + mat[face_index], 0));
+                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], CA, 0));
+                                mesh.vertices.emplace_back(pack_vertex(B, CB + mat[face_index], CB, 0));
+                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], CC, 0));
+                                mesh.vertices.emplace_back(pack_vertex(A, CA + mat[face_index], CA, 0));
+                                mesh.vertices.emplace_back(pack_vertex(C, CC + mat[face_index], CC, 0));
+                                mesh.vertices.emplace_back(pack_vertex(D, CD + mat[face_index], CD, 0));
                             }
                         }
                     }
@@ -245,57 +246,57 @@ public:
 
                     if (data.blocks[idx].face_mask & Block::Mask::U)
                     {
-                        m.vertices.emplace_back(pack_vertex(vertices[VE], CA + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VF], CB + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VE], CA + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VH], CD + mat[std::to_underlying(Block::FaceIndex::U)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::U)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CA + mat[std::to_underlying(Block::FaceIndex::U)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::U)], CC, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VF], CB + mat[std::to_underlying(Block::FaceIndex::U)], CB, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CA + mat[std::to_underlying(Block::FaceIndex::U)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VH], CD + mat[std::to_underlying(Block::FaceIndex::U)], CD, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::U)], CC, 0));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::B)
                     {
-                        m.vertices.emplace_back(pack_vertex(vertices[VA], CA + mat[std::to_underlying(Block::FaceIndex::B)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VH], CC + mat[std::to_underlying(Block::FaceIndex::B)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VE], CB + mat[std::to_underlying(Block::FaceIndex::B)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VA], CA + mat[std::to_underlying(Block::FaceIndex::B)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VD], CD + mat[std::to_underlying(Block::FaceIndex::B)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VH], CC + mat[std::to_underlying(Block::FaceIndex::B)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VA], CA + mat[std::to_underlying(Block::FaceIndex::B)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VH], CC + mat[std::to_underlying(Block::FaceIndex::B)], CC, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CB + mat[std::to_underlying(Block::FaceIndex::B)], CB, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VA], CA + mat[std::to_underlying(Block::FaceIndex::B)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CD + mat[std::to_underlying(Block::FaceIndex::B)], CD, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VH], CC + mat[std::to_underlying(Block::FaceIndex::B)], CC, 0));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::F)
                     {
-                        m.vertices.emplace_back(pack_vertex(vertices[VC], CA + mat[std::to_underlying(Block::FaceIndex::F)], 1));
-                        m.vertices.emplace_back(pack_vertex(vertices[VF], CC + mat[std::to_underlying(Block::FaceIndex::F)], 1));
-                        m.vertices.emplace_back(pack_vertex(vertices[VG], CB + mat[std::to_underlying(Block::FaceIndex::F)], 1));
-                        m.vertices.emplace_back(pack_vertex(vertices[VC], CA + mat[std::to_underlying(Block::FaceIndex::F)], 1));
-                        m.vertices.emplace_back(pack_vertex(vertices[VB], CD + mat[std::to_underlying(Block::FaceIndex::F)], 1));
-                        m.vertices.emplace_back(pack_vertex(vertices[VF], CC + mat[std::to_underlying(Block::FaceIndex::F)], 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VC], CA + mat[std::to_underlying(Block::FaceIndex::F)], CA, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VF], CC + mat[std::to_underlying(Block::FaceIndex::F)], CC, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CB + mat[std::to_underlying(Block::FaceIndex::F)], CB, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VC], CA + mat[std::to_underlying(Block::FaceIndex::F)], CA, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CD + mat[std::to_underlying(Block::FaceIndex::F)], CD, 1));
+                        m.vertices.emplace_back(pack_vertex(vertices[VF], CC + mat[std::to_underlying(Block::FaceIndex::F)], CC, 1));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::D)
                     {
-                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA + mat[std::to_underlying(Block::FaceIndex::D)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VD], CC + mat[std::to_underlying(Block::FaceIndex::D)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VA], CB + mat[std::to_underlying(Block::FaceIndex::D)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA + mat[std::to_underlying(Block::FaceIndex::D)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VC], CD + mat[std::to_underlying(Block::FaceIndex::D)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VD], CC + mat[std::to_underlying(Block::FaceIndex::D)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA + mat[std::to_underlying(Block::FaceIndex::D)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CC + mat[std::to_underlying(Block::FaceIndex::D)], CC, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VA], CB + mat[std::to_underlying(Block::FaceIndex::D)], CB, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA + mat[std::to_underlying(Block::FaceIndex::D)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VC], CD + mat[std::to_underlying(Block::FaceIndex::D)], CD, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CC + mat[std::to_underlying(Block::FaceIndex::D)], CC, 0));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::R)
                     {
-                        m.vertices.emplace_back(pack_vertex(vertices[VD], CA + mat[std::to_underlying(Block::FaceIndex::R)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::R)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VH], CB + mat[std::to_underlying(Block::FaceIndex::R)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VD], CA + mat[std::to_underlying(Block::FaceIndex::R)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VC], CD + mat[std::to_underlying(Block::FaceIndex::R)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::R)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CA + mat[std::to_underlying(Block::FaceIndex::R)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::R)], CC, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VH], CB + mat[std::to_underlying(Block::FaceIndex::R)], CB, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VD], CA + mat[std::to_underlying(Block::FaceIndex::R)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VC], CD + mat[std::to_underlying(Block::FaceIndex::R)], CD, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VG], CC + mat[std::to_underlying(Block::FaceIndex::R)], CC, 0));
                     }
                     if (data.blocks[idx].face_mask & Block::Mask::L)
                     {
-                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA + mat[std::to_underlying(Block::FaceIndex::L)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VE], CC + mat[std::to_underlying(Block::FaceIndex::L)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VF], CB + mat[std::to_underlying(Block::FaceIndex::L)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA + mat[std::to_underlying(Block::FaceIndex::L)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VA], CD + mat[std::to_underlying(Block::FaceIndex::L)], 0));
-                        m.vertices.emplace_back(pack_vertex(vertices[VE], CC + mat[std::to_underlying(Block::FaceIndex::L)], 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA + mat[std::to_underlying(Block::FaceIndex::L)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CC + mat[std::to_underlying(Block::FaceIndex::L)], CC, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VF], CB + mat[std::to_underlying(Block::FaceIndex::L)], CB, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VB], CA + mat[std::to_underlying(Block::FaceIndex::L)], CA, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VA], CD + mat[std::to_underlying(Block::FaceIndex::L)], CD, 0));
+                        m.vertices.emplace_back(pack_vertex(vertices[VE], CC + mat[std::to_underlying(Block::FaceIndex::L)], CC, 0));
                     }
                 }
             }

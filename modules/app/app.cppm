@@ -1,11 +1,8 @@
 module;
 #include <format>
 #include <array>
-#include <span>
 #include <vector>
 #include <memory>
-#include <ranges>
-#include <concepts>
 #include <functional>
 #include <thread>
 #include <mutex>
@@ -153,12 +150,13 @@ public:
         {
             vkDeviceWaitIdle(m_vk->device());
         }
+        // TODO: cleanup miniaudio
         m_world.destroy();
         systems::destroy_systems();
         shaders::destroy_shaders();
         globals::m_resources->garbage_collect(~1ull);
         globals::m_resources->destroy_buffers();
-    };
+    }
     [[nodiscard]] auto& xr() noexcept { return m_xr; }
     [[nodiscard]] auto& vk() noexcept { return m_vk; }
 
@@ -530,7 +528,8 @@ public:
             const auto cam_rot = update_flying_camera_angles(dt, gamepad, {});
             update_flying_camera_pos(dt, gamepad, {}, frame.view[0] * glm::inverse(cam_rot));
             const float aspect = static_cast<float>(m_size.x) / static_cast<float>(m_size.y);
-            frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(glm::radians(m_world.m_camera.cam_fov), aspect, 0.01f, 100.f);
+            frame_fixed.projection[0] = glm::gtc::perspectiveRH_ZO(
+                glm::radians(m_world.m_camera.cam_fov), aspect, 0.1f, 1000.f);
             frame_fixed.projection[0][1][1] *= -1.0f; // flip Y for Vulkan
             frame_fixed.view[0] = glm::inverse(glm::gtx::translate(m_world.m_camera.cam_pos) * cam_rot);
 
@@ -564,7 +563,8 @@ public:
         else
         {
             systems::m_client_system->tick(dt);
-            systems::m_physics_system->tick(dt);
+            if (m_world.world_ready)
+                systems::m_physics_system->tick(dt);
         }
 
         if (!globals::headless)

@@ -7,12 +7,17 @@ PixelInput VSMain(VertexInput input,
     uint ViewIndex : SV_ViewID,
     [[vk::builtin("DrawIndex")]] uint drawIndex : SV_InstanceID)
 {
+    const float2 cell_size = float2(16, 16);
+    const float2 texture_res = float2(32, 64);
+    const float2 pixel_offset = 1.0 / texture_res;
     // Unpack the 32-bit integer
     float x = float(input.data & 0x3F);
     float y = float((input.data >> 6) & 0x3F) + ObjectsData[drawIndex].y_offset;
     float z = float((input.data >> 12) & 0x3F);
-    float u = float((input.data >> 18) & 0x3F) / 2.0;
-    float v = float((input.data >> 24) & 0x3F) / 4.0;
+    float u = float((input.data >> 18) & 0x1F) / 2.0;
+    float u_off = bool((input.data >> 18) & 0x20) == 0 ? pixel_offset.x : -pixel_offset.x;
+    float v = float((input.data >> 24) & 0x1F) / 4.0;
+    float v_off = bool((input.data >> 24) & 0x20) == 0 ? pixel_offset.y : -pixel_offset.y;
     uint face_id = (input.data >> 30) & 0x03;
 
     const float4x4 WorldViewProjection = mul(ObjectsData[drawIndex].ObjectTransform, Frame.ViewProjection[ViewIndex]);
@@ -20,7 +25,7 @@ PixelInput VSMain(VertexInput input,
 
     PixelInput output;
     output.position = mul(float4(Position, 1.0), WorldViewProjection);
-    output.uvs = float2(u, v);
+    output.uvs = float2(u + u_off, v + v_off);
 
     // Pass the view-space depth (stored in the w component of clip-space position) to the pixel shader.
     output.viewDepth = output.position.w;

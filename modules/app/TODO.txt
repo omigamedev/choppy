@@ -1,9 +1,43 @@
 Audio
 [x] dump audio track on the server side
 [x] forward audio packets to other players
-[ ] audio delay: clear client audio queue if it's too big
+[x] audio delay: clear client audio queue if it's too big
+[x] audio recording permission
+[ ] audio assets on Android
 [ ] use miniaudio for mixing?
 [ ] mix world audio with buffering
-[ ] add spatialization
+[ ] add spatialization to server
+[ ] add steamos to miniaudio for clients
 Networking
-[ ] make sure you don't generate chunks that are waiting on server data
+[x] make sure you don't generate chunks that
+    are waiting on server data
+[ ] server: clients authentication
+[ ] add secure web sockets
+[ ] http/ws server status
+Graphics
+[x] fix seams by adding uv padding
+[ ] add mipmaps
+[ ] fix seams for mipmaps,
+    offset should be selected based on lod
+[ ] add repeating tiles
+[ ] planar occlusion, don't show faces on 3 out of the 6 sides
+[ ] greedy meshing
+[ ] blocks directional shadow
+[ ] vertex baked lighting
+[ ] blocks AO
+[ ] skinned mesh
+[ ] disable msaa option
+Bugs
+[ ] memory leak in Quest
+Player
+[ ] reposition capsule to headset
+Blocks and Chunks
+[ ] update adjacent chunks on edge blocks
+UI
+[ ] font rendering
+Development
+[ ] auto versioning builds
+[ ] sentry
+Companion
+[ ] android audio client
+[ ] android spectator

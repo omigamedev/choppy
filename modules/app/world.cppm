@@ -81,6 +81,9 @@ struct World
 
     chunksman::ChunksManager chunks_manager;
 
+    bool world_ready = false;
+    std::function<void()> on_world_ready;
+
     bool update_frustum = true;
 
     bool create(const std::shared_ptr<vk::Context>& vulkan_context) noexcept
@@ -155,6 +158,21 @@ struct World
                 }
             };
         }
+        chunks_manager.on_sector_sync = [](const glm::ivec3& sector)
+        {
+        };
+        chunks_manager.on_sector_drawing = [this](const glm::ivec3& sector)
+        {
+            if (sector == glm::ivec3(0, 0, 0))
+            {
+                if (!world_ready)
+                {
+                    if (on_world_ready)
+                        on_world_ready();
+                    world_ready = true;
+                }
+            }
+        };
         chunks_manager.create();
 
         // if (!globals::server_mode)
@@ -203,8 +221,8 @@ struct World
 
             auto tint = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
             auto fogColor = glm::vec4(.27f, .37f, .5f, 1.f);
-            auto fogStart = 20.f;
-            auto fogEnd = 50.f;
+            auto fogStart = 100.f;
+            auto fogEnd = 200.f;
             const glm::ivec3 cell = glm::floor(m_camera.cam_pos / globals::BlockSize);
             if (chunks_manager.generator.peek(cell) == BlockType::Water)
             {

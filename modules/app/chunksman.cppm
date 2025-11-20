@@ -126,6 +126,9 @@ struct ChunksManager
     glm::ivec3 cam_sector = { 0, 0, 0 };
     uint64_t last_timeline_value = 0;
 
+    std::function<void(const glm::ivec3& sector)> on_sector_sync;
+    std::function<void(const glm::ivec3& sector)> on_sector_drawing;
+
     bool create() noexcept
     {
         if (globals::server_mode)
@@ -371,6 +374,8 @@ struct ChunksManager
                     generator.deserialize_apply(sector, chunks_netdata[sector]);
                     chunks_netstate[sector] = ChunkNetState::Sync;
                     generator.set_net_ready(sector);
+                    if (on_sector_sync)
+                        on_sector_sync(sector);
                 }
             }
             if (!sectors.empty())
@@ -381,40 +386,6 @@ struct ChunksManager
                });
             }
         }
-
-        // for (auto& sector : neighbors)
-        // {
-        //     // check if it's already present
-        //     if (auto it = std::ranges::find(m_chunks, sector,
-        //         [](auto& p){ return p->sector; }); it != m_chunks.end())
-        //     {
-        //         auto& chunk = *it;
-        //         if (chunk->async_generating)
-        //             continue;
-        //         // if (chunk->regenerate)
-        //         // {
-        //         //     chunk->async_generating = true;
-        //         //     chunk->generate_future = std::async(std::launch::async, [this, chunk, sector]
-        //         //     {
-        //         //         LOGI("async regenerate begin for [%d, %d, %d]", sector.x, sector.y, sector.z);
-        //         //         chunk->generate(generator, mesher, sector);
-        //         //         LOGI("async regenerate end for [%d, %d, %d]", sector.x, sector.y, sector.z);
-        //         //     });
-        //         // }
-        //     }
-        //     else
-        //     {
-        //         auto& chunk = m_chunks.emplace_back(std::make_shared<Chunk>());
-        //         chunk->async_generating = true;
-        //         LOGI("start async for [%d, %d, %d]", sector.x, sector.y, sector.z);
-        //         chunk->generate_future = std::async(std::launch::async, [this, chunk, sector]
-        //         {
-        //             LOGI("async begin for [%d, %d, %d]", sector.x, sector.y, sector.z);
-        //             chunk->generate(generator, mesher, sector);
-        //             LOGI("async end for [%d, %d, %d]", sector.x, sector.y, sector.z);
-        //         });
-        //     }
-        // }
 
         // Update the frustum with the latest camera matrix for the primary view
         //if (update_frustum)
@@ -441,35 +412,6 @@ struct ChunksManager
                 .min = min_corner,
                 .max = min_corner + glm::vec3(chunk_world_size),
             };
-
-            // if (!globals::server_mode && systems::m_client_system->connected())
-            // {
-            //     if (chunks_netstate[chunk->sector] == ChunkNetState::None)
-            //     {
-            //         LOGI("Request Chunk Data for sector [%d %d %d]",
-            //             chunk->sector.x, chunk->sector.y, chunk->sector.z);
-            //         systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
-            //             .message_direction = messages::MessageDirection::Request,
-            //             .sector = chunk->sector,
-            //         });
-            //         chunk->net_requested = true;
-            //         chunks_netstate[chunk->sector] = ChunkNetState::Wait;
-            //     }
-            //     else if (chunks_netstate[chunk->sector] == ChunkNetState::Ready)
-            //     {
-            //         if (const auto it = std::ranges::find(chunks_to_sync, chunk->sector,
-            //             &std::pair<glm::ivec3, std::vector<uint8_t>>::first); it != chunks_to_sync.end())
-            //         {
-            //             generator.deserialize_apply(chunk->sector, it->second);
-            //             chunk->net_sync = true;
-            //             chunk->regenerate = true;
-            //             chunks_to_sync.erase(it);
-            //             chunks_netstate[chunk->sector] = ChunkNetState::Sync;
-            //             LOGI("Sync Chunk Data for sector [%d %d %d]",
-            //                 chunk->sector.x, chunk->sector.y, chunk->sector.z);
-            //         }
-            //     }
-            // }
 
             // if (!m_frustum.is_box_visible(chunk_aabb))
             //     continue; // Skip this chunk, it's not visible
@@ -507,6 +449,8 @@ struct ChunksManager
                         // defer suballocation deletion
                         globals::m_resources->delete_buffers.emplace(frame.timeline_value,
                             std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
+                        if (on_sector_drawing)
+                            on_sector_drawing(chunk->sector);
                     }
                 }
                 if (m_frustum.is_box_visible(chunk_aabb))

@@ -1,6 +1,8 @@
 package com.omixlab.cubey
 
+import android.Manifest
 import android.view.View
+import androidx.activity.result.contract.ActivityResultContracts
 import com.google.androidgamesdk.GameActivity
 
 class MainActivity : GameActivity() {
@@ -9,6 +11,27 @@ class MainActivity : GameActivity() {
     //        System.loadLibrary("ce_android")
     //    }
     //}
+
+    external fun onRequestPermissionsResultNative(
+        record_audio: Boolean,
+    )
+
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted)
+            {
+                onRequestPermissionsResultNative(true);
+            }
+            else
+            {
+                onRequestPermissionsResultNative(false);
+            }
+        }
+
+    fun requestPermissions()
+    {
+        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
