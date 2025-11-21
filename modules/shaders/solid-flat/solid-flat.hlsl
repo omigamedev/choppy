@@ -15,9 +15,9 @@ PixelInput VSMain(VertexInput input,
     float layer = float((input.data >> 18) & 0xFFF);
     float u = float((input.data >> 30) & 0x1);
     float v = float((input.data >> 31) & 0x1);
-    // Layout: [27b free | 2b occlusion | 3b face]
+    // Layout: [27b free | 4b occlusion | 3b face]
     int face = input.data_ext & 0x07;
-    int occ = (input.data_ext >> 3) & 0x03;
+    int occ = (input.data_ext >> 3) & 0x0F;
 
     const float4x4 WorldViewProjection = mul(ObjectsData[drawIndex].ObjectTransform, Frame.ViewProjection[ViewIndex]);
     const float3 Position = float3(x, y, z) * 0.5;
@@ -50,7 +50,7 @@ float4 PSMain(PixelInput input) : SV_TARGET
         float3( 1, 0, 0), // R
     };
     float3 normal = FaceNormal[input.face];
-    float3 intensity = max(0.1, dot(normal, sun));
+    float3 intensity = max(0.1, dot(normal, sun)) * max(0.01, float(input.occ) / 7.0);
     //return float4(normal, 1);
     const float4 textureColor = myTexture.Sample(mySampler, float3(input.uvs, input.layer));
     float4 finalColor = float4(textureColor.xyz, 1.0);

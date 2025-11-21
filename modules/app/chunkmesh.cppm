@@ -75,11 +75,11 @@ uint32_t pack_vertex(const glm::uvec3& pos, const glm::uvec2& uv, const glm::uve
 }
 
 /// @brief Packs vertex data into a single 32-bit integer.
-/// Layout: [27b free | 2b occlusion | 3b face]
+/// Layout: [27b free | 4b occlusion | 3b face]
 uint32_t pack_vertex_ext(const uint32_t face_id, const uint32_t occlusion)
 {
     const uint32_t face = face_id & 0x07;
-    const uint32_t occ = occlusion & 0x03;
+    const uint32_t occ = occlusion & 0x0F;
     return (face) | (occ << 3);
 }
 
@@ -116,15 +116,6 @@ public:
             const auto& [m, sc, d, uc, vc, flip] = slices[face_index];
             for (uint32_t slice = 0; slice < size; ++slice)
             {
-                //std::vector<glm::uvec2> points;
-                //points.reserve(utils::pow(size + 1, 2));
-                //for (uint32_t y = 0; y < size + 1; ++y)
-                //{
-                //    for (uint32_t x = 0; x < size + 1; ++x)
-                //    {
-                //        points.emplace_back(x, y);
-                //    }
-                //}
                 for (uint32_t y = 0; y < size; ++y)
                 {
                     for (uint32_t x = 0; x < size; ++x)
@@ -163,7 +154,9 @@ public:
                         constexpr auto CD = glm::uvec2{1, 1};
                         if (data.blocks[idx].face_mask & m)
                         {
-                            const uint32_t occ = 0;
+                            const auto world_cell = data.sector * static_cast<int32_t>(data.size) + glm::ivec3(cell);
+                            const uint32_t water_depth = std::max<int32_t>(0, 7 + world_cell.y);
+                            const uint32_t occ = data.blocks[idx].water_mask > 0 ? water_depth : 7;
                             if (flip ? d > 0 : d < 0)
                             {
                                 mesh.vertices.emplace_back(pack_vertex(A, CA, mat[face_index]), pack_vertex_ext(face_index, occ));

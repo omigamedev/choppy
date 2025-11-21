@@ -80,6 +80,8 @@ struct Block final
     enum class Mask : uint8_t { U = 1, D = 2, F = 4, B = 8, L = 16, R = 32 };
     // Bits mask using Block::Mask enum
     uint8_t face_mask = 0;
+    uint8_t water_mask = 0;
+    int32_t water_depth = 0;
 };
 struct ChunkData final
 {
@@ -327,6 +329,7 @@ public:
                     const int32_t sz = static_cast<int32_t>(m_chunk_size + 2);
                     const auto C = tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 1];
                     uint8_t mask = 0;
+                    uint8_t water_mask = 0;
                     if (C != BlockType::Air)
                     {
                         const auto C_layer = materials.at(C).layer;
@@ -349,9 +352,15 @@ public:
                             mask |= is_visible(tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 0]) << 4;
                             mask |= is_visible(tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 2]) << 5;
                         }
+                        water_mask |= (tmp[(y + 2) * utils::pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Water) << 0;
+                        water_mask |= (tmp[(y + 0) * utils::pow(sz, 2) + (z + 1) * sz + x + 1] == BlockType::Water) << 1;
+                        water_mask |= (tmp[(y + 1) * utils::pow(sz, 2) + (z + 2) * sz + x + 1] == BlockType::Water) << 2;
+                        water_mask |= (tmp[(y + 1) * utils::pow(sz, 2) + (z + 0) * sz + x + 1] == BlockType::Water) << 3;
+                        water_mask |= (tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 0] == BlockType::Water) << 4;
+                        water_mask |= (tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 2] == BlockType::Water) << 5;
                     }
                     // const BlockType type = mask == 0 ? BlockType::Air : C;
-                    blocks.emplace_back(C, mask);
+                    blocks.emplace_back(C, mask, water_mask);
                     full |= C != BlockType::Air;
                 }
             }

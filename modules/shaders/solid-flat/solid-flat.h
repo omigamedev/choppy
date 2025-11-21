@@ -20,7 +20,7 @@ struct VertexInput
 {
     // Layout: [1b v | 1b u | 12b layer | 6b z | 6b y | 6b x]
     [[vk::location(0)]] uint data SEM(DATA);
-    // Layout: [27b free | 2b occlusion | 3b face]
+    // Layout: [27b free | 4b occlusion | 3b face]
     [[vk::location(1)]] uint data_ext SEM(DATA_EXT);
 };
 
