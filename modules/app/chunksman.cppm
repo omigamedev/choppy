@@ -263,12 +263,12 @@ struct ChunksManager
                     globals::ChunkSize * globals::BlockSize);
                 chunk->dirty = true;
                 chunk->regenerate = false;
-                systems::m_physics_system->remove_body(chunk->body_id);
-                if (auto result = systems::m_physics_system->create_chunk_body(
-                    globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
-                {
-                    std::tie(chunk->body_id, chunk->shape) = result.value();
-                }
+                // systems::m_physics_system->remove_body(chunk->body_id);
+                // if (auto result = systems::m_physics_system->create_chunk_body(
+                //     globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
+                // {
+                //     std::tie(chunk->body_id, chunk->shape) = result.value();
+                // }
                 needs_update = true;
                 if (!--chunks_to_generate)
                     break;
@@ -287,12 +287,12 @@ struct ChunksManager
                     globals::ChunkSize * globals::BlockSize);
                 chunk->dirty = true;
                 chunk->regenerate = false;
-                systems::m_physics_system->remove_body(chunk->body_id);
-                if (auto result = systems::m_physics_system->create_chunk_body(
-                    globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
-                {
-                    std::tie(chunk->body_id, chunk->shape) = result.value();
-                }
+                // systems::m_physics_system->remove_body(chunk->body_id);
+                // if (auto result = systems::m_physics_system->create_chunk_body(
+                //     globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
+                // {
+                //     std::tie(chunk->body_id, chunk->shape) = result.value();
+                // }
                 needs_update = true;
                 if (!--chunks_to_generate)
                     break;
@@ -403,6 +403,7 @@ struct ChunksManager
 
         int polys = 0;
         std::unordered_map<BlockLayer, BatchDraw> batches;
+        bool optimize_physics = false;
         for (auto& chunk : sorted_chunks)
         {
             // AABB Culling Check
@@ -430,6 +431,13 @@ struct ChunksManager
                 }
                 if (chunk->dirty)
                 {
+                    systems::m_physics_system->remove_body(chunk->body_id);
+                    if (auto result = systems::m_physics_system->create_chunk_body(
+                        globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
+                    {
+                        std::tie(chunk->body_id, chunk->shape) = result.value();
+                    }
+
                     if (const auto sb = globals::m_resources->staging_buffer.suballoc(m.vertices.size() *
                         sizeof(shaders::SolidFlatShader::VertexInput), 64))
                     {
@@ -452,6 +460,7 @@ struct ChunksManager
                         if (on_sector_drawing)
                             on_sector_drawing(chunk->sector);
                     }
+                    optimize_physics = true;
                 }
                 if (m_frustum.is_box_visible(chunk_aabb))
                 {
@@ -472,6 +481,9 @@ struct ChunksManager
             chunk->dirty = false;
             // chunk.mesh.clear();
         }
+
+        if (optimize_physics)
+            systems::m_physics_system->optimize();
 
         // LOGI("drawing %d polys", polys / 3);
         clear_chunks_state(frame.timeline_value);

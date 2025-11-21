@@ -67,6 +67,7 @@ struct VulkanResources : utils::NoCopy
     vk::Buffer object_buffer;
     vk::Buffer args_buffer;
     vk::texture::Texture texture;
+    vk::texture::Texture texture_array;
     VkSampler sampler = VK_NULL_HANDLE;
     bool create_buffers(const std::shared_ptr<vk::Context>& vk)
     {

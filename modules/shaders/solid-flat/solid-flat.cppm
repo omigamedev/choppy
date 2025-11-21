@@ -127,6 +127,12 @@ private:
                 .format = VK_FORMAT_R32_UINT,
                 .offset = offsetof(VertexInput, data)
             },
+            VkVertexInputAttributeDescription{
+                .location = 1,
+                .binding = 0,
+                .format = VK_FORMAT_R32_UINT,
+                .offset = offsetof(VertexInput, data_ext)
+            },
             // VkVertexInputAttributeDescription{
             //     .location = 1,
             //     .binding = 0,

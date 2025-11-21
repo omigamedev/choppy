@@ -16,9 +16,11 @@ Networking
 [ ] http/ws server status
 Graphics
 [x] fix seams by adding uv padding
-[ ] add mipmaps
-[ ] fix seams for mipmaps,
+[x] add mipmaps
+[x] fix seams for mipmaps,
     offset should be selected based on lod
+[x] load atlas into texture array and generate mips
+[ ] make a faceID buffer
 [ ] add repeating tiles
 [ ] planar occlusion, don't show faces on 3 out of the 6 sides
 [ ] greedy meshing
@@ -30,6 +32,7 @@ Graphics
 Bugs
 [ ] memory leak in Quest
 Player
+[x] wait first chunks loaded before spawning the player
 [ ] reposition capsule to headset
 Blocks and Chunks
 [ ] update adjacent chunks on edge blocks

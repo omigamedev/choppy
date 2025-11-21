@@ -256,7 +256,7 @@ struct World
                 shaders::shader_opaque->write_buffer(*set, 0, globals::m_resources->frame_buffer.buffer(),
                     dst_sb->offset, dst_sb->size, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
                 shaders::shader_opaque->write_texture(*set, 1,
-                    globals::m_resources->texture.image_view, globals::m_resources->sampler);
+                    globals::m_resources->texture_array.image_view, globals::m_resources->sampler);
             }
         }
 

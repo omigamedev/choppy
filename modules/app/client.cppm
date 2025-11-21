@@ -102,7 +102,12 @@ export namespace ce::app::client
 {
 class ClientSystem : utils::NoCopy
 {
+#ifdef _DEBUG
+    // static constexpr std::string_view ServerHost = "192.168.1.60";
     static constexpr std::string_view ServerHost = "service.cubey.dev";
+#else
+    static constexpr std::string_view ServerHost = "service.cubey.dev";
+#endif
     static constexpr uint16_t ServerPort = 7777;
     static constexpr uint16_t WebSoketPort = 7778;
     std::shared_ptr<rtc::WebSocket> ws;
@@ -222,6 +227,7 @@ public:
             player.destroy();
         }
         try_connecting = false;
+        cleanup_rtc();
         if (connect_result.valid())
             connect_result.get();
         if (ws && ws->isOpen())

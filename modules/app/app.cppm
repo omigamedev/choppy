@@ -194,6 +194,8 @@ public:
             globals::m_resources->create_buffers(m_vk);
             globals::m_resources->texture = vk::texture::load_texture(m_vk,
                 "assets/grass.png", globals::m_resources->staging_buffer).value();
+            globals::m_resources->texture_array = vk::texture::load_atlas(m_vk,
+                "assets/grass.png", globals::m_resources->staging_buffer, {2, 4}).value();
             globals::m_resources->sampler = vk::texture::create_sampler(m_vk).value();
 
             m_vk->exec_immediate("init resources", [this](VkCommandBuffer cmd){

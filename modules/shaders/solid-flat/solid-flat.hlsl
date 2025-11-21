@@ -7,25 +7,27 @@ PixelInput VSMain(VertexInput input,
     uint ViewIndex : SV_ViewID,
     [[vk::builtin("DrawIndex")]] uint drawIndex : SV_InstanceID)
 {
-    const float2 cell_size = float2(16, 16);
-    const float2 texture_res = float2(32, 64);
-    const float2 pixel_offset = 1.0 / texture_res;
     // Unpack the 32-bit integer
+    // Layout: [1b v | 1b u | 12b layer | 6b z | 6b y | 6b x]
     float x = float(input.data & 0x3F);
     float y = float((input.data >> 6) & 0x3F) + ObjectsData[drawIndex].y_offset;
     float z = float((input.data >> 12) & 0x3F);
-    float u = float((input.data >> 18) & 0x1F) / 2.0;
-    float u_off = bool((input.data >> 18) & 0x20) == 0 ? pixel_offset.x : -pixel_offset.x;
-    float v = float((input.data >> 24) & 0x1F) / 4.0;
-    float v_off = bool((input.data >> 24) & 0x20) == 0 ? pixel_offset.y : -pixel_offset.y;
-    uint face_id = (input.data >> 30) & 0x03;
+    float layer = float((input.data >> 18) & 0xFFF);
+    float u = float((input.data >> 30) & 0x1);
+    float v = float((input.data >> 31) & 0x1);
+    // Layout: [27b free | 2b occlusion | 3b face]
+    int face = input.data_ext & 0x07;
+    int occ = (input.data_ext >> 3) & 0x03;
 
     const float4x4 WorldViewProjection = mul(ObjectsData[drawIndex].ObjectTransform, Frame.ViewProjection[ViewIndex]);
     const float3 Position = float3(x, y, z) * 0.5;
 
     PixelInput output;
     output.position = mul(float4(Position, 1.0), WorldViewProjection);
-    output.uvs = float2(u + u_off, v + v_off);
+    output.uvs = float2(u, v);
+    output.layer = layer;
+    output.face = face;
+    output.occ = occ;
 
     // Pass the view-space depth (stored in the w component of clip-space position) to the pixel shader.
     output.viewDepth = output.position.w;
@@ -33,12 +35,24 @@ PixelInput VSMain(VertexInput input,
     return output;
 }
 
-[[vk::binding(1, 0)]] Texture2D myTexture;   // bound to descriptor set
+[[vk::binding(1, 0)]] Texture2DArray myTexture;   // bound to descriptor set
 [[vk::binding(1, 0)]] SamplerState mySampler; // bound to sampler
 
 float4 PSMain(PixelInput input) : SV_TARGET
 {
-    const float4 textureColor = myTexture.Sample(mySampler, input.uvs);
+    static const float3 sun = normalize(float3(1, 1, 1));
+    static const float3 FaceNormal[6] = {
+        float3( 0, 1, 0), // U
+        float3( 0,-1, 0), // D
+        float3( 0, 0, 1), // F
+        float3( 0, 0,-1), // B
+        float3(-1, 0, 0), // L
+        float3( 1, 0, 0), // R
+    };
+    float3 normal = FaceNormal[input.face];
+    float3 intensity = max(0.1, dot(normal, sun));
+    //return float4(normal, 1);
+    const float4 textureColor = myTexture.Sample(mySampler, float3(input.uvs, input.layer));
     float4 finalColor = float4(textureColor.xyz, 1.0);
 
     if (Frame.fogColor.w > 0.0) // Check if fog is enabled
@@ -50,5 +64,5 @@ float4 PSMain(PixelInput input) : SV_TARGET
         finalColor.rgb = lerp(finalColor.rgb, Frame.fogColor.rgb, fogFactor);
     }
 
-    return finalColor * Frame.tint;
+    return finalColor * Frame.tint * float4(intensity, 1.f);
 }

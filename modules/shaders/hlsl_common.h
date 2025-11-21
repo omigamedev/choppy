@@ -10,6 +10,7 @@
     #endif
     #define uint uint32_t
     #define cbuffer struct
+    #define nointerpolation
     #define SEM(sem)
     #define REGISTER(reg)
 #endif

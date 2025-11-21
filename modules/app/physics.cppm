@@ -211,6 +211,10 @@ public:
 	    job_system.reset();
 	    temp_allocator.reset();
 	}
+	void optimize() noexcept
+	{
+		physics_system.OptimizeBroadPhase();
+	}
 	bool create_shared_box() noexcept
 	{
 	    float hs = globals::BlockSize * 0.5f;
