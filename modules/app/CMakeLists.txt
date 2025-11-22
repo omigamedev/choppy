@@ -497,8 +497,10 @@ add_library(ecs INTERFACE)
 target_include_directories(ecs INTERFACE "${ecs_SOURCE_DIR}/include")
 
 add_library(glmcppm OBJECT)
-target_link_libraries(glmcppm PUBLIC glm::glm)
+target_link_libraries(glmcppm PUBLIC glm-header-only)
 target_compile_definitions(glmcppm PUBLIC
+    GLM_ENABLE_CXX_20
+#    GLM_BUILD_LIBRARY
     GLM_ENABLE_EXPERIMENTAL
 )
 target_sources(glmcppm PUBLIC
@@ -524,9 +526,10 @@ else()
 endif()
 
 add_library(app OBJECT stb.cpp obj.cpp)
+target_include_directories(app PUBLIC ${miniaudio_SOURCE_DIR})
 target_link_libraries(app PUBLIC
     platform xr vk glmcppm shaders perlin
-    jolt miniaudio enet_static datachannel-static
+    jolt enet_static datachannel-static
     ecs entityx tinyobjloader nlohmann_json opus TracyClient)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC

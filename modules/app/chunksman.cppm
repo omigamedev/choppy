@@ -174,7 +174,7 @@ struct ChunksManager
         const uint32_t chunk_count = utils::pow(size * 2 + 1, 3);
         neighbors.reserve(chunk_count);
         const int32_t side = size;
-        for (int32_t y = -1; y < 10 + 1; ++y)
+        for (int32_t y = -side; y < side + 1; ++y)
         {
             for (int32_t z = -side; z < side + 1; ++z)
             {
@@ -203,21 +203,19 @@ struct ChunksManager
             return dist1 < dist2;
         });
 
+        std::lock_guard lock(m_chunks_mutex);
         std::vector<size_t> chunk_indices;
         chunk_indices.reserve(chunk_count);
         for (size_t i = 0; i < m_chunks.size(); ++i)
         {
-            if (auto it = std::ranges::find(neighbors, m_chunks[i]->sector);
-                it == neighbors.end() || m_chunks[i]->regenerate)
+            if (auto it = std::ranges::find(neighbors, m_chunks[i]->sector); it == neighbors.end())
             {
                 chunk_indices.emplace_back(i);
             }
         }
-
-        //const glm::vec3 dist = glm::abs(cur_sector - glm::vec3(m_player.cam_sector));
-        if (m_chunks.size() < chunk_count ||
-            !chunk_indices.empty() ||
-            cam_sector != cur_sector)
+        const auto regenerate_count = std::ranges::count_if(m_chunks, [](auto& p){ return p->regenerate; });
+        if (m_chunks.size() < chunk_count || !chunk_indices.empty() ||
+            cam_sector != cur_sector || regenerate_count > 0)
         {
             cam_sector = cur_sector;
             if (m_chunks.size() < chunk_count)
@@ -237,23 +235,35 @@ struct ChunksManager
         ZoneScoped;
 
         size_t chunk_indices_offset = 0;
-        std::lock_guard lock(m_chunks_mutex);
         for (const auto& sector : neighbors)
         {
             if (!generator.is_net_ready(sector))
                 continue;
             // check if it's already present
-            if (auto it = std::ranges::find(m_chunks, sector,
-                [](auto& p){ return p->sector; }); it != m_chunks.end())
+            const auto it = std::ranges::find(m_chunks, sector, [](auto& p){ return p->sector; });
+            if (it != m_chunks.end())
             {
-                if (!(*it)->regenerate)
-                    continue;
+                if ((*it)->regenerate)
+                {
+                    auto& chunk = *it;
+                    auto blocks_data = generator.generate(sector);
+                    auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
+                    chunk->mesh = std::move(chunk_data);
+                    chunk->data = std::move(blocks_data);
+                    chunk->color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
+                    chunk->sector = sector;
+                    chunk->transform = glm::gtc::translate(glm::vec3(sector) *
+                        globals::ChunkSize * globals::BlockSize);
+                    chunk->dirty = true;
+                    chunk->regenerate = false;
+                    LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                    needs_update = true;
+                }
             }
-            if (m_chunks.size() < chunk_count)
+            else if (m_chunks.size() < chunk_count)
             {
                 auto blocks_data = generator.generate(sector);
                 auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
-                // m_chunk_updates.emplace_back(m_chunks.size());
                 auto& chunk = m_chunks.emplace_back(std::make_shared<Chunk>());
                 chunk->mesh = std::move(chunk_data);
                 chunk->data = std::move(blocks_data);
@@ -263,12 +273,7 @@ struct ChunksManager
                     globals::ChunkSize * globals::BlockSize);
                 chunk->dirty = true;
                 chunk->regenerate = false;
-                // systems::m_physics_system->remove_body(chunk->body_id);
-                // if (auto result = systems::m_physics_system->create_chunk_body(
-                //     globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
-                // {
-                //     std::tie(chunk->body_id, chunk->shape) = result.value();
-                // }
+                LOGI("generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                 needs_update = true;
                 if (!--chunks_to_generate)
                     break;
@@ -287,12 +292,7 @@ struct ChunksManager
                     globals::ChunkSize * globals::BlockSize);
                 chunk->dirty = true;
                 chunk->regenerate = false;
-                // systems::m_physics_system->remove_body(chunk->body_id);
-                // if (auto result = systems::m_physics_system->create_chunk_body(
-                //     globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
-                // {
-                //     std::tie(chunk->body_id, chunk->shape) = result.value();
-                // }
+                LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                 needs_update = true;
                 if (!--chunks_to_generate)
                     break;
@@ -427,10 +427,12 @@ struct ChunksManager
                             std::pair(std::ref(globals::m_resources->vertex_buffer), chunk->buffer[layer]));
                     }
                     chunk->buffer.erase(layer);
+                    systems::m_physics_system->remove_body(chunk->body_id);
                     continue;
                 }
                 if (chunk->dirty)
                 {
+                    // LOGI("generate physics for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                     systems::m_physics_system->remove_body(chunk->body_id);
                     if (auto result = systems::m_physics_system->create_chunk_body(
                         globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
@@ -453,6 +455,7 @@ struct ChunksManager
                                    std::pair(std::ref(globals::m_resources->vertex_buffer), chunk->buffer[layer]));
                             }
                             chunk->buffer[layer] = *dst_sb;
+                            LOGI("generate vertex for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                         }
                         // defer suballocation deletion
                         globals::m_resources->delete_buffers.emplace(frame.timeline_value,
@@ -561,6 +564,52 @@ struct ChunksManager
         }
         return std::nullopt;
     }
+    [[nodiscard]] bool is_inside(const glm::ivec3& world_cell, const glm::ivec3& sector) const noexcept
+    {
+        constexpr auto edge = globals::ChunkSize - 1;
+        const glm::ivec3 local_cell = world_cell - sector * static_cast<int32_t>(globals::ChunkSize);
+        return local_cell.x >= 0 && local_cell.y >= 0 && local_cell.z >= 0 &&
+            local_cell.x <= edge && local_cell.y <= edge && local_cell.z <= edge;
+    }
+    [[nodiscard]] bool is_edge(const glm::ivec3& world_cell, const glm::ivec3& sector) const noexcept
+    {
+        constexpr auto edge = globals::ChunkSize - 1;
+        const glm::ivec3 local_cell = world_cell - sector * static_cast<int32_t>(globals::ChunkSize);
+        return local_cell.x == 0 || local_cell.y == 0 || local_cell.z == 0 ||
+            local_cell.x == edge || local_cell.y == edge || local_cell.z == edge;
+    }
+    void regenerate_block(const glm::ivec3& sector, const glm::u8vec3& local_cell) noexcept
+    {
+        std::lock_guard lock(m_chunks_mutex);
+        if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
+        {
+            (*it)->regenerate = true;
+        }
+        if (is_edge(local_cell, sector))
+        {
+            const glm::ivec3 world_cell = glm::ivec3(local_cell) + sector * static_cast<int32_t>(globals::ChunkSize);
+            for (uint32_t axis = 0; axis < 3; ++axis)
+            {
+                for (const int32_t i : std::to_array({-1, 1}))
+                {
+                    glm::ivec3 adj_cell = world_cell;
+                    adj_cell[axis] += i;
+                    glm::ivec3 adj_sector = sector;
+                    adj_sector[axis] += i;
+                    if (is_inside(adj_cell, adj_sector))
+                    {
+                        if (const auto it = std::ranges::find(m_chunks, adj_sector, &Chunk::sector);
+                            it != m_chunks.end())
+                        {
+                            LOGI("regenerate edge block [%d %d %d] in sector [%d %d %d]",
+                                adj_cell.x, adj_cell.y, adj_cell.z, adj_sector.x, adj_sector.y, adj_sector.z);
+                            (*it)->regenerate = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
     void break_block(const glm::vec3& origin, const glm::vec3& direction) noexcept
     {
         if (const auto hit = trace_dda(origin, direction, 10.0,
@@ -584,12 +633,9 @@ struct ChunksManager
     void break_block(const glm::ivec3& world_cell) noexcept
     {
         const glm::ivec3 sector = glm::floor(glm::vec3(world_cell) / static_cast<float>(globals::ChunkSize));
-        generator.remove(sector, world_cell - sector * static_cast<int32_t>(globals::ChunkSize));
-        std::lock_guard lock(m_chunks_mutex);
-        if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
-        {
-            (*it)->regenerate = true;
-        }
+        const glm::u8vec3 local_cell = world_cell - sector * static_cast<int32_t>(globals::ChunkSize);
+        generator.remove(sector, local_cell);
+        regenerate_block(sector, local_cell);
     }
     void build_block(const glm::vec3& origin, const glm::vec3& direction) noexcept
     {
@@ -612,12 +658,9 @@ struct ChunksManager
     void build_block(const glm::ivec3& world_cell) noexcept
     {
         const glm::ivec3 sector = glm::floor(glm::vec3(world_cell) / static_cast<float>(globals::ChunkSize));
-            generator.edit(sector, world_cell - sector * static_cast<int32_t>(globals::ChunkSize), BlockType::Dirt);
-        std::lock_guard lock(m_chunks_mutex);
-        if (const auto it = std::ranges::find(m_chunks, sector, &Chunk::sector); it != m_chunks.end())
-        {
-            (*it)->regenerate = true;
-        }
+        const glm::u8vec3 local_cell = world_cell - sector * static_cast<int32_t>(globals::ChunkSize);
+        generator.edit(sector, local_cell, BlockType::Dirt);
+        regenerate_block(sector, local_cell);
     }
     std::optional<glm::ivec3> build_block_cell(const glm::vec3& origin, const glm::vec3& direction) const noexcept
     {

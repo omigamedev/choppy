@@ -17,5 +17,5 @@ std::shared_ptr<resources::VulkanResources> m_resources;
 constexpr float BlockSize = 0.5f;
 // Number of blocks per chunk
 constexpr uint32_t ChunkSize = 32;
-constexpr uint32_t ChunkRings = 10;
+constexpr uint32_t ChunkRings = 7;
 }

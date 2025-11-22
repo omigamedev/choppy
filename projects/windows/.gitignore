@@ -1,7 +1,6 @@
 /.idea
 /.vs
 /.vscode
-/cmake-build-debug
-/cmake-build-debug-visual-studio
+/cmake-build-*
 /out
 /vc140.pdb

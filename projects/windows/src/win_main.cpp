@@ -68,7 +68,7 @@ class WindowsContext
     {
         const auto& win32 = ce::platform::GetPlatform<ce::platform::Win32>();
         m_window = std::static_pointer_cast<ce::platform::Win32Window>(win32.new_window());
-        return m_window->create(1920/2, 1080/2);
+        return m_window->create(1920, 1080);
     }
 public:
     bool create(const std::vector<std::string>& args) noexcept
