@@ -50,7 +50,8 @@ float4 PSMain(PixelInput input) : SV_TARGET
         float3( 1, 0, 0), // R
     };
     float3 normal = FaceNormal[input.face];
-    float3 intensity = max(0.1, dot(normal, sun)) * max(0.01, float(input.occ) / 7.0);
+    float3 light = lerp(0.5, 1.0, step(0.0, dot(normal, sun)));
+    float3 occlusion = max(0.1, float(input.occ) / 7.0);
     //return float4(normal, 1);
     const float4 textureColor = myTexture.Sample(mySampler, float3(input.uvs, input.layer));
     float4 finalColor = float4(textureColor.xyz, 1.0);
@@ -64,5 +65,5 @@ float4 PSMain(PixelInput input) : SV_TARGET
         finalColor.rgb = lerp(finalColor.rgb, Frame.fogColor.rgb, fogFactor);
     }
 
-    return finalColor * Frame.tint * float4(intensity, 1.f);
+    return finalColor * Frame.tint * float4(light, 1.0) * float4(occlusion, 1.0);
 }
