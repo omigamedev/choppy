@@ -20,7 +20,7 @@ Graphics
 [x] fix seams for mipmaps,
     offset should be selected based on lod
 [x] load atlas into texture array and generate mips
-[ ] frustum cull both eyes
+[x] frustum cull both eyes
 [ ] make a faceID buffer
 [ ] add repeating tiles
 [ ] planar occlusion, don't show faces on 3 out of the 6 sides

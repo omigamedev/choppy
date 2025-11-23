@@ -121,7 +121,7 @@ struct ChunksManager
     std::unordered_map<glm::ivec3, ChunkNetState, IVec3Hash> chunks_netstate;
     std::unordered_map<glm::ivec3, std::vector<uint8_t>, IVec3Hash> chunks_netdata;
     bool m_running = true;
-    Frustum m_frustum;
+    Frustum m_frustum[2];
     glm::vec3 cam_pos = { 0, 10, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
     uint64_t last_timeline_value = 0;
@@ -386,11 +386,11 @@ struct ChunksManager
             }
         }
 
-        // Update the frustum with the latest camera matrix for the primary view
-        //if (update_frustum)
+        const uint32_t eyes = globals::xrmode ? 2 : 1;
+        for (uint32_t eye = 0; eye < eyes; eye++)
         {
-            const auto vp = frame.projection[0] * frame.view[0];
-            m_frustum.update(vp);
+            const auto vp = frame.projection[eye] * frame.view[eye];
+            m_frustum[eye].update(vp);
         }
 
         auto sorted_chunks = utils::sorted_view(m_chunks, [this](const auto& c1, const auto& c2) -> bool
@@ -464,7 +464,14 @@ struct ChunksManager
                     }
                     optimize_physics = true;
                 }
-                if (m_frustum.is_box_visible(chunk_aabb))
+                const auto is_visible = [&]
+                {
+                    for (uint32_t eye = 0; eye < eyes; eye++)
+                        if (m_frustum[eye].is_box_visible(chunk_aabb))
+                            return true;
+                    return false;
+                };
+                if (is_visible())
                 {
                     batches[layer].ubo.push_back({
                         .ObjectTransform = glm::transpose(chunk->transform),
