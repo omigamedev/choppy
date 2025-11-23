@@ -20,6 +20,7 @@ Graphics
 [x] fix seams for mipmaps,
     offset should be selected based on lod
 [x] load atlas into texture array and generate mips
+[ ] frustum cull both eyes
 [ ] make a faceID buffer
 [ ] add repeating tiles
 [ ] planar occlusion, don't show faces on 3 out of the 6 sides
@@ -33,7 +34,7 @@ Bugs
 [ ] memory leak in Quest
 Player
 [x] wait first chunks loaded before spawning the player
-[ ] when you look up or down use the up vector to move forward
+[x] when you look up or down use the up vector to move forward
 [ ] reposition capsule to headset
 Blocks and Chunks
 [x] update adjacent chunks on edge blocks
@@ -42,6 +43,7 @@ Blocks and Chunks
 UI
 [ ] font rendering
 Development
+[ ] upload debug symbols to horizon
 [ ] auto versioning builds
 [ ] sentry
 Companion

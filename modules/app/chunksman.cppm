@@ -219,12 +219,12 @@ struct ChunksManager
             cam_sector = cur_sector;
             if (m_chunks.size() < chunk_count)
             {
-                LOGI("Loading world: %d%%",
-                    static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
+                // LOGI("Loading world: %d%%",
+                //     static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
             }
             else
             {
-                LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
+                // LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
             }
         }
         else
@@ -255,7 +255,7 @@ struct ChunksManager
                         globals::ChunkSize * globals::BlockSize);
                     chunk->dirty = true;
                     chunk->regenerate = false;
-                    LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                    // LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                     needs_update = true;
                 }
             }
@@ -272,7 +272,7 @@ struct ChunksManager
                     globals::ChunkSize * globals::BlockSize);
                 chunk->dirty = true;
                 chunk->regenerate = false;
-                LOGI("generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                // LOGI("generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                 needs_update = true;
                 if (!--chunks_to_generate)
                     break;
@@ -291,7 +291,7 @@ struct ChunksManager
                     globals::ChunkSize * globals::BlockSize);
                 chunk->dirty = true;
                 chunk->regenerate = false;
-                LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                // LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                 needs_update = true;
                 if (!--chunks_to_generate)
                     break;
@@ -454,7 +454,7 @@ struct ChunksManager
                                    std::pair(std::ref(globals::m_resources->vertex_buffer), chunk->buffer[layer]));
                             }
                             chunk->buffer[layer] = *dst_sb;
-                            LOGI("generate vertex for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                            // LOGI("generate vertex for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                         }
                         // defer suballocation deletion
                         globals::m_resources->delete_buffers.emplace(frame.timeline_value,

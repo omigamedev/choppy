@@ -467,10 +467,14 @@ public:
             if (action_jump && m_world.m_player.character->IsSupported())
                 fy += 5.f;
         }
-        const glm::vec3 forward = glm::vec4{fx, 0, -fz, 1} * view;
+        const glm::vec3 real_forward = glm::vec4{0, 0, -1, 1} * view;
+        const float verticality = glm::dot(real_forward, glm::vec3{0, 1, 0});
+        const glm::vec4 adjusted_forward = (glm::abs(verticality) < 0.9f) ?
+            glm::vec4{fx, 0, -fz, 1} : glm::vec4{fx, -fz * glm::sign(verticality), 0, 1};
+        const glm::vec3 forward = adjusted_forward * view;
         if (glm::abs(glm::length(forward)) > 0.f || fy > 0.f)
         {
-            const auto step = glm::vec3(forward) * speed;
+            const auto step = glm::normalize(forward) * speed;
             const auto current_velocity = glm::gtc::make_vec3(m_world.m_player.character->GetLinearVelocity().mF32);
             const auto velocity = glm::vec3(step.x, current_velocity.y, step.z);
             const auto v = glm::gtc::lerp(current_velocity, velocity, dt * 3.f);
