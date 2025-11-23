@@ -170,17 +170,17 @@ struct ChunksManager
         const int32_t size) const noexcept
     {
         ZoneScoped;
-        std::vector<glm::ivec3> neighbors;
         const uint32_t chunk_count = utils::pow(size * 2 + 1, 3);
+        std::vector<glm::ivec3> neighbors;
         neighbors.reserve(chunk_count);
-        const int32_t side = size;
-        for (int32_t y = -side; y < side + 1; ++y)
+        for (int32_t y = -size; y < size + 1; ++y)
         {
-            for (int32_t z = -side; z < side + 1; ++z)
+            for (int32_t z = -size; z < size + 1; ++z)
             {
-                for (int32_t x = -side; x < side + 1; ++x)
+                for (int32_t x = -size; x < size + 1; ++x)
                 {
-                    const glm::ivec3 sector = glm::ivec3{x, y, z} + glm::ivec3(origin.x, 0, origin.z);
+                    const glm::ivec3 sector = glm::ivec3{x, y, z} +
+                        glm::ivec3(origin.x, origin.y, origin.z);
                     neighbors.emplace_back(sector);
                 }
             }
@@ -189,8 +189,7 @@ struct ChunksManager
     }
     [[nodiscard]] bool generate_chunks(uint32_t chunks_to_generate) noexcept
     {
-        constexpr uint32_t chunk_count =
-            (globals::ChunkRings * 2 + 1) * (globals::ChunkRings * 2 + 1) * (3);
+        constexpr uint32_t chunk_count = utils::pow(globals::ChunkRings * 2 + 1, 3);
 
         const glm::ivec3 cur_sector =
             glm::floor(cam_pos / (globals::ChunkSize * globals::BlockSize));
@@ -220,12 +219,12 @@ struct ChunksManager
             cam_sector = cur_sector;
             if (m_chunks.size() < chunk_count)
             {
-                //LOGI("Loading world: %d%%\r",
-                //    static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
+                LOGI("Loading world: %d%%",
+                    static_cast<int32_t>(m_chunks.size() * 100.f / chunk_count));
             }
             else
             {
-                //LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
+                LOGI("travel to sector [%d, %d, %d]", cam_sector.x, cam_sector.y, cam_sector.z);
             }
         }
         else

@@ -33,9 +33,12 @@ Bugs
 [ ] memory leak in Quest
 Player
 [x] wait first chunks loaded before spawning the player
+[ ] when you look up or down use the up vector to move forward
 [ ] reposition capsule to headset
 Blocks and Chunks
 [x] update adjacent chunks on edge blocks
+[ ] multithreaded generation
+[ ] awake physics when blocks are built/broken
 UI
 [ ] font rendering
 Development

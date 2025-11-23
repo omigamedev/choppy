@@ -482,6 +482,8 @@ public:
             const auto v = glm::gtc::lerp(current_velocity, glm::vec3(0, current_velocity.y, 0), dt * 10.f);
             m_world.m_player.character->SetLinearVelocity(JPH::Vec3(v.x, v.y, v.z));
         }
+        if (gamepad.trigger_left > 0)
+            m_world.m_player.character->AddImpulse(JPH::Vec3(0, gamepad.trigger_left * 10, 0));
     }
     void tick_xrmode(const float dt, const GamepadState& gamepad) noexcept
     {
