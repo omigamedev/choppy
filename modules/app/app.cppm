@@ -472,9 +472,10 @@ public:
         const glm::vec4 adjusted_forward = (glm::abs(verticality) < 0.9f) ?
             glm::vec4{fx, 0, -fz, 1} : glm::vec4{fx, -fz * glm::sign(verticality), 0, 1};
         const glm::vec3 forward = adjusted_forward * view;
-        if (glm::abs(glm::length(forward)) > 0.f || fy > 0.f)
+        const float forward_length = glm::length(forward);
+        if (forward_length > 0.f || fy > 0.f)
         {
-            const auto step = glm::normalize(forward) * speed;
+            const auto step = (forward_length > 0) ? (forward / forward_length * speed) : glm::vec3(0);
             const auto current_velocity = glm::gtc::make_vec3(m_world.m_player.character->GetLinearVelocity().mF32);
             const auto velocity = glm::vec3(step.x, current_velocity.y, step.z);
             const auto v = glm::gtc::lerp(current_velocity, velocity, dt * 3.f);

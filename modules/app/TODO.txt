@@ -11,6 +11,7 @@ Audio
 Networking
 [x] make sure you don't generate chunks that
     are waiting on server data
+[ ] BUG?: request two times all chunks at startup
 [ ] server: clients authentication
 [ ] add secure web sockets
 [ ] http/ws server status
@@ -21,6 +22,7 @@ Graphics
     offset should be selected based on lod
 [x] load atlas into texture array and generate mips
 [x] frustum cull both eyes
+[x] NaN when forward vector is zero
 [ ] make a faceID buffer
 [ ] add repeating tiles
 [ ] planar occlusion, don't show faces on 3 out of the 6 sides
@@ -40,6 +42,8 @@ Blocks and Chunks
 [x] update adjacent chunks on edge blocks
 [ ] multithreaded generation
 [ ] awake physics when blocks are built/broken
+[ ] generate clouds
+[ ] generate caves
 UI
 [ ] font rendering
 Development
