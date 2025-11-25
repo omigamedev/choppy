@@ -32,6 +32,10 @@ Graphics
 [ ] blocks AO
 [ ] skinned mesh
 [ ] disable msaa option
+Camera
+[ ] render to texture
+[ ] encode
+[ ] stream
 Bugs
 [ ] memory leak in Quest
 Player
@@ -40,6 +44,7 @@ Player
 [ ] reposition capsule to headset
 Blocks and Chunks
 [x] update adjacent chunks on edge blocks
+[ ] Generate LOD chunks
 [ ] multithreaded generation
 [ ] awake physics when blocks are built/broken
 [ ] generate clouds

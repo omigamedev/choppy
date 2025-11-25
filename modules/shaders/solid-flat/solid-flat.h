@@ -14,6 +14,7 @@ struct alignas(16) PerObjectBuffer
 {
     float4x4 ObjectTransform;
     float y_offset;
+    uint lod;
 };
 
 struct VertexInput

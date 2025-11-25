@@ -51,7 +51,7 @@ class ChunkMesher
 public:
     virtual ~ChunkMesher() = default;
     [[nodiscard]] virtual std::unordered_map<BlockLayer, ChunkMesh<T>> mesh(
-        const ChunkData& data, const float block_size) const noexcept = 0;
+        const ChunkData& data, const float block_size, const uint32_t lod) const noexcept = 0;
 };
 
 bool operator&(const uint8_t lhs, const Block::Mask rhs)
@@ -86,9 +86,25 @@ uint32_t pack_vertex_ext(const uint32_t face_id, const uint32_t occlusion)
 template<typename T>
 class GreedyMesher final : public ChunkMesher<T>
 {
+    [[nodiscard]] static bool is_inside(const glm::ivec3& world_cell, const glm::ivec3& sector,
+        const uint32_t chunk_size) noexcept
+    {
+        const auto edge = chunk_size - 1;
+        const glm::ivec3 local_cell = world_cell - sector * static_cast<int32_t>(chunk_size);
+        return local_cell.x >= 0 && local_cell.y >= 0 && local_cell.z >= 0 &&
+            local_cell.x <= edge && local_cell.y <= edge && local_cell.z <= edge;
+    }
+    [[nodiscard]] static bool is_edge(const glm::ivec3& world_cell, const glm::ivec3& sector,
+        const uint32_t chunk_size) noexcept
+    {
+        const auto edge = chunk_size - 1;
+        const glm::ivec3 local_cell = world_cell - sector * static_cast<int32_t>(chunk_size);
+        return local_cell.x == 0 || local_cell.y == 0 || local_cell.z == 0 ||
+            local_cell.x == edge || local_cell.y == edge || local_cell.z == edge;
+    }
 public:
     [[nodiscard]] std::unordered_map<BlockLayer, ChunkMesh<T>> mesh(
-        const ChunkData& data, const float block_size) const noexcept override
+        const ChunkData& data, const float block_size, const uint32_t lod) const noexcept override
     {
         struct Slice
         {
@@ -114,13 +130,14 @@ public:
         for (int face_index = 0; face_index < slices.size(); ++face_index)
         {
             const auto& [m, sc, d, uc, vc, flip] = slices[face_index];
-            for (uint32_t slice = 0; slice < size; ++slice)
+            for (uint32_t slice = 0; slice < size; slice += lod)
             {
-                for (uint32_t y = 0; y < size; ++y)
+                const bool edge = (slice == size) || (slice == 0);
+                for (uint32_t y = 0; y < size; y += lod)
                 {
-                    for (uint32_t x = 0; x < size; ++x)
+                    for (uint32_t x = 0; x < size; x += lod)
                     {
-                        auto slice_cell = d < 0 ? (size-1)-slice : slice;
+                        const auto slice_cell = d < 0 ? (size-1)-slice : slice;
                         const auto to_cell = [sc, uc, vc, slice_cell](const glm::uvec2& pos)
                         {
                             glm::uvec3 v;
@@ -145,14 +162,14 @@ public:
                         const auto& [layer, mat] = materials.at(data.blocks[idx].type);
                         auto& mesh = meshes[layer];
                         const auto A = to_plane(glm::uvec2(x, y));
-                        const auto B = to_plane(glm::uvec2(x, y+1));
-                        const auto C = to_plane(glm::uvec2(x+1, y+1));
-                        const auto D = to_plane(glm::uvec2(x+1, y));
+                        const auto B = to_plane(glm::uvec2(x, y+lod));
+                        const auto C = to_plane(glm::uvec2(x+lod, y+lod));
+                        const auto D = to_plane(glm::uvec2(x+lod, y));
                         constexpr auto CA = glm::uvec2{0, 1};
                         constexpr auto CB = glm::uvec2{0, 0};
                         constexpr auto CC = glm::uvec2{1, 0};
                         constexpr auto CD = glm::uvec2{1, 1};
-                        if (data.blocks[idx].face_mask & m)
+                        if (/*edge ||*/ data.blocks[idx].face_mask & m)
                         {
                             const auto world_cell = data.sector * static_cast<int32_t>(data.size) + glm::ivec3(cell);
                             const uint32_t water_depth = std::max<int32_t>(0, 7 + world_cell.y);

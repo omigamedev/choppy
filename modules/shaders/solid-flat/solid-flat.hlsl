@@ -24,7 +24,7 @@ PixelInput VSMain(VertexInput input,
 
     PixelInput output;
     output.position = mul(float4(Position, 1.0), WorldViewProjection);
-    output.uvs = float2(u, v);
+    output.uvs = float2(u, v) * float(ObjectsData[drawIndex].lod);
     output.layer = layer;
     output.face = face;
     output.occ = occ;

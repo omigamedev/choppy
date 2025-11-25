@@ -62,27 +62,7 @@ struct Chunk final
     bool net_requested = false;
     std::future<void> generate_future;
     bool async_generating = false;
-    void generate(const FlatGenerator& generator, const GreedyMesher<shaders::SolidFlatShader::VertexInput>& mesher,
-        const glm::ivec3& generate_sector) noexcept
-    {
-        auto blocks_data = generator.generate(generate_sector);
-        auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
-        // m_chunk_updates.emplace_back(m_chunks.size());
-        mesh = std::move(chunk_data);
-        data = std::move(blocks_data);
-        sector = generate_sector;
-        color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
-        transform = glm::gtc::translate(glm::vec3(sector) *
-            globals::ChunkSize * globals::BlockSize);
-        dirty = true;
-        regenerate = false;
-        systems::m_physics_system->remove_body(body_id);
-        if (auto result = systems::m_physics_system->create_chunk_body(
-            globals::ChunkSize, globals::BlockSize, data, sector))
-        {
-            std::tie(body_id, shape) = result.value();
-        }
-    }
+    uint32_t lod = 0;
 };
 struct ChunkUpdate
 {
@@ -120,11 +100,14 @@ struct ChunksManager
     enum class ChunkNetState{None, Wait, Ready, Sync};
     std::unordered_map<glm::ivec3, ChunkNetState, IVec3Hash> chunks_netstate;
     std::unordered_map<glm::ivec3, std::vector<uint8_t>, IVec3Hash> chunks_netdata;
+    std::vector<glm::ivec3> sectors_to_request;
+    std::vector<glm::ivec3> sectors_to_wait;
     bool m_running = true;
     Frustum m_frustum[2];
     glm::vec3 cam_pos = { 0, 10, 0 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
     uint64_t last_timeline_value = 0;
+    std::vector<glm::ivec3> neighbors;
 
     std::function<void(const glm::ivec3& sector)> on_sector_sync;
     std::function<void(const glm::ivec3& sector)> on_sector_drawing;
@@ -148,7 +131,7 @@ struct ChunksManager
         tracy::SetThreadName("generate_thread");
         while (m_running)
         {
-            if (generate_chunks(1))
+            if (generate_chunks(10))
                 needs_update.store(true);
         }
     }
@@ -187,14 +170,38 @@ struct ChunksManager
         }
         return neighbors;
     }
+    [[nodiscard]] uint32_t chunk_lod(const glm::ivec3& chunk_sector, const glm::ivec3& cur_sector) const noexcept
+    {
+        //return 1;
+        const float dist = glm::gtx::distance(glm::vec3(chunk_sector), glm::vec3(cur_sector));
+        uint32_t lod = 1;
+        if (dist >= 5)
+            lod = 2;
+        if (dist >= 8)
+            lod = 4;
+        if (dist >= 12)
+            lod = 8;
+        //if (dist >= 16)
+        //    lod = 16;
+        return lod;
+    }
     [[nodiscard]] bool generate_chunks(uint32_t chunks_to_generate) noexcept
     {
-        constexpr uint32_t chunk_count = utils::pow(globals::ChunkRings * 2 + 1, 3);
+        static bool i_have_done_something = false;
+        static uint32_t things_done = 0;
+        if (!i_have_done_something || things_done > 10)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            things_done = 0;
+        }
+        i_have_done_something = false;
+        std::lock_guard lock(m_chunks_mutex);
 
+        constexpr uint32_t chunk_count = utils::pow(globals::ChunkRings * 2 + 1, 3);
         const glm::ivec3 cur_sector =
             glm::floor(cam_pos / (globals::ChunkSize * globals::BlockSize));
 
-        auto neighbors = generate_neighbors(cur_sector, globals::ChunkRings);
+        neighbors = generate_neighbors(cur_sector, globals::ChunkRings);
         std::ranges::sort(neighbors, [cur_sector](const glm::ivec3 a, const glm::ivec3 b)
         {
             const float dist1 = glm::gtx::distance2(glm::vec3(a), glm::vec3(cur_sector));
@@ -202,7 +209,24 @@ struct ChunksManager
             return dist1 < dist2;
         });
 
-        std::lock_guard lock(m_chunks_mutex);
+        if (!globals::server_mode && systems::m_client_system->connected())
+        {
+            std::vector<glm::ivec3> sectors;
+            for (const auto& sector : neighbors)
+            {
+                if (!chunks_netstate.contains(sector) && !std::ranges::contains(sectors_to_request, sector))
+                {
+                    sectors_to_request.emplace_back(sector);
+                    i_have_done_something = true;
+                }
+            }
+        }
+
+        // for (auto& chunk : m_chunks)
+        // {
+        //
+        // }
+
         std::vector<size_t> chunk_indices;
         chunk_indices.reserve(chunk_count);
         for (size_t i = 0; i < m_chunks.size(); ++i)
@@ -236,66 +260,115 @@ struct ChunksManager
         size_t chunk_indices_offset = 0;
         for (const auto& sector : neighbors)
         {
-            if (!generator.is_net_ready(sector))
+            if (const auto it = chunks_netstate.find(sector);
+                it == chunks_netstate.end() || it->second == ChunkNetState::Wait)
+            {
                 continue;
+            }
             // check if it's already present
             const auto it = std::ranges::find(m_chunks, sector, [](auto& p){ return p->sector; });
             if (it != m_chunks.end())
             {
-                if ((*it)->regenerate)
+                auto& chunk = *it;
+                const uint32_t lod = chunk_lod(chunk->sector, cur_sector);
+                if (chunk->regenerate || chunk->lod != lod)
                 {
-                    auto& chunk = *it;
-                    auto blocks_data = generator.generate(sector);
-                    auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
+                    auto blocks_data = generator.generate(sector, lod);
+                    if (!blocks_data.empty)
+                    {
+                        auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize * lod, 1);
+                        chunk->lod = lod;
+                        chunk->mesh = std::move(chunk_data);
+                        chunk->data = std::move(blocks_data);
+                        chunk->color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
+                        chunk->sector = sector;
+                        chunk->transform = glm::gtc::translate(glm::vec3(sector) *
+                            globals::ChunkSize * globals::BlockSize) * glm::gtc::scale(glm::vec3(lod));
+                        chunk->dirty = true;
+                        chunk->regenerate = false;
+                        LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                        needs_update = true;
+                        if (!--chunks_to_generate)
+                            break;
+                    }
+                    else
+                    {
+                        chunk->lod = lod;
+                        chunk->mesh = {};
+                        chunk->data = {};
+                        chunk->sector = sector;
+                        chunk->dirty = false;
+                        LOGI("skip empty chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                    }
+                }
+            }
+            else if (m_chunks.size() < chunk_count)
+            {
+                const uint32_t lod = chunk_lod(sector, cur_sector);
+                auto& chunk = m_chunks.emplace_back(std::make_shared<Chunk>());
+                auto blocks_data = generator.generate(sector, lod);
+                if (!blocks_data.empty)
+                {
+                    auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize * lod, 1);
+                    chunk->lod = lod;
                     chunk->mesh = std::move(chunk_data);
                     chunk->data = std::move(blocks_data);
                     chunk->color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
                     chunk->sector = sector;
                     chunk->transform = glm::gtc::translate(glm::vec3(sector) *
-                        globals::ChunkSize * globals::BlockSize);
+                        globals::ChunkSize * globals::BlockSize) * glm::gtc::scale(glm::vec3(lod));
                     chunk->dirty = true;
                     chunk->regenerate = false;
-                    // LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                    LOGI("generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                     needs_update = true;
+                    if (!--chunks_to_generate)
+                        break;
                 }
-            }
-            else if (m_chunks.size() < chunk_count)
-            {
-                auto blocks_data = generator.generate(sector);
-                auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
-                auto& chunk = m_chunks.emplace_back(std::make_shared<Chunk>());
-                chunk->mesh = std::move(chunk_data);
-                chunk->data = std::move(blocks_data);
-                chunk->color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
-                chunk->sector = sector;
-                chunk->transform = glm::gtc::translate(glm::vec3(sector) *
-                    globals::ChunkSize * globals::BlockSize);
-                chunk->dirty = true;
-                chunk->regenerate = false;
-                // LOGI("generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
-                needs_update = true;
-                if (!--chunks_to_generate)
-                    break;
+                else
+                {
+                    chunk->lod = lod;
+                    chunk->mesh = {};
+                    chunk->data = {};
+                    chunk->sector = sector;
+                    chunk->dirty = false;
+                    LOGI("skip empty chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                }
             }
             else if (!chunk_indices.empty())
             {
-                auto blocks_data = generator.generate(sector);
-                auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize);
                 const uint32_t chunk_index = chunk_indices[chunk_indices_offset++];
+                const uint32_t lod = chunk_lod(sector, cur_sector);
                 auto& chunk = m_chunks[chunk_index];
-                chunk->mesh = std::move(chunk_data);
-                chunk->data = std::move(blocks_data);
-                chunk->color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
-                chunk->sector = sector;
-                chunk->transform = glm::gtc::translate(glm::vec3(sector) *
-                    globals::ChunkSize * globals::BlockSize);
-                chunk->dirty = true;
-                chunk->regenerate = false;
-                // LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
-                needs_update = true;
-                if (!--chunks_to_generate)
-                    break;
+                auto blocks_data = generator.generate(sector, lod);
+                if (!blocks_data.empty)
+                {
+                    auto chunk_data = mesher.mesh(blocks_data, globals::BlockSize * lod, 1);
+                    chunk->lod = lod;
+                    chunk->mesh = std::move(chunk_data);
+                    chunk->data = std::move(blocks_data);
+                    chunk->color = glm::gtc::linearRand(glm::vec4(0, 0, 0, 1), glm::vec4(1, 1, 1, 1));
+                    chunk->sector = sector;
+                    chunk->transform = glm::gtc::translate(glm::vec3(sector) *
+                        globals::ChunkSize * globals::BlockSize) * glm::gtc::scale(glm::vec3(lod));
+                    chunk->dirty = true;
+                    chunk->regenerate = false;
+                    LOGI("re-generate chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                    needs_update = true;
+                    if (!--chunks_to_generate)
+                        break;
+                }
+                else
+                {
+                    chunk->lod = lod;
+                    chunk->mesh = {};
+                    chunk->data = {};
+                    chunk->sector = sector;
+                    chunk->dirty = false;
+                    LOGI("skip empty chunk for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                }
             }
+            i_have_done_something = true;
+            things_done++;
         }
         return true;
     }
@@ -347,44 +420,40 @@ struct ChunksManager
         if (!lock.owns_lock())
             return;
 
-        const glm::ivec3 cur_sector =
-            glm::floor(cam_pos / (globals::ChunkSize * globals::BlockSize));
-
-        auto neighbors = generate_neighbors(cur_sector, globals::ChunkRings);
-        std::ranges::sort(neighbors, [cur_sector](const glm::ivec3 a, const glm::ivec3 b)
+        if (!sectors_to_request.empty())
         {
-            const float dist1 = glm::gtx::distance2(glm::vec3(a), glm::vec3(cur_sector));
-            const float dist2 = glm::gtx::distance2(glm::vec3(b), glm::vec3(cur_sector));
-            return dist1 < dist2;
-        });
+            systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
+               .message_direction = messages::MessageDirection::Request,
+               .sectors = sectors_to_request,
+            });
+            sectors_to_wait.append_range(sectors_to_request);
+            sectors_to_request.clear();
+        }
 
-        if (!globals::server_mode && systems::m_client_system->connected())
+        std::vector<glm::ivec3> sectors_to_ready;
+        for (const auto& sector : sectors_to_wait)
         {
-            std::vector<glm::ivec3> sectors;
-            for (const auto& sector : neighbors)
+            if (chunks_netstate[sector] == ChunkNetState::None)
             {
-                if (chunks_netstate[sector] == ChunkNetState::None)
-                {
-                    chunks_netstate[sector] = ChunkNetState::Wait;
-                    sectors.push_back(sector);
-                }
-                else if (chunks_netstate[sector] == ChunkNetState::Ready)
-                {
-                    generator.deserialize_apply(sector, chunks_netdata[sector]);
-                    chunks_netstate[sector] = ChunkNetState::Sync;
-                    generator.set_net_ready(sector);
-                    if (on_sector_sync)
-                        on_sector_sync(sector);
-                }
+                chunks_netstate[sector] = ChunkNetState::Wait;
             }
-            if (!sectors.empty())
+            else if (chunks_netstate[sector] == ChunkNetState::Ready)
             {
-                systems::m_client_system->send_message(ENET_PACKET_FLAG_RELIABLE, messages::ChunkDataMessage{
-                   .message_direction = messages::MessageDirection::Request,
-                   .sectors = sectors,
-               });
+                generator.deserialize_apply(sector, chunks_netdata[sector]);
+                chunks_netstate[sector] = ChunkNetState::Sync;
+                sectors_to_ready.emplace_back(sector);
+                if (on_sector_sync)
+                    on_sector_sync(sector);
             }
         }
+
+        for (const auto& sector : sectors_to_ready)
+        {
+            std::erase(sectors_to_wait, sector);
+        }
+
+        const glm::ivec3 cur_sector =
+            glm::floor(cam_pos / (globals::ChunkSize * globals::BlockSize));
 
         const uint32_t eyes = globals::xrmode ? 2 : 1;
         for (uint32_t eye = 0; eye < eyes; eye++)
@@ -431,12 +500,15 @@ struct ChunksManager
                 }
                 if (chunk->dirty)
                 {
-                    // LOGI("generate physics for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                    LOGI("generate physics for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                     systems::m_physics_system->remove_body(chunk->body_id);
-                    if (auto result = systems::m_physics_system->create_chunk_body(
-                        globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
+                    if (chunk->lod <= 1)
                     {
-                        std::tie(chunk->body_id, chunk->shape) = result.value();
+                        if (auto result = systems::m_physics_system->create_chunk_body(
+                            globals::ChunkSize, globals::BlockSize, chunk->data, chunk->sector))
+                        {
+                            std::tie(chunk->body_id, chunk->shape) = result.value();
+                        }
                     }
 
                     if (const auto sb = globals::m_resources->staging_buffer.suballoc(m.vertices.size() *
@@ -454,7 +526,7 @@ struct ChunksManager
                                    std::pair(std::ref(globals::m_resources->vertex_buffer), chunk->buffer[layer]));
                             }
                             chunk->buffer[layer] = *dst_sb;
-                            // LOGI("generate vertex for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
+                            LOGI("generate vertex for sector [%d %d %d]", chunk->sector.x, chunk->sector.y, chunk->sector.z);
                         }
                         // defer suballocation deletion
                         globals::m_resources->delete_buffers.emplace(frame.timeline_value,
@@ -473,8 +545,9 @@ struct ChunksManager
                 };
                 if (is_visible())
                 {
-                    batches[layer].ubo.push_back({
+                    batches[layer].ubo.push_back(shaders::SolidFlatShader::PerObjectBuffer{
                         .ObjectTransform = glm::transpose(chunk->transform),
+                        .lod = chunk->lod,
                     });
                     const auto vertex_offset = chunk->buffer[layer].offset / sizeof(shaders::SolidFlatShader::VertexInput);
                     batches[layer].draw_args.push_back({
@@ -570,14 +643,14 @@ struct ChunksManager
         }
         return std::nullopt;
     }
-    [[nodiscard]] bool is_inside(const glm::ivec3& world_cell, const glm::ivec3& sector) const noexcept
+    [[nodiscard]] static bool is_inside(const glm::ivec3& world_cell, const glm::ivec3& sector) noexcept
     {
         constexpr auto edge = globals::ChunkSize - 1;
         const glm::ivec3 local_cell = world_cell - sector * static_cast<int32_t>(globals::ChunkSize);
         return local_cell.x >= 0 && local_cell.y >= 0 && local_cell.z >= 0 &&
             local_cell.x <= edge && local_cell.y <= edge && local_cell.z <= edge;
     }
-    [[nodiscard]] bool is_edge(const glm::ivec3& world_cell, const glm::ivec3& sector) const noexcept
+    [[nodiscard]] static bool is_edge(const glm::ivec3& world_cell, const glm::ivec3& sector) noexcept
     {
         constexpr auto edge = globals::ChunkSize - 1;
         const glm::ivec3 local_cell = world_cell - sector * static_cast<int32_t>(globals::ChunkSize);

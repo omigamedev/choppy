@@ -131,7 +131,7 @@ class ChunkGenerator
 {
 public:
     virtual ~ChunkGenerator() = default;
-    [[nodiscard]] virtual ChunkData generate(const glm::ivec3& sector) const noexcept = 0;
+    [[nodiscard]] virtual ChunkData generate(const glm::ivec3& sector, const uint32_t lod) const noexcept = 0;
 };
 class FlatGenerator final : public ChunkGenerator
 {
@@ -141,7 +141,7 @@ class FlatGenerator final : public ChunkGenerator
 	// siv::PerlinNoise perlin{ std::random_device{} };
 	siv::PerlinNoise perlin{ 1 };
     std::unordered_map<glm::ivec3, std::unordered_map<glm::u8vec3, BlockType, U8Vec3Hash>, IVec3Hash> m_edits;
-    std::unordered_map<glm::ivec3, bool, IVec3Hash> m_net_ready;
+    // std::unordered_map<glm::ivec3, bool, IVec3Hash> m_net_ready;
     bool m_dirty = false;
     std::unordered_map<glm::ivec3, std::vector<BlockType>, IVec3Hash> m_blocks;
 
@@ -164,8 +164,8 @@ public:
         }
         const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
         const float rand = perlin.noise2D_01(nc.x * 10.f, nc.y * 10.f);
-        const float mountains = perlin.noise2D_01(nc.x * 0.1f, nc.y * 0.1f);
-        const int32_t terrain_height = std::floor(perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height) + mountains * 5.f);
+        const float mountains = perlin.noise2D_01(nc.x * 0.2f, nc.y * 0.2f);
+        const int32_t terrain_height = std::floor(perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height) + (mountains * 200.f - 100));
         BlockType block = BlockType::Air;
         if (cell.y < 0)
         {
@@ -218,16 +218,16 @@ public:
             map[cell] = block;
         }
     }
-    [[nodiscard]] bool is_net_ready(const glm::ivec3& sector) const noexcept
-    {
-        if (m_net_ready.contains(sector))
-            return m_net_ready.at(sector);
-        return false;
-    }
-    void set_net_ready(const glm::ivec3& sector) noexcept
-    {
-        m_net_ready[sector] = true;
-    }
+    // [[nodiscard]] bool is_net_ready(const glm::ivec3& sector) const noexcept
+    // {
+    //     if (m_net_ready.contains(sector))
+    //         return m_net_ready.at(sector);
+    //     return false;
+    // }
+    // void set_net_ready(const glm::ivec3& sector) noexcept
+    // {
+    //     m_net_ready[sector] = true;
+    // }
     void edit(const glm::ivec3& sector, const glm::u8vec3& local_cell, const BlockType block_type) noexcept
     {
         m_edits[sector][local_cell] = block_type;
@@ -299,9 +299,9 @@ public:
             }
         }
     }
-    [[nodiscard]] ChunkData generate(const glm::ivec3& sector) const noexcept override
+    [[nodiscard]] ChunkData generate(const glm::ivec3& sector, const uint32_t lod) const noexcept override
     {
-        const int32_t ssz = static_cast<int32_t>(m_chunk_size);
+        const int32_t ssz = static_cast<int32_t>(m_chunk_size / lod);
         std::vector<BlockType> tmp;
         tmp.reserve(utils::pow(ssz + 2, 3));
         for (int32_t y = -1; y < ssz + 1; ++y)
@@ -311,7 +311,7 @@ public:
                 for (int32_t x = -1; x < ssz + 1; ++x)
                 {
                     const glm::ivec3 loc{x, y, z};
-                    const glm::ivec3 cell = loc + sector * ssz;
+                    const glm::ivec3 cell = loc * glm::ivec3(lod) + sector * ssz * static_cast<int32_t>(lod);
                     tmp.emplace_back(peek(cell));
                 }
             }
@@ -320,13 +320,13 @@ public:
         bool full = false;
         std::vector<Block> blocks;
         blocks.reserve(utils::pow(ssz, 3));
-        for (uint32_t y = 0; y < m_chunk_size; ++y)
+        for (uint32_t y = 0; y < m_chunk_size / lod; ++y)
         {
-            for (uint32_t z = 0; z < m_chunk_size; ++z)
+            for (uint32_t z = 0; z < m_chunk_size / lod; ++z)
             {
-                for (uint32_t x = 0; x < m_chunk_size; ++x)
+                for (uint32_t x = 0; x < m_chunk_size / lod; ++x)
                 {
-                    const int32_t sz = static_cast<int32_t>(m_chunk_size + 2);
+                    const int32_t sz = static_cast<int32_t>(m_chunk_size / lod + 2);
                     const auto C = tmp[(y + 1) * utils::pow(sz, 2) + (z + 1) * sz + x + 1];
                     uint8_t mask = 0;
                     uint8_t water_mask = 0;
@@ -367,7 +367,7 @@ public:
         }
 
         ChunkData ret;
-        ret.size = m_chunk_size;
+        ret.size = m_chunk_size / lod;
         ret.sector = sector;
         ret.blocks = std::move(blocks);
         ret.empty = !full;
