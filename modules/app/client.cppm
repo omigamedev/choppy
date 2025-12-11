@@ -103,8 +103,8 @@ export namespace ce::app::client
 class ClientSystem : utils::NoCopy
 {
 #ifdef _DEBUG
-    static constexpr std::string_view ServerHost = "192.168.1.60";
-    //static constexpr std::string_view ServerHost = "service.cubey.dev";
+    //static constexpr std::string_view ServerHost = "192.168.1.60";
+    static constexpr std::string_view ServerHost = "service.cubey.dev";
 #else
     static constexpr std::string_view ServerHost = "service.cubey.dev";
 #endif
@@ -588,6 +588,7 @@ public:
             update_timer = 0.0f;
             send_message(0, messages::PlayerStateMessage{
                 .id = player_id,
+                .xrmode = globals::xrmode,
                 .position = player_pos,
                 .rotation = player_rot,
                 .velocity = player_vel,

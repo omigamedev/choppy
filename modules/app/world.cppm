@@ -626,7 +626,7 @@ struct World
             {
                 for (const auto& player : systems::m_client_system->get_players())
                 {
-                    for (uint32_t part_index = 0; part_index < 3; part_index++)
+                    for (uint32_t part_index = 0; part_index < (player.xrmode ? 3 : 1); part_index++)
                     {
                         const std::array sets{shader_color_frame_set, player.cube[part_index].object_descriptor_set};
                         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,

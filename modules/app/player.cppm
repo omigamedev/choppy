@@ -23,6 +23,7 @@ struct PlayerCamera
 struct PlayerState
 {
     uint32_t id = 0;
+    bool xrmode = false;
     JPH::Ref<JPH::Character> character;
     resources::Geometry cube[3];
     glm::vec3 walk_start{};

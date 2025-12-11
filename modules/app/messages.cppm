@@ -102,6 +102,7 @@ struct PlayerStateMessage
 {
     MessageType type = MessageType::PlayerState;
     uint32_t id;
+    bool xrmode;
     std::array<glm::vec3, 3> position;
     std::array<glm::quat, 3> rotation;
     std::array<glm::vec3, 3> velocity;
@@ -110,6 +111,7 @@ struct PlayerStateMessage
         serializer::MessageWriter w;
         w.write(type);
         w.write(id);
+        w.write(xrmode);
         w.write(position);
         w.write(rotation);
         w.write(velocity);
@@ -122,6 +124,7 @@ struct PlayerStateMessage
         return PlayerStateMessage{
             .type = r.read<MessageType>(),
             .id = r.read<uint32_t>(),
+            .xrmode = r.read<bool>(),
             .position = r.read<std::array<glm::vec3, 3>>(),
             .rotation = r.read<std::array<glm::quat, 3>>(),
             .velocity = r.read<std::array<glm::vec3, 3>>(),
