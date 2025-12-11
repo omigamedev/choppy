@@ -18,7 +18,7 @@ FetchContent_Declare(miniaudio
 FetchContent_Declare(tracy
     GIT_REPOSITORY https://github.com/wolfpld/tracy.git
     GIT_TAG c556831ddc6fe26d2fce01c14c97205a9dad46d5) # v0.12.2
-set(TRACY_ENABLE ON)
+set(TRACY_ENABLE OFF)
 FetchContent_Declare(ecs
     GIT_REPOSITORY https://github.com/martinstarkov/ecs.git
     GIT_TAG main
