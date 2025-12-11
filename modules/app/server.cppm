@@ -133,7 +133,7 @@ public:
     {
         for (auto& player : std::views::values(clients))
         {
-            globals::m_resources->destroy_geometry(player.cube, 0);
+            globals::m_resources->destroy_geometry(player.cube[0], 0);
             player.destroy();
         }
         if (server)
@@ -430,12 +430,13 @@ public:
         // basic motion interpolation
         for (auto& player : std::views::values(clients))
         {
-            player.position += player.velocity * dt;
+            for (uint32_t i = 0; i < 3; i++)
+                player.position[i] += player.velocity[i] * dt;
         }
 
         for (auto& player : removed_players)
         {
-            globals::m_resources->destroy_geometry(player.cube, frame.timeline_value);
+            globals::m_resources->destroy_geometry(player.cube[0], frame.timeline_value);
             player.destroy();
         }
         removed_players.clear();

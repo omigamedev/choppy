@@ -172,7 +172,7 @@ struct ChunksManager
     }
     [[nodiscard]] uint32_t chunk_lod(const glm::ivec3& chunk_sector, const glm::ivec3& cur_sector) const noexcept
     {
-        //return 1;
+        return 1;
         const float dist = glm::gtx::distance(glm::vec3(chunk_sector), glm::vec3(cur_sector));
         uint32_t lod = 1;
         if (dist >= 5)

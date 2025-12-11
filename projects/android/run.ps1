@@ -83,5 +83,15 @@ else
     adb shell am force-stop com.omixlab.cubey
     adb shell am start -n com.omixlab.cubey/.MainActivity
     sleep 1
-    adb logcat --pid $(adb shell pidof -s com.omixlab.cubey) ChoppyEngine:D *:S
+    try
+    {
+        adb logcat --pid $(adb shell pidof -s com.omixlab.cubey) ChoppyEngine:D *:S
+    }
+    catch
+    {
+    }
+    finally
+    {
+        adb shell am force-stop com.omixlab.cubey
+    }
 }

@@ -3,6 +3,7 @@ module;
 #include <span>
 #include <optional>
 #include <vector>
+#include <array>
 #include <string>
 
 export module ce.app:messages;
@@ -101,9 +102,9 @@ struct PlayerStateMessage
 {
     MessageType type = MessageType::PlayerState;
     uint32_t id;
-    glm::vec3 position;
-    glm::quat rotation;
-    glm::vec3 velocity;
+    std::array<glm::vec3, 3> position;
+    std::array<glm::quat, 3> rotation;
+    std::array<glm::vec3, 3> velocity;
     [[nodiscard]] std::vector<uint8_t> serialize() const noexcept
     {
         serializer::MessageWriter w;
@@ -121,9 +122,9 @@ struct PlayerStateMessage
         return PlayerStateMessage{
             .type = r.read<MessageType>(),
             .id = r.read<uint32_t>(),
-            .position = r.read<glm::vec3>(),
-            .rotation = r.read<glm::quat>(),
-            .velocity = r.read<glm::vec3>(),
+            .position = r.read<std::array<glm::vec3, 3>>(),
+            .rotation = r.read<std::array<glm::quat, 3>>(),
+            .velocity = r.read<std::array<glm::vec3, 3>>(),
         };
     }
 };

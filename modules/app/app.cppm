@@ -231,10 +231,18 @@ public:
         }
         else
         {
-            systems::m_client_system->player_pos = m_world.m_camera.cam_pos;
-            systems::m_client_system->player_rot = glm::gtc::quat_cast(glm::inverse(view));
-            systems::m_client_system->player_vel = glm::gtc::make_vec3(
+            systems::m_client_system->player_pos[0] = m_world.m_camera.cam_pos;
+            systems::m_client_system->player_rot[0] = glm::gtc::quat_cast(glm::inverse(view));
+            systems::m_client_system->player_vel[0] = glm::gtc::make_vec3(
                 m_world.m_player.character->GetLinearVelocity().mF32);
+            if (globals::xrmode)
+            {
+                for (uint32_t hand_index = 0; hand_index < 2; ++hand_index)
+                {
+                    systems::m_client_system->player_pos[hand_index+1] = m_xr->hand_position(hand_index) + m_world.m_camera.cam_pos;
+                    systems::m_client_system->player_rot[hand_index+1] = m_xr->hand_rotation(hand_index);
+                }
+            }
             systems::m_client_system->update(dt, frame, view);
         }
         m_world.update(dt, frame, view);
@@ -433,8 +441,23 @@ public:
             action_build = action_build_new;
             if (action_build)
             {
-                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-                m_world.chunks_manager.build_block(m_world.m_camera.cam_pos, forward);
+                const auto [origin, forward] = [this, view]
+                {
+                    if (globals::xrmode)
+                    {
+                        const glm::vec3 origin = systems::m_client_system->player_pos[2];
+                        const glm::mat4 hand_view = glm::inverse(glm::gtc::mat4_cast(systems::m_client_system->player_rot[2]));
+                        const glm::vec3 forward = glm::vec4{0, 0, -1, 1} * hand_view;
+                        return std::pair{origin, forward};
+                    }
+                    else
+                    {
+                        const glm::vec3 origin = m_world.m_camera.cam_pos;
+                        const glm::vec3 forward = glm::vec4{0, 0, -1, 1} * view;
+                        return std::pair{origin, forward};
+                    }
+                }();
+                m_world.chunks_manager.build_block(origin, forward);
             }
         }
         static bool action_break = false;
@@ -443,8 +466,23 @@ public:
             action_break = action_break_new;
             if (action_break)
             {
-                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-                m_world.chunks_manager.break_block(m_world.m_camera.cam_pos, forward);
+                const auto [origin, forward] = [this, view]
+                {
+                    if (globals::xrmode)
+                    {
+                        const glm::vec3 origin = systems::m_client_system->player_pos[2];
+                        const glm::mat4 hand_view = glm::inverse(glm::gtc::mat4_cast(systems::m_client_system->player_rot[2]));
+                        const glm::vec3 forward = glm::vec4{0, 0, -1, 1} * hand_view;
+                        return std::pair{origin, forward};
+                    }
+                    else
+                    {
+                        const glm::vec3 origin = m_world.m_camera.cam_pos;
+                        const glm::vec3 forward = glm::vec4{0, 0, -1, 1} * view;
+                        return std::pair{origin, forward};
+                    }
+                }();
+                m_world.chunks_manager.break_block(origin, forward);
             }
         }
 #ifdef _WIN32

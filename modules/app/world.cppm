@@ -331,8 +331,23 @@ struct World
         {
             if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
             {
-                const glm::vec4 forward = glm::vec4{0, 0, -1, 1} * view;
-                if (auto hit = chunks_manager.build_block_cell(m_camera.cam_pos, forward))
+                const auto [origin, forward] = [this, view]
+                {
+                    if (globals::xrmode)
+                    {
+                        const glm::vec3 origin = systems::m_client_system->player_pos[2];
+                        const glm::mat4 hand_view = glm::inverse(glm::gtc::mat4_cast(systems::m_client_system->player_rot[2]));
+                        const glm::vec3 forward = glm::vec4{0, 0, -1, 1} * hand_view;
+                        return std::pair{origin, forward};
+                    }
+                    else
+                    {
+                        const glm::vec3 origin = m_camera.cam_pos;
+                        const glm::vec3 forward = glm::vec4{0, 0, -1, 1} * view;
+                        return std::pair{origin, forward};
+                    }
+                }();
+                if (auto hit = chunks_manager.build_block_cell(origin, forward))
                 {
                     *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
                         .ObjectTransform = glm::transpose(
@@ -371,33 +386,36 @@ struct World
         {
             for (auto& player : systems::m_server_system->get_players())
             {
-                if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+                for (uint32_t part_index = 0; part_index < 3; part_index++)
                 {
-                    if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
+                    if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
                     {
-                        const glm::mat4 transform = glm::gtc::translate(player.position) *
-                            glm::gtc::mat4_cast(player.rotation) *
-                            glm::gtc::scale(glm::vec3(.25f)) *
-                            glm::gtc::translate(glm::vec3(-.5f));
-                        *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
-                            .ObjectTransform = glm::transpose(transform),
-                            .Color = {1, 0, 0, 1}
-                        };
-                        globals::m_resources->copy_buffers.emplace_back(globals::m_resources->object_buffer, *sb, dst_sb->offset);
-                        player.cube.uniform_buffer = *dst_sb;
+                        if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
+                        {
+                            const glm::mat4 transform = glm::gtc::translate(player.position[part_index]) *
+                                glm::gtc::mat4_cast(player.rotation[part_index]) *
+                                glm::gtc::scale(glm::vec3(.25f)) *
+                                glm::gtc::translate(glm::vec3(-.5f));
+                            *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                                .ObjectTransform = glm::transpose(transform),
+                                .Color = {1, 0, 0, 1}
+                            };
+                            globals::m_resources->copy_buffers.emplace_back(globals::m_resources->object_buffer, *sb, dst_sb->offset);
+                            player.cube[part_index].uniform_buffer = *dst_sb;
+                            globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                                std::pair(std::ref(globals::m_resources->object_buffer), *dst_sb));
+                        }
+                        // defer suballocation deletion
                         globals::m_resources->delete_buffers.emplace(frame.timeline_value,
-                            std::pair(std::ref(globals::m_resources->object_buffer), *dst_sb));
+                            std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
                     }
-                    // defer suballocation deletion
-                    globals::m_resources->delete_buffers.emplace(frame.timeline_value,
-                        std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
-                }
-                if (const auto set = shaders::shader_color->alloc_descriptor(frame.present_index, 1))
-                {
-                    player.cube.object_descriptor_set = *set;
-                    shaders::shader_color->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
-                        player.cube.uniform_buffer.offset, player.cube.uniform_buffer.size,
-                        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                    if (const auto set = shaders::shader_color->alloc_descriptor(frame.present_index, 1))
+                    {
+                        player.cube[part_index].object_descriptor_set = *set;
+                        shaders::shader_color->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
+                            player.cube[part_index].uniform_buffer.offset, player.cube[part_index].uniform_buffer.size,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                    }
                 }
             }
         }
@@ -405,33 +423,73 @@ struct World
         {
             for (auto& player : systems::m_client_system->get_players())
             {
-                if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+                for (uint32_t part_index = 0; part_index < 3; part_index++)
                 {
-                    if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
+                    if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
                     {
-                        const glm::mat4 transform = glm::gtc::translate(player.position) *
-                            glm::gtc::mat4_cast(player.rotation) *
-                            glm::gtc::scale(glm::vec3(.25f)) *
-                            glm::gtc::translate(glm::vec3(-.5f));
-                        *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
-                            .ObjectTransform = glm::transpose(transform),
-                            .Color = {1, 0, 0, 1}
-                        };
-                        globals::m_resources->copy_buffers.emplace_back(globals::m_resources->object_buffer, *sb, dst_sb->offset);
-                        player.cube.uniform_buffer = *dst_sb;
+                        if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
+                        {
+                            const glm::mat4 transform = glm::gtc::translate(player.position[part_index]) *
+                                glm::gtc::mat4_cast(player.rotation[part_index]) *
+                                glm::gtc::scale(glm::vec3(.25f)) *
+                                glm::gtc::translate(glm::vec3(-.5f));
+                            *static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr) = {
+                                .ObjectTransform = glm::transpose(transform),
+                                .Color = {1, 0, 0, 1}
+                            };
+                            globals::m_resources->copy_buffers.emplace_back(globals::m_resources->object_buffer, *sb, dst_sb->offset);
+                            player.cube[part_index].uniform_buffer = *dst_sb;
+                            globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                                std::pair(std::ref(globals::m_resources->object_buffer), *dst_sb));
+                        }
+                        // defer suballocation deletion
                         globals::m_resources->delete_buffers.emplace(frame.timeline_value,
-                            std::pair(std::ref(globals::m_resources->object_buffer), *dst_sb));
+                            std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
                     }
-                    // defer suballocation deletion
-                    globals::m_resources->delete_buffers.emplace(frame.timeline_value,
-                        std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
+                    if (const auto set = shaders::shader_color->alloc_descriptor(frame.present_index, 1))
+                    {
+                        player.cube[part_index].object_descriptor_set = *set;
+                        shaders::shader_color->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
+                            player.cube[part_index].uniform_buffer.offset, player.cube[part_index].uniform_buffer.size,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                    }
                 }
-                if (const auto set = shaders::shader_color->alloc_descriptor(frame.present_index, 1))
+            }
+
+            // hands
+            if (globals::xrmode)
+            {
+                for (uint32_t hand_index = 0; hand_index < 2; hand_index++)
                 {
-                    player.cube.object_descriptor_set = *set;
-                    shaders::shader_color->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
-                        player.cube.uniform_buffer.offset, player.cube.uniform_buffer.size,
-                        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                    if (const auto sb = globals::m_resources->staging_buffer.suballoc(sizeof(shaders::SolidColorShader::PerObjectBuffer), 64))
+                    {
+                        if (const auto dst_sb = globals::m_resources->object_buffer.suballoc(sb->size, 64))
+                        {
+                            auto buffer_data = static_cast<shaders::SolidColorShader::PerObjectBuffer*>(sb->ptr);
+                            const glm::mat4 transform = glm::gtc::translate(systems::m_client_system->player_pos[hand_index+1]) *
+                                glm::gtc::mat4_cast(systems::m_client_system->player_rot[hand_index+1]) *
+                                glm::gtc::scale(glm::vec3(.15f)) *
+                                glm::gtc::translate(glm::vec3(-.5f));
+                            buffer_data[0] = {
+                                .ObjectTransform = glm::transpose(transform),
+                                .Color = {1, 0, 0, 1}
+                            };
+                            globals::m_resources->copy_buffers.emplace_back(globals::m_resources->object_buffer, *sb, dst_sb->offset);
+                            m_player.cube[hand_index+1].uniform_buffer = *dst_sb;
+                            globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                                std::pair(std::ref(globals::m_resources->object_buffer), *dst_sb));
+                        }
+                        // defer suballocation deletion
+                        globals::m_resources->delete_buffers.emplace(frame.timeline_value,
+                            std::pair(std::ref(globals::m_resources->staging_buffer), *sb));
+                    }
+                    if (const auto set = shaders::shader_color->alloc_descriptor(frame.present_index, 1))
+                    {
+                        m_player.cube[hand_index+1].object_descriptor_set = *set;
+                        shaders::shader_color->write_buffer(*set, 0, globals::m_resources->object_buffer.buffer(),
+                            m_player.cube[hand_index+1].uniform_buffer.offset, m_player.cube[hand_index+1].uniform_buffer.size,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+                    }
                 }
             }
         }
@@ -549,29 +607,42 @@ struct World
             const std::array sets{shader_color_frame_set, m_cube.object_descriptor_set};
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
-
             vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
 
             if (systems::m_server_system)
             {
                 for (const auto& player : systems::m_server_system->get_players())
                 {
-                    const std::array sets{shader_color_frame_set, player.cube.object_descriptor_set};
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
-
-                    vkCmdDraw(cmd, player.cube.vertex_count, 1, 0, 0);
+                    for (uint32_t part_index = 0; part_index < 3; part_index++)
+                    {
+                        const std::array sets{shader_color_frame_set, player.cube[part_index].object_descriptor_set};
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+                        vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+                    }
                 }
             }
             if (systems::m_client_system)
             {
                 for (const auto& player : systems::m_client_system->get_players())
                 {
-                    const std::array sets{shader_color_frame_set, player.cube.object_descriptor_set};
+                    for (uint32_t part_index = 0; part_index < 3; part_index++)
+                    {
+                        const std::array sets{shader_color_frame_set, player.cube[part_index].object_descriptor_set};
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
+                        vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
+                    }
+                }
+            }
+            if (globals::xrmode)
+            {
+                for (uint32_t hand_index = 0; hand_index < 2; hand_index++)
+                {
+                    const std::array sets{shader_color_frame_set, m_player.cube[hand_index+1].object_descriptor_set};
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                         shaders::shader_color->layout(), 0, sets.size(), sets.data(), 0, nullptr);
-
-                    vkCmdDraw(cmd, player.cube.vertex_count, 1, 0, 0);
+                    vkCmdDraw(cmd, m_cube.vertex_count, 1, 0, 0);
                 }
             }
         }

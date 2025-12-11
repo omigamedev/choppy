@@ -24,12 +24,12 @@ struct PlayerState
 {
     uint32_t id = 0;
     JPH::Ref<JPH::Character> character;
-    resources::Geometry cube;
+    resources::Geometry cube[3];
     glm::vec3 walk_start{};
     bool on_ground = false;
-    glm::vec3 position{};
-    glm::quat rotation = glm::gtc::identity<glm::quat>();
-    glm::vec3 velocity{};
+    std::array<glm::vec3, 3> position{};
+    std::array<glm::quat, 3> rotation{};
+    std::array<glm::vec3, 3> velocity{};
     void destroy() noexcept
     {
         if (character)

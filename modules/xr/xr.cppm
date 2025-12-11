@@ -340,6 +340,14 @@ public:
         XrMatrix4x4f_CreateFromRigidTransform(&xrm, &m_hands_pose[hand_index]);
         return glm::gtc::make_mat4(xrm.m);
     }
+    [[nodiscard]] glm::vec3 hand_position(const uint32_t hand_index) const noexcept
+    {
+        return glm::gtc::make_vec3(reinterpret_cast<const float*>(&m_hands_pose[hand_index].position));
+    }
+    [[nodiscard]] glm::quat hand_rotation(const uint32_t hand_index) const noexcept
+    {
+        return glm::gtc::make_quat(reinterpret_cast<const float*>(&m_hands_pose[hand_index].orientation));
+    }
     [[nodiscard]] const TouchControllerState& touch_controllers() const noexcept{ return m_controller; }
 #ifdef __ANDROID__
     bool setup_android(JavaVM* vm, jobject context)

@@ -103,8 +103,8 @@ export namespace ce::app::client
 class ClientSystem : utils::NoCopy
 {
 #ifdef _DEBUG
-    // static constexpr std::string_view ServerHost = "192.168.1.60";
-    static constexpr std::string_view ServerHost = "service.cubey.dev";
+    static constexpr std::string_view ServerHost = "192.168.1.60";
+    //static constexpr std::string_view ServerHost = "service.cubey.dev";
 #else
     static constexpr std::string_view ServerHost = "service.cubey.dev";
 #endif
@@ -137,9 +137,9 @@ class ClientSystem : utils::NoCopy
     }
 public:
     uint32_t player_id = 0;
-    glm::vec3 player_pos = glm::vec3(0, 0, 0);
-    glm::quat player_rot = glm::gtc::identity<glm::quat>();
-    glm::vec3 player_vel = glm::vec3(0, 0, 0);
+    std::array<glm::vec3, 3> player_pos{};
+    std::array<glm::quat, 3> player_rot{};
+    std::array<glm::vec3, 3> player_vel{};
     std::function<void()> on_connected;
     std::function<void(const messages::BlockActionMessage&)> on_block_action;
     std::function<void(const messages::ChunkDataMessage&)> on_chunk_data;
@@ -223,7 +223,7 @@ public:
     {
         for (auto& player : std::views::values(players))
         {
-            globals::m_resources->destroy_geometry(player.cube, 0);
+            globals::m_resources->destroy_geometry(player.cube[0], 0);
             player.destroy();
         }
         try_connecting = false;
@@ -552,12 +552,13 @@ public:
         // basic motion interpolation
         for (auto& player : std::views::values(players))
         {
-            player.position += player.velocity * dt;
+            for (uint32_t i = 0; i < 3; i++)
+                player.position[i] += player.velocity[i] * dt;
         }
 
         for (auto& player : removed_players)
         {
-            globals::m_resources->destroy_geometry(player.cube, frame.timeline_value);
+            globals::m_resources->destroy_geometry(player.cube[0], frame.timeline_value);
             player.destroy();
         }
         removed_players.clear();

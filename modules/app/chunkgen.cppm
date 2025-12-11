@@ -164,8 +164,8 @@ public:
         }
         const glm::vec3 nc = glm::vec3(cell) / static_cast<float>(ssz);
         const float rand = perlin.noise2D_01(nc.x * 10.f, nc.y * 10.f);
-        const float mountains = perlin.noise2D_01(nc.x * 0.2f, nc.y * 0.2f);
-        const int32_t terrain_height = std::floor(perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height) + (mountains * 200.f - 100));
+        const float mountains = perlin.noise2D_01(nc.x * 0.1f, nc.y * 0.1f);
+        const int32_t terrain_height = std::floor(perlin.octave2D(nc.x, nc.z, 4) * static_cast<float>(m_ground_height) + (mountains * 5.f));
         BlockType block = BlockType::Air;
         if (cell.y < 0)
         {
