@@ -210,6 +210,7 @@ struct World
     }
     void update(const float dt, const vk::utils::FrameContext& frame, glm::mat4 view) noexcept
     {
+        m_camera.cam_forward = glm::vec4{0, 0, -1, 1} * view;
         chunks_manager.cam_pos = m_camera.cam_pos;
         //chunks_manager.cam_sector = m_camera.cam_sector;
         chunks_manager.update_chunks(frame);
@@ -534,6 +535,7 @@ struct World
     {
         m_player.character->PostSimulation(0.1);
         m_camera.cam_pos = glm::gtc::make_vec3(m_player.character->GetPosition().mF32);
+        systems::m_audio_system->set_listener(m_camera.cam_pos, m_camera.cam_forward);
         const bool new_on_ground = m_player.character->GetGroundState() == JPH::Character::EGroundState::OnGround;
         if (m_player.on_ground != new_on_ground)
         {
@@ -542,7 +544,7 @@ struct World
             {
                 // play landing sound only when falling
                 if (m_player.character->GetLinearVelocity().GetY() < 0)
-                    systems::m_audio_system->play_sound(std::format("walk/Sound {:02d}.opus", glm::gtc::linearRand(22, 23)));
+                    systems::m_audio_system->play_sound(std::format("walk/Sound {:02d}.opus", glm::gtc::linearRand(22, 23)), m_camera.cam_pos);
                 m_player.walk_start = glm::gtc::make_vec3(m_player.character->GetGroundPosition().mF32);
             }
         }
@@ -556,7 +558,7 @@ struct World
                 {
                     m_player.walk_start = current_pos;
                     // play step sound
-                    systems::m_audio_system->play_sound(std::format("walk/Sound {:02d}.opus", glm::gtc::linearRand(1, 21)));
+                    systems::m_audio_system->play_sound(std::format("walk/Sound {:02d}.opus", glm::gtc::linearRand(1, 21)), m_camera.cam_pos);
                 }
             }
         }

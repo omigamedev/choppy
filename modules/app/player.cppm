@@ -18,6 +18,7 @@ struct PlayerCamera
     glm::vec2 cam_start = {0, 0};
     glm::vec2 cam_angles = { 0, 0 };
     glm::vec3 cam_pos = { 0, 100, 0 };
+    glm::vec3 cam_forward = { 0, 0, -1 };
     glm::ivec3 cam_sector = { 0, 0, 0 };
 };
 struct PlayerState
