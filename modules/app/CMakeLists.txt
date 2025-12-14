@@ -51,9 +51,15 @@ FetchContent_Declare(jolt
 FetchContent_Declare(opus
     GIT_REPOSITORY https://github.com/xiph/opus.git
     GIT_TAG main)
+FetchContent_Declare(opusfile
+    GIT_REPOSITORY https://github.com/xiph/opusfile.git
+    GIT_TAG main)
+FetchContent_Declare(ogg
+    GIT_REPOSITORY https://github.com/xiph/ogg.git
+    GIT_TAG main)
 
 FetchContent_MakeAvailable(perlin glm stb tracy jolt miniaudio enet
-    datachannel ecs entityx tinyobjloader nlohmann-json opus)
+    datachannel ecs entityx tinyobjloader nlohmann-json opus ogg opusfile)
 
 set(JOLT_PHYSICS_ROOT ${jolt_SOURCE_DIR}/Jolt)
 set(JOLT_PHYSICS_SRC_FILES
@@ -513,6 +519,14 @@ if (WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/assets
         ${CMAKE_BINARY_DIR}/assets)
+    # Add the property to generate the import library when building as a DLL
+    set_target_properties(opusfile PROPERTIES
+        # Set the name of the import library (usually the same as the target name)
+        # This might already be set, but ensures the linker knows what to look for
+        IMPORT_HEADER_NAME "opusfile.h"
+        # This is the crucial part for Windows DLLs
+        WINDOWS_EXPORT_ALL_SYMBOLS ON
+    )
 elseif(ANDROID)
     add_custom_target(copy_assets ALL
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -525,12 +539,12 @@ else()
         ${CMAKE_BINARY_DIR}/assets)
 endif()
 
-add_library(app OBJECT stb.cpp obj.cpp)
+add_library(app OBJECT stb.cpp obj.cpp ${miniaudio_SOURCE_DIR}/extras/decoders/libopus/miniaudio_libopus.c)
 target_include_directories(app PUBLIC ${miniaudio_SOURCE_DIR})
 target_link_libraries(app PUBLIC
     platform xr vk glmcppm shaders perlin
     jolt enet_static datachannel-static
-    ecs entityx tinyobjloader nlohmann_json opus TracyClient)
+    ecs entityx tinyobjloader nlohmann_json opus ogg opusfile TracyClient)
 add_dependencies(app copy_assets)
 target_sources(app PUBLIC
     FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} FILES

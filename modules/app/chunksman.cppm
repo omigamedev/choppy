@@ -715,6 +715,7 @@ struct ChunksManager
         const glm::u8vec3 local_cell = world_cell - sector * static_cast<int32_t>(globals::ChunkSize);
         generator.remove(sector, local_cell);
         regenerate_block(sector, local_cell);
+        systems::m_audio_system->play_sound(std::format("mining/WoodMining{:d}.opus", glm::gtc::linearRand(0, 5)));
     }
     void build_block(const glm::vec3& origin, const glm::vec3& direction) noexcept
     {
@@ -740,6 +741,7 @@ struct ChunksManager
         const glm::u8vec3 local_cell = world_cell - sector * static_cast<int32_t>(globals::ChunkSize);
         generator.edit(sector, local_cell, BlockType::Dirt);
         regenerate_block(sector, local_cell);
+        systems::m_audio_system->play_sound(std::format("dig/Dig{:d}.opus", glm::gtc::linearRand(0, 3)));
     }
     std::optional<glm::ivec3> build_block_cell(const glm::vec3& origin, const glm::vec3& direction) const noexcept
     {

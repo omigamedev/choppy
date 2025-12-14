@@ -542,7 +542,7 @@ struct World
             {
                 // play landing sound only when falling
                 if (m_player.character->GetLinearVelocity().GetY() < 0)
-                    systems::m_audio_system->play_sound(std::format("walk/Sound {:02d}.wav", glm::gtc::linearRand(22, 23)));
+                    systems::m_audio_system->play_sound(std::format("walk/Sound {:02d}.opus", glm::gtc::linearRand(22, 23)));
                 m_player.walk_start = glm::gtc::make_vec3(m_player.character->GetGroundPosition().mF32);
             }
         }
@@ -556,7 +556,7 @@ struct World
                 {
                     m_player.walk_start = current_pos;
                     // play step sound
-                    systems::m_audio_system->play_sound(std::format("walk/Sound {:02d}.wav", glm::gtc::linearRand(1, 21)));
+                    systems::m_audio_system->play_sound(std::format("walk/Sound {:02d}.opus", glm::gtc::linearRand(1, 21)));
                 }
             }
         }

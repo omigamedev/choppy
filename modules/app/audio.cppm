@@ -25,8 +25,54 @@ export namespace ce::app::audio
 struct my_sound
 {
     ma_decoder decoder{};
+    ma_libopus opus_source{};
     ma_sound sound{};
     std::vector<uint8_t> data{};
+    ma_uint64 cursor = 0;
+
+    static ma_result read(void* pUserData, void* pBuffer, const size_t bytesToRead, size_t* pBytesRead)
+    {
+        my_sound* context = static_cast<my_sound*>(pUserData);
+        const size_t bytesAvailable = context->data.size() - context->cursor;
+        const size_t bytesActuallyRead = std::min(bytesToRead, bytesAvailable);
+        memcpy(pBuffer, context->data.data() + context->cursor, bytesActuallyRead);
+        context->cursor += bytesActuallyRead;
+        *pBytesRead = bytesActuallyRead;
+        return MA_SUCCESS;
+    }
+    static ma_result seek(void* pUserData, const ma_int64 offset, const ma_seek_origin origin)
+    {
+        my_sound* context = static_cast<my_sound*>(pUserData);
+        ma_uint64 newCursor = context->cursor;
+
+        if (origin == ma_seek_origin_start)
+        {
+            newCursor = offset;
+        }
+        else if (origin == ma_seek_origin_current)
+        {
+            newCursor = context->cursor + offset;
+        }
+        else if (origin == ma_seek_origin_end)
+        {
+            newCursor = context->data.size() + offset; // Note: offset should be negative from end
+        }
+
+        // Check bounds
+        if (newCursor < 0 || newCursor > context->data.size())
+        {
+            return MA_BAD_SEEK; // Failed to seek
+        }
+
+        context->cursor = newCursor;
+        return MA_SUCCESS;
+    }
+    static ma_result tell(void* pUserData, ma_int64* pCursor)
+    {
+        my_sound* context = static_cast<my_sound*>(pUserData);
+        *pCursor = context->cursor;
+        return MA_SUCCESS;
+    }
 };
 class AudioSystem : public utils::NoCopy
 {
@@ -56,52 +102,55 @@ public:
         }
 
         new_sound = std::make_shared<my_sound>();
-        const auto data = platform::GetPlatform().read_file(path);
+        auto data = platform::GetPlatform().read_file(path);
         if (!data)
         {
             LOGE("failed to read audio file %s", path.c_str());
         }
 
         new_sound->data = std::move(*data);
-        ma_decoder_config decoder_config = ma_decoder_config_init(ma_format_unknown, 0, 0);
-        decoder_config.encodingFormat = ma_encoding_format_wav;
 
         ma_result result{};
-        result = ma_decoder_init_memory(
-            new_sound->data.data(), // Pointer to the raw data
-            new_sound->data.size(), // Size of the data in bytes
-            &decoder_config,         // Configuration (optional, NULL for defaults)
-            &new_sound->decoder                 // Output decoder object
-        );
 
+        // ma_decoder_config decoder_config = ma_decoder_config_init(ma_format_unknown, 0, 0);
+        // decoder_config.encodingFormat = ma_encoding_format_wav;
+        // result = ma_decoder_init_memory(
+        //     new_sound->data.data(), // Pointer to the raw data
+        //     new_sound->data.size(), // Size of the data in bytes
+        //     &decoder_config,         // Configuration (optional, NULL for defaults)
+        //     &new_sound->decoder                 // Output decoder object
+        // );
+        result = ma_libopus_init(
+                my_sound::read,         // The custom read function
+                my_sound::seek,         // The custom seek function
+                my_sound::tell,         // The custom tell function
+                new_sound.get(),        // The pointer to your persistent data struct
+                NULL,                   // Config (using NULL for default ma_decoding_backend_config)
+                NULL,                   // Allocation Callbacks (using NULL for default)
+                &new_sound->opus_source // Output ma_libopus structure
+        );
         if (result != MA_SUCCESS)
         {
             LOGE("Failed to initialize decoder from memory.");
-            // Handle error
             return;
         }
 
         const ma_sound_config sound_config = ma_sound_config_init();
-        // Initialize the sound from the decoder (which acts as a ma_data_source)
         result = ma_sound_init_from_data_source(
             &globals::audio_engine,
-            &new_sound->decoder,    // The data source (your memory decoder)
+            &new_sound->opus_source,    // The data source (your memory decoder)
             0,                      // Flags (e.g., MA_SOUND_FLAG_LOOP)
             nullptr,                // Group (optional)
             &new_sound->sound       // Output sound object
         );
-
         if (result != MA_SUCCESS)
         {
             LOGE("Failed to initialize sound from decoder.");
             // Handle error
             ma_decoder_uninit(&new_sound->decoder);
         }
+
         ma_sound_start(&new_sound->sound);
-        // if (ma_engine_play_sound(&globals::audio_engine, path.c_str(), nullptr) != MA_SUCCESS)
-        // {
-        //     LOGE("failed to play sound");
-        // }
     }
     void tick(const float dt) noexcept
     {
